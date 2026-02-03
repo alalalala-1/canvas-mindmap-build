@@ -1174,7 +1174,8 @@ export class CanvasManager {
                     newNode.type = 'text';
                     newNode.text = content;
                     newNode.width = this.settings.textNodeWidth || 250;
-                    newNode.height = this.calculateTextNodeHeight(content);
+                    // 使用一个默认高度，等待 DOM 渲染完成后再调整
+                    newNode.height = 80;
                 }
             }
 
@@ -1239,6 +1240,12 @@ export class CanvasManager {
             this.collapseStateManager.clearCache();
             this.checkAndAddCollapseButtons();
             this.scheduleButtonCheck();
+
+            // 延迟调整新节点高度，确保渲染完成后再测量
+            // adjustNodeHeightAfterRender 内部会再等待 500ms 确保 DOM 准备好
+            setTimeout(() => {
+                this.adjustNodeHeightAfterRender(newNodeId);
+            }, 200);
 
             new Notice('Node added to canvas successfully!');
         } catch (e: any) {
@@ -1721,49 +1728,322 @@ export class CanvasManager {
         this.isLoadingCollapseState = false;
     }
 
-    private calculateTextNodeHeight(content: string): number {
-        const minHeight = 30;
+    private calculateTextNodeHeight(content: string, nodeEl?: Element): number {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const nodeWidth = this.settings.textNodeWidth || 400;
 
-        // 使用设置中的节点宽度来计算每行字符数
-        const avgCharWidth = 9.5; // 稍微增加字符宽度估算
-        const charsPerLine = Math.floor((nodeWidth - 22) / avgCharWidth); // 稍微减小内边距
+        // 如果有 DOM 元素，尝试直接测量内容的实际高度
+        if (nodeEl) {
+            const measuredHeight = this.measureActualContentHeight(nodeEl, content);
+            debug(`calculateTextNodeHeight: nodeEl存在, 测量高度=${measuredHeight}`);
+            if (measuredHeight > 0) {
+                return Math.min(measuredHeight, maxHeight);
+            }
+            debug(`测量失败，回退到计算方式`);
+        } else {
+            debug(`calculateTextNodeHeight: nodeEl不存在，使用计算方式`);
+        }
 
-        const lineHeight = 18; // 减小行高
-        const verticalPadding = 11; // 减小上下内边距
+        // 回退到计算方式
+        const computedHeight = this.calculateTextNodeHeightComputed(content, nodeWidth);
+        debug(`计算方式得到高度=${computedHeight}`);
+        return computedHeight;
+    }
 
+    /**
+     * 直接测量 DOM 中内容的实际高度
+     */
+    private measureActualContentHeight(nodeEl: Element, content: string): number {
+        try {
+            const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
+            const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
+
+            // 方法1：直接读取 sizer 的 min-height（Obsidian 计算的内容实际高度）
+            if (sizerEl) {
+                const sizerMinHeightStyle = sizerEl.style.minHeight;
+                if (sizerMinHeightStyle) {
+                    const parsedMinHeight = parseFloat(sizerMinHeightStyle);
+                    if (!isNaN(parsedMinHeight) && parsedMinHeight > 0) {
+                        debug(`measureActualContentHeight: sizer min-height=${parsedMinHeight}`);
+                        return Math.ceil(parsedMinHeight + 24);
+                    }
+                }
+            }
+
+            // 方法2：通过实际渲染的段落计算
+            if (contentEl) {
+                const pElement = contentEl.querySelector('p');
+                if (pElement) {
+                    const pRect = pElement.getBoundingClientRect();
+                    const pStyles = window.getComputedStyle(pElement);
+                    const lineHeight = parseFloat(pStyles.lineHeight) || 24;
+                    
+                    // 计算实际渲染的行数
+                    const actualLines = Math.max(1, Math.round(pRect.height / lineHeight));
+                    
+                    // 获取内边距
+                    const styles = window.getComputedStyle(contentEl);
+                    const paddingTop = parseFloat(styles.paddingTop) || 8;
+                    const paddingBottom = parseFloat(styles.paddingBottom) || 8;
+
+                    const calculatedHeight = Math.ceil(actualLines * lineHeight + paddingTop + paddingBottom + 20);
+                    debug(`measureActualContentHeight: 实际段落高度=${pRect.height}, 行数=${actualLines}, 行高=${lineHeight}, 计算高度=${calculatedHeight}`);
+                    return calculatedHeight;
+                }
+            }
+
+            // 方法3：使用 sizer 的 scrollHeight
+            if (sizerEl) {
+                const scrollHeight = sizerEl.scrollHeight;
+                if (scrollHeight > 20) {
+                    return Math.ceil(scrollHeight + 24);
+                }
+
+                // 备选：使用 getBoundingClientRect
+                const rect = sizerEl.getBoundingClientRect();
+                if (rect.height > 0) {
+                    return Math.ceil(rect.height + 24);
+                }
+            }
+
+            // 方法4：使用 contentEl 的 scrollHeight
+            if (contentEl) {
+                const styles = window.getComputedStyle(contentEl);
+                const paddingTop = parseFloat(styles.paddingTop) || 8;
+                const paddingBottom = parseFloat(styles.paddingBottom) || 8;
+                const scrollHeight = contentEl.scrollHeight;
+                if (scrollHeight > 20) {
+                    return Math.ceil(scrollHeight + paddingTop + paddingBottom);
+                }
+            }
+
+            // 最后备选：使用 node 宽度计算
+            const nodeWidth = nodeEl.clientWidth || 400;
+            return this.calculateTextNodeHeightComputed(content, nodeWidth);
+        } catch (e) {
+            debug(`measureActualContentHeight 异常: ${e}`);
+        }
+        return 0;
+    }
+
+    /**
+     * 估算文本需要的行数
+     */
+    private estimateLines(content: string, contentWidth: number, fontSize: number): number {
         const chineseCharRegex = /[\u4e00-\u9fa5]/;
-        let numLines = 0;
-        const lines = content.split('\n');
+        let totalLines = 0;
 
-        for (const line of lines) {
+        const textLines = content.split('\n');
+        for (const line of textLines) {
             const trimmedLine = line.trim();
-
             if (trimmedLine === '') {
-                // 空行也算一行，但高度较小
-                numLines += 0.2;
+                totalLines += 0.5;
                 continue;
             }
 
-            let lineLength = 0;
-            // 移除 Markdown 标记后计算长度
+            // 清理 Markdown 标记
             const cleanLine = trimmedLine
-                .replace(/^#{1,6}\s+/, '') // 移除标题标记
-                .replace(/\*\*|\*|__|_|`|\[|\]|\(|\)/g, ''); // 移除格式标记
+                .replace(/^#{1,6}\s+/, '')
+                .replace(/\*\*|\*|__|_|`/g, '');
 
+            // 估算像素宽度
+            let pixelWidth = 0;
             for (const char of cleanLine) {
-                // 中文字符占2个宽度单位，英文占1个
-                lineLength += chineseCharRegex.test(char) ? 2 : 1;
+                if (chineseCharRegex.test(char)) {
+                    pixelWidth += fontSize * 1.1; // 中文字符
+                } else {
+                    pixelWidth += fontSize * 0.55; // 英文字符
+                }
             }
 
-            // 计算这行需要多少行显示
-            const linesNeeded = Math.ceil(lineLength / charsPerLine);
-            numLines += Math.max(linesNeeded, 1);
+            totalLines += Math.max(1, Math.ceil(pixelWidth / contentWidth));
         }
 
-        const calculatedHeight = Math.ceil((numLines * lineHeight) + verticalPadding);
+        return totalLines;
+    }
+
+    /**
+     * 基于计算的高度估算（当无法测量 DOM 时使用）
+     * 使用更保守的估计，确保内容不被截断
+     */
+    private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
+        const maxHeight = this.settings.textNodeMaxHeight || 800;
+
+        // 内容区域可用宽度（更保守，考虑内边距）
+        const contentWidth = nodeWidth - 40;
+
+        // 默认字体参数 - 使用更保守的估计
+        const fontSize = 14;
+        const lineHeight = 26; // 进一步增加行高估计
+
+        // 估算行数（使用更保守的字符宽度）
+        const chineseCharRegex = /[\u4e00-\u9fa5]/;
+        let totalLines = 0;
+        const textLines = content.split('\n');
+
+        for (const line of textLines) {
+            const trimmedLine = line.trim();
+            if (trimmedLine === '') {
+                totalLines += 0.5;
+                continue;
+            }
+
+            // 清理 Markdown 标记
+            const cleanLine = trimmedLine
+                .replace(/^#{1,6}\s+/, '')
+                .replace(/\*\*|\*|__|_|`/g, '');
+
+            // 更保守的像素宽度估算
+            let pixelWidth = 0;
+            for (const char of cleanLine) {
+                if (chineseCharRegex.test(char)) {
+                    pixelWidth += fontSize * 1.15; // 中文字符更宽
+                } else {
+                    pixelWidth += fontSize * 0.6; // 英文字符也更宽
+                }
+            }
+
+            // 向上取整并增加额外行数缓冲
+            const linesNeeded = Math.ceil(pixelWidth / contentWidth);
+            totalLines += Math.max(1, linesNeeded);
+        }
+
+        // 计算高度（增加更多安全边距）
+        const safetyPadding = 44; // 进一步增加安全边距
+        const calculatedHeight = Math.ceil(totalLines * lineHeight + safetyPadding);
+        const minHeight = 60;
+
+        debug(`calculateTextNodeHeightComputed: 行数=${totalLines}, 行高=${lineHeight}, 高度=${calculatedHeight}`);
+
         return Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
+    }
+
+    /**
+     * 使用 Canvas API 精确测量文本宽度
+     */
+    private measureTextWidth(text: string, fontSize: number, chineseRatio: number): number {
+        if (!this.textMeasureCanvas) {
+            this.textMeasureCanvas = document.createElement('canvas');
+        }
+        const ctx = this.textMeasureCanvas.getContext('2d');
+        if (!ctx) return text.length * fontSize * 0.6;
+
+        // 根据中英文比例选择合适的字体
+        const fontFamily = chineseRatio > 0.5
+            ? '"Inter", "Noto Sans SC", sans-serif'
+            : '"Inter", sans-serif';
+        ctx.font = `${fontSize}px ${fontFamily}`;
+
+        const metrics = ctx.measureText(text);
+        return metrics.width;
+    }
+
+    private textMeasureCanvas: HTMLCanvasElement | null = null;
+
+    /**
+     * 在节点渲染完成后调整其高度
+     */
+    private async adjustNodeHeightAfterRender(nodeId: string): Promise<void> {
+        try {
+            const canvasView = this.getCanvasView();
+            if (!canvasView) return;
+
+            const canvas = (canvasView as any).canvas;
+            if (!canvas?.nodes) return;
+
+            // 等待渲染完成（增加延迟确保 DOM 准备好）
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // 重新获取节点（确保是最新的）
+            const freshNodeData = canvas.nodes.get(nodeId);
+            if (!freshNodeData?.nodeEl || !freshNodeData?.text) {
+                debug(`节点 ${nodeId} DOM 未准备好，跳过调整`);
+                return;
+            }
+
+            // 等待 sizer 元素渲染
+            let retries = 0;
+            const maxRetries = 5;
+            while (retries < maxRetries) {
+                const sizerEl = freshNodeData.nodeEl.querySelector('.markdown-preview-sizer');
+                if (sizerEl) {
+                    break;
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+                retries++;
+            }
+
+            // 测量实际高度
+            const measuredHeight = this.measureActualContentHeight(freshNodeData.nodeEl, freshNodeData.text);
+            if (measuredHeight <= 0) {
+                debug(`节点 ${nodeId} 测量高度失败，跳过调整`);
+                return;
+            }
+
+            // 获取当前高度
+            const currentHeight = freshNodeData.height || freshNodeData.nodeEl.clientHeight;
+            debug(`节点 ${nodeId}: 当前高度=${currentHeight}px, 测量高度=${measuredHeight}px`);
+
+            if (currentHeight >= measuredHeight) {
+                debug(`节点 ${nodeId} 当前高度已足够，无需调整`);
+                return;
+            }
+
+            // 先保存到文件（确保数据持久化）
+            const canvasFilePath = this.getCurrentCanvasFilePath();
+            if (canvasFilePath) {
+                const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+                if (canvasFile instanceof TFile) {
+                    const canvasContent = await this.app.vault.read(canvasFile);
+                    const canvasData = JSON.parse(canvasContent);
+
+                    const nodeIndex = canvasData.nodes?.findIndex((n: any) => n.id === nodeId);
+                    if (nodeIndex >= 0) {
+                        canvasData.nodes[nodeIndex].height = measuredHeight;
+                        await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+                        info(`节点 ${nodeId} 高度已保存为 ${measuredHeight}px`);
+                    }
+                }
+            }
+
+            // 更新内存中的节点高度
+            freshNodeData.height = measuredHeight;
+
+            // 强制重新渲染节点 - 使用多种方法确保更新生效
+            // 方法1: 直接调用节点更新
+            if (typeof freshNodeData.update === 'function') {
+                freshNodeData.update();
+            }
+            
+            // 方法2: 触发 Canvas 保存
+            if (typeof canvas.requestSave === 'function') {
+                canvas.requestSave();
+            }
+            
+            // 方法3: 延迟后强制重新渲染节点
+            setTimeout(() => {
+                // 重新获取节点引用（可能被替换）
+                const updatedNode = canvas.nodes.get(nodeId);
+                if (updatedNode) {
+                    updatedNode.height = measuredHeight;
+                    if (typeof updatedNode.update === 'function') {
+                        updatedNode.update();
+                    }
+                }
+                
+                // 触发 Canvas 更新
+                if (typeof canvas.update === 'function') {
+                    canvas.update();
+                }
+                if (typeof canvas.requestSave === 'function') {
+                    canvas.requestSave();
+                }
+                
+                info(`节点 ${nodeId} 视图已更新为 ${measuredHeight}px`);
+            }, 100);
+        } catch (e) {
+            error(`调整节点高度失败: ${e}`);
+        }
     }
 
     // =========================================================================
@@ -1799,6 +2079,19 @@ export class CanvasManager {
             let adjustedCount = 0;
             let skippedCount = 0;
 
+            // 获取当前 canvas 视图中已渲染的节点 DOM 元素映射
+            const canvasView = this.getCanvasView();
+            const canvas = canvasView ? (canvasView as any).canvas : null;
+            const nodeDomMap = new Map<string, Element>();
+            
+            if (canvas?.nodes) {
+                for (const [nodeId, nodeData] of canvas.nodes) {
+                    if (nodeData?.nodeEl) {
+                        nodeDomMap.set(nodeId, nodeData.nodeEl);
+                    }
+                }
+            }
+            
             for (const node of canvasData.nodes) {
                 debug(`检查节点 ${node.id}: type=${node.type}, hasText=${!!node.text}`);
                 
@@ -1826,7 +2119,9 @@ export class CanvasManager {
                             debug(`节点 ${node.id}: 公式节点，设置高度=${newHeight}, 宽度=${node.width}`);
                         } else {
                             // 普通文本节点根据内容计算高度
-                            const calculatedHeight = this.calculateTextNodeHeight(node.text);
+                            // 尝试获取对应的 DOM 元素以获取实际渲染样式
+                            const nodeEl = nodeDomMap.get(node.id);
+                            const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
                             newHeight = Math.min(calculatedHeight, maxHeight);
                             debug(`节点 ${node.id}: 普通文本节点，计算高度=${calculatedHeight}, 最终高度=${newHeight}`);
                         }
@@ -1850,23 +2145,23 @@ export class CanvasManager {
             await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
             
             // 重新加载 canvas 以应用更改
-            const canvasView = this.getCanvasView();
-            if (canvasView) {
-                const canvas = (canvasView as any).canvas;
-                if (canvas) {
+            const canvasViewForReload = this.getCanvasView();
+            if (canvasViewForReload) {
+                const canvasForReload = (canvasViewForReload as any).canvas;
+                if (canvasForReload) {
                     // 尝试多种方式刷新 canvas
-                    if (typeof canvas.reload === 'function') {
-                        canvas.reload();
-                    } else if (typeof canvas.requestSave === 'function') {
-                        canvas.requestSave();
-                    } else if (typeof canvas.update === 'function') {
-                        canvas.update();
+                    if (typeof canvasForReload.reload === 'function') {
+                        canvasForReload.reload();
+                    } else if (typeof canvasForReload.requestSave === 'function') {
+                        canvasForReload.requestSave();
+                    } else if (typeof canvasForReload.update === 'function') {
+                        canvasForReload.update();
                     }
                     
                     // 强制刷新视图
                     setTimeout(() => {
-                        if (canvasView && typeof (canvasView as any).reload === 'function') {
-                            (canvasView as any).reload();
+                        if (canvasViewForReload && typeof (canvasViewForReload as any).reload === 'function') {
+                            (canvasViewForReload as any).reload();
                         }
                     }, 100);
                 }
