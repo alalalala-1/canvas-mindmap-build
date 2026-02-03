@@ -1804,7 +1804,10 @@ export class CanvasManager {
                         const isFormula = this.settings.enableFormulaDetection && 
                             /^\$\$[\s\S]*\$\$$/.test(trimmedContent);
                         
-                        debug(`节点 ${node.id}: 内容前50字符="${trimmedContent.substring(0, 50)}", isFormula=${isFormula}`);
+                        const contentPreview = trimmedContent.length > 60 
+                            ? `${trimmedContent.substring(0, 30)}...${trimmedContent.substring(trimmedContent.length - 30)}`
+                            : trimmedContent;
+                        debug(`节点 ${node.id}: 内容="${contentPreview}", isFormula=${isFormula}`);
                         
                         let newHeight: number;
                         
