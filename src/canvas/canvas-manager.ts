@@ -565,9 +565,9 @@ export class CanvasManager {
     // 应用按钮样式
     // =========================================================================
     private applyButtonStyle(btn: HTMLElement, direction: string, nodeWidth: number, nodeHeight: number) {
-        // 检测是否是触控设备，使用不同的按钮宽度
+        // 检测是否是触控设备，使用不同的按钮尺寸
         const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
-        const btnWidth = isTouchDevice ? 24 : 20;
+        const btnSize = isTouchDevice ? 24 : 20;
 
         btn.style.position = 'absolute';
         btn.style.zIndex = '100';
@@ -575,11 +575,12 @@ export class CanvasManager {
         btn.style.border = 'none';
         btn.style.outline = 'none';
         btn.style.backgroundColor = '#D4A574';
-        btn.style.width = `${btnWidth}px`;
-        btn.style.height = '100%';
-        btn.style.minHeight = '100%';
-        btn.style.maxHeight = '100%';
-        btn.style.borderRadius = '0 6px 6px 0';
+        // 圆角方形按钮
+        btn.style.width = `${btnSize}px`;
+        btn.style.height = `${btnSize}px`;
+        btn.style.minWidth = `${btnSize}px`;
+        btn.style.minHeight = `${btnSize}px`;
+        btn.style.borderRadius = '6px';
         btn.style.padding = '0';
         btn.style.margin = '0';
         btn.style.display = 'flex';
@@ -588,10 +589,11 @@ export class CanvasManager {
         btn.style.fontSize = '12px';
         btn.style.color = 'white';
         btn.style.fontWeight = 'bold';
-        btn.style.boxShadow = '2px 0 4px rgba(0,0,0,0.2)';
+        btn.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
         btn.style.pointerEvents = 'auto';
-        btn.style.right = `-${btnWidth}px`;
-        btn.style.top = '0px';
+        // 放在右上角，稍微超出节点边框
+        btn.style.right = `-${btnSize / 2}px`;
+        btn.style.top = `-${btnSize / 2}px`;
         btn.style.left = 'auto';
         btn.style.transform = 'none';
     }

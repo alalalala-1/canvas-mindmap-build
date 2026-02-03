@@ -1,7 +1,7 @@
 /* Canvas Mindmap Build Plugin - Collapse Button Styles */
 
 .cmb-collapse-button {
-    /* 基础定位和尺寸 */
+    /* 基础定位和尺寸 - 圆角方形按钮 */
     position: absolute !important;
     z-index: 9999 !important;
     cursor: pointer !important;
@@ -11,10 +11,10 @@
     width: 20px !important;
     min-width: 20px !important;
     max-width: 20px !important;
-    height: 100% !important;
-    min-height: 100% !important;
-    max-height: 100% !important;
-    border-radius: 0 6px 6px 0 !important;
+    height: 20px !important;
+    min-height: 20px !important;
+    max-height: 20px !important;
+    border-radius: 6px !important;
     padding: 0 !important;
     margin: 0 !important;
 
@@ -33,7 +33,7 @@
     text-align: center !important;
 
     /* 视觉效果 */
-    box-shadow: 2px 0 4px rgba(0,0,0,0.2) !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
     touch-action: manipulation !important;
     -webkit-tap-highlight-color: transparent !important;
     transition: transform 0.1s ease, opacity 0.1s ease !important;
@@ -82,11 +82,11 @@
     filter: brightness(0.9) !important;
 }
 
-/* 确保按钮在各种容器中都能显示 */
+/* 确保按钮在各种容器中都能显示 - 右上角定位 */
 .canvas-node .cmb-collapse-button {
     position: absolute !important;
-    right: -20px !important;
-    top: 0 !important;
+    right: -10px !important;
+    top: -10px !important;
     left: auto !important;
     transform: none !important;
 }
@@ -97,16 +97,18 @@
         width: 24px !important;
         min-width: 24px !important;
         max-width: 24px !important;
-        min-height: 44px !important;
+        height: 24px !important;
+        min-height: 24px !important;
+        max-height: 24px !important;
         /* 保持按钮紧贴节点边框 */
         padding: 0 !important;
         margin: 0 !important;
     }
 
     .canvas-node .cmb-collapse-button {
-        /* 精确定位，紧贴节点右边框 */
-        right: -24px !important;
-        top: 0 !important;
+        /* 精确定位，放在右上角 */
+        right: -12px !important;
+        top: -12px !important;
         left: auto !important;
         transform: none !important;
     }
@@ -150,7 +152,7 @@
 /* 暗黑模式支持 */
 @media (prefers-color-scheme: dark) {
     .cmb-collapse-button {
-        box-shadow: 2px 0 4px rgba(0,0,0,0.4) !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.4) !important;
     }
 }
 
@@ -162,9 +164,11 @@
 /* 文本节点内容区域 - 超出时显示滚动条 */
 .canvas-node .canvas-node-content {
     overflow-y: auto !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(0, 0, 0, 0.3) transparent !important;
 }
 
-/* 自定义滚动条样式 - Webkit (Chrome, Safari, Edge) */
+/* Webkit 浏览器滚动条样式 */
 .canvas-node .canvas-node-content::-webkit-scrollbar {
     width: 6px !important;
 }
@@ -174,16 +178,25 @@
 }
 
 .canvas-node .canvas-node-content::-webkit-scrollbar-thumb {
-    background-color: rgba(0, 0, 0, 0.2) !important;
+    background-color: rgba(0, 0, 0, 0.3) !important;
     border-radius: 3px !important;
 }
 
 .canvas-node .canvas-node-content::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(0, 0, 0, 0.4) !important;
+    background-color: rgba(0, 0, 0, 0.5) !important;
 }
 
-/* Firefox 滚动条样式 */
-.canvas-node .canvas-node-content {
-    scrollbar-width: thin !important;
-    scrollbar-color: rgba(0, 0, 0, 0.2) transparent !important;
+/* 暗黑模式滚动条 */
+@media (prefers-color-scheme: dark) {
+    .canvas-node .canvas-node-content {
+        scrollbar-color: rgba(255, 255, 255, 0.3) transparent !important;
+    }
+
+    .canvas-node .canvas-node-content::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.3) !important;
+    }
+
+    .canvas-node .canvas-node-content::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(255, 255, 255, 0.5) !important;
+    }
 }
