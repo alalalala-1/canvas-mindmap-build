@@ -78,12 +78,23 @@ export function arrangeLayout(
 
     // 初始化所有节点
     nodesForInit.forEach((nodeData, nodeId) => {
+        // 检测是否是公式节点（内容以 $$ 开头和结尾）
+        const isFormula = nodeData.text && /^\$\$[\s\S]*\$\$$/.test(nodeData.text.trim());
+
+        // 根据节点类型确定高度
+        let nodeHeight: number;
+        if (isFormula) {
+            nodeHeight = settings.formulaNodeHeight || 80;
+        } else {
+            nodeHeight = nodeData.height || 60;
+        }
+
         layoutNodes.set(nodeId, {
             id: nodeId,
             x: 0,
             y: 0,
             width: nodeData.width || settings.textNodeWidth,
-            height: nodeData.height || 60,
+            height: nodeHeight,
             children: [],
             _subtreeHeight: 0
         });
