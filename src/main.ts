@@ -24,6 +24,9 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         updateLoggerConfig(this.settings);
         info('插件加载中...');
 
+        // 初始化折叠按钮颜色
+        this.updateCollapseButtonColor();
+
         // 初始化Canvas管理器
         this.canvasManager.initialize();
 
@@ -53,6 +56,12 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             callback: () => this.canvasManager.deleteSelectedEdge(),
         });
 
+        this.addCommand({
+            id: 'adjust-all-text-node-heights',
+            name: 'Adjust All Text Node Heights',
+            callback: () => this.canvasManager.adjustAllTextNodeHeights(),
+        });
+
         this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
 
         debug('插件加载完成');
@@ -79,5 +88,10 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         // 更新日志配置
         updateLoggerConfig(this.settings);
         debug('设置已保存', this.settings);
+    }
+
+    updateCollapseButtonColor() {
+        // 更新 CSS 变量
+        document.documentElement.style.setProperty('--cmb-collapse-button-color', this.settings.collapseButtonColor);
     }
 }

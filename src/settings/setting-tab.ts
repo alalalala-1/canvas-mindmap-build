@@ -130,6 +130,19 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
+        containerEl.createEl('h3', {text: 'Collapse Button'});
+
+        new Setting(containerEl)
+            .setName('Collapse Button Color')
+            .setDesc('The color of the collapse button for all states.')
+            .addColorPicker(color => color
+                .setValue(this.plugin.settings.collapseButtonColor)
+                .onChange(async (value) => {
+                    this.plugin.settings.collapseButtonColor = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.updateCollapseButtonColor();
+                }));
+
         // Debug Settings Section
         containerEl.createEl('h3', {text: 'Debug Settings'});
 

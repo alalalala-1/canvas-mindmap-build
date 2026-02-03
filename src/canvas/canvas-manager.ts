@@ -19,6 +19,7 @@ export class CanvasManager {
     private lastLoadedCanvasPath: string | null = null;
     private mutationObserverRetryCount = 0;
     private readonly MAX_MUTATION_OBSERVER_RETRIES = 10;
+    private isObserverSetup = false;
 
     constructor(
         plugin: Plugin,
@@ -39,8 +40,14 @@ export class CanvasManager {
     // =========================================================================
     initialize() {
         debug('初始化 Canvas 管理器');
-        this.setupMutationObserver();
+        // 不在初始化时启动 observer，只在 canvas 打开时启动
         this.registerEventListeners();
+        
+        // 如果当前已经有 canvas 打开，立即启动 observer
+        const canvasView = this.getCanvasView();
+        if (canvasView) {
+            this.setupMutationObserver();
+        }
     }
 
     private registerEventListeners() {
@@ -49,6 +56,9 @@ export class CanvasManager {
             this.app.workspace.on('active-leaf-change', async (leaf) => {
                 if (leaf?.view?.getViewType() === 'canvas') {
                     debug('检测到 Canvas 视图打开');
+                    
+                    // 启动 MutationObserver
+                    this.setupMutationObserver();
                     
                     // 获取当前 canvas 路径，如果切换了 canvas 则重置加载状态
                     const currentPath = this.getCurrentCanvasFilePath();
@@ -320,6 +330,11 @@ export class CanvasManager {
     // MutationObserver
     // =========================================================================
     private setupMutationObserver() {
+        // 如果已经设置过 observer，不再重复设置
+        if (this.isObserverSetup) {
+            return;
+        }
+
         // 只有在 canvas 视图打开时才启动 observer
         const canvasView = this.getCanvasView();
         if (!canvasView) {
@@ -327,10 +342,29 @@ export class CanvasManager {
             return;
         }
 
-        if (this.mutationObserver) {
-            this.mutationObserver.disconnect();
+        // 尝试多种选择器来找到 canvas 容器
+        const canvasWrapper = document.querySelector('.canvas-wrapper') || 
+                             document.querySelector('.canvas-node-container') ||
+                             document.querySelector('.canvas');
+        
+        if (!canvasWrapper) {
+            this.mutationObserverRetryCount++;
+            if (this.mutationObserverRetryCount <= this.MAX_MUTATION_OBSERVER_RETRIES) {
+                // 只在有 canvas 视图时才重试，且只在第一次失败时输出日志
+                if (this.getCanvasView()) {
+                    if (this.mutationObserverRetryCount === 1) {
+                        debug('Canvas 容器尚未加载，等待重试...');
+                    }
+                    setTimeout(() => this.setupMutationObserver(), 100);
+                }
+            } else {
+                warn(`达到最大重试次数，停止查找 Canvas 容器`);
+                this.isObserverSetup = true; // 标记为已设置，避免重复尝试
+            }
+            return;
         }
 
+        // 找到容器后才创建 observer
         this.mutationObserver = new MutationObserver((mutations) => {
             let shouldCheckButtons = false;
             
@@ -353,23 +387,13 @@ export class CanvasManager {
             }
         });
 
-        const canvasWrapper = document.querySelector('.canvas-wrapper');
-        if (canvasWrapper) {
-            this.mutationObserverRetryCount = 0;
-            this.mutationObserver.observe(canvasWrapper, {
-                childList: true,
-                subtree: true
-            });
-            debug('MutationObserver 已成功设置');
-        } else {
-            this.mutationObserverRetryCount++;
-            if (this.mutationObserverRetryCount <= this.MAX_MUTATION_OBSERVER_RETRIES) {
-                debug(`未找到 Canvas 容器，延迟重试 (${this.mutationObserverRetryCount}/${this.MAX_MUTATION_OBSERVER_RETRIES})`);
-                setTimeout(() => this.setupMutationObserver(), 100);
-            } else {
-                warn(`达到最大重试次数，停止查找 Canvas 容器`);
-            }
-        }
+        this.mutationObserverRetryCount = 0;
+        this.isObserverSetup = true;
+        this.mutationObserver.observe(canvasWrapper, {
+            childList: true,
+            subtree: true
+        });
+        debug('MutationObserver 已成功设置');
     }
 
     // =========================================================================
@@ -548,7 +572,7 @@ export class CanvasManager {
         btn.style.cursor = 'pointer';
         btn.style.border = 'none';
         btn.style.outline = 'none';
-        btn.style.backgroundColor = '#e74c3c';
+        btn.style.backgroundColor = '#D4A574';
         btn.style.width = `${btnWidth}px`;
         btn.style.height = '100%';
         btn.style.minHeight = '100%';
@@ -1691,23 +1715,144 @@ export class CanvasManager {
     }
 
     private calculateTextNodeHeight(content: string): number {
-        const minHeight = 60;
-        const maxHeight = 400;
-        const charsPerLine = 35;
-        const lineHeight = 28;
-        const verticalPadding = 20;
+        const minHeight = 30;
+        const maxHeight = this.settings.textNodeMaxHeight || 800;
+        const nodeWidth = this.settings.textNodeWidth || 400;
+
+        // 使用设置中的节点宽度来计算每行字符数
+        const avgCharWidth = 9.5; // 稍微增加字符宽度估算
+        const charsPerLine = Math.floor((nodeWidth - 22) / avgCharWidth); // 稍微减小内边距
+
+        const lineHeight = 18; // 减小行高
+        const verticalPadding = 11; // 减小上下内边距
 
         const chineseCharRegex = /[\u4e00-\u9fa5]/;
         let numLines = 0;
-        content.split('\n').forEach(line => {
-            let lineLength = 0;
-            for (const char of line) {
-                lineLength += chineseCharRegex.test(char) ? 2 : 1.1;
-            }
-            numLines += Math.ceil(lineLength / charsPerLine) || 1;
-        });
+        const lines = content.split('\n');
 
-        return Math.max(minHeight, Math.min((numLines * lineHeight) + verticalPadding, maxHeight));
+        for (const line of lines) {
+            const trimmedLine = line.trim();
+
+            if (trimmedLine === '') {
+                // 空行也算一行，但高度较小
+                numLines += 0.2;
+                continue;
+            }
+
+            let lineLength = 0;
+            // 移除 Markdown 标记后计算长度
+            const cleanLine = trimmedLine
+                .replace(/^#{1,6}\s+/, '') // 移除标题标记
+                .replace(/\*\*|\*|__|_|`|\[|\]|\(|\)/g, ''); // 移除格式标记
+
+            for (const char of cleanLine) {
+                // 中文字符占2个宽度单位，英文占1个
+                lineLength += chineseCharRegex.test(char) ? 2 : 1;
+            }
+
+            // 计算这行需要多少行显示
+            const linesNeeded = Math.ceil(lineLength / charsPerLine);
+            numLines += Math.max(linesNeeded, 1);
+        }
+
+        const calculatedHeight = Math.ceil((numLines * lineHeight) + verticalPadding);
+        return Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
+    }
+
+    // =========================================================================
+    // 调整所有文本节点高度
+    // =========================================================================
+    public async adjustAllTextNodeHeights(): Promise<void> {
+        try {
+            const canvasFilePath = this.getCurrentCanvasFilePath();
+            if (!canvasFilePath) {
+                new Notice('No canvas file is currently open.');
+                return;
+            }
+
+            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+            if (!(canvasFile instanceof TFile)) {
+                new Notice('Canvas file not found.');
+                return;
+            }
+
+            info(`开始调整所有文本节点高度: ${canvasFilePath}`);
+            const canvasContent = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(canvasContent);
+
+            if (!canvasData.nodes) {
+                new Notice('No nodes found in canvas.');
+                return;
+            }
+
+            const maxHeight = this.settings.textNodeMaxHeight || 800;
+            const textNodeWidth = this.settings.textNodeWidth || 400;
+            let adjustedCount = 0;
+            let skippedCount = 0;
+
+            for (const node of canvasData.nodes) {
+                // 只处理文本节点（没有 media 或 attachment 类型的节点）
+                if (!node.type || node.type === 'text' || node.type === 'file') {
+                    // 如果节点有文本内容
+                    if (node.text) {
+                        // 检测是否是公式节点（使用正则表达式，支持换行）
+                        const trimmedContent = node.text.trim();
+                        const isFormula = this.settings.enableFormulaDetection && 
+                            /^\$\$[\s\S]*\$\$$/.test(trimmedContent);
+                        
+                        let newHeight: number;
+                        
+                        if (isFormula) {
+                            // 公式节点使用固定高度和宽度
+                            newHeight = this.settings.formulaNodeHeight || 80;
+                            node.width = this.settings.formulaNodeWidth || 400;
+                        } else {
+                            // 普通文本节点根据内容计算高度
+                            const calculatedHeight = this.calculateTextNodeHeight(node.text);
+                            newHeight = Math.min(calculatedHeight, maxHeight);
+                        }
+                        
+                        if (node.height !== newHeight) {
+                            node.height = newHeight;
+                            adjustedCount++;
+                        } else {
+                            skippedCount++;
+                        }
+                    }
+                }
+            }
+
+            await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+            
+            // 重新加载 canvas 以应用更改
+            const canvasView = this.getCanvasView();
+            if (canvasView) {
+                const canvas = (canvasView as any).canvas;
+                if (canvas) {
+                    // 尝试多种方式刷新 canvas
+                    if (typeof canvas.reload === 'function') {
+                        canvas.reload();
+                    } else if (typeof canvas.requestSave === 'function') {
+                        canvas.requestSave();
+                    } else if (typeof canvas.update === 'function') {
+                        canvas.update();
+                    }
+                    
+                    // 强制刷新视图
+                    setTimeout(() => {
+                        if (canvasView && typeof (canvasView as any).reload === 'function') {
+                            (canvasView as any).reload();
+                        }
+                    }, 100);
+                }
+            }
+
+            new Notice(`Adjusted ${adjustedCount} nodes, skipped ${skippedCount} nodes.`);
+            info(`调整了 ${adjustedCount} 个节点，跳过了 ${skippedCount} 个节点`);
+        } catch (err) {
+            error(`调整节点高度失败: ${err}`);
+            new Notice('Failed to adjust node heights.');
+        }
     }
 
     private generateRandomId(): string {

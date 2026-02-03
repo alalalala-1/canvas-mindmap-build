@@ -19,6 +19,9 @@ export interface CanvasMindmapBuildSettings {
     horizontalSpacing: number;
     verticalSpacing: number;
 
+    // Collapse Button Settings
+    collapseButtonColor: string;
+
     // Debug Settings
     enableDebugLogging: boolean;
     logLevel: 'error' | 'warn' | 'info' | 'debug' | 'verbose';
@@ -40,6 +43,9 @@ export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
 
     horizontalSpacing: 200,
     verticalSpacing: 40,
+
+    // Collapse Button Settings
+    collapseButtonColor: '#e74c3c',
 
     // Debug Settings
     enableDebugLogging: false,

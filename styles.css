@@ -7,7 +7,7 @@
     cursor: pointer !important;
     border: none !important;
     outline: none !important;
-    background-color: #e74c3c !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
     width: 20px !important;
     min-width: 20px !important;
     max-width: 20px !important;
@@ -43,25 +43,43 @@
 }
 
 .cmb-collapse-button:hover {
-    background-color: #c0392b !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(1.1) !important;
     transform: scale(1.05) !important;
 }
 
 .cmb-collapse-button:active {
-    background-color: #a93226 !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(0.9) !important;
     transform: scale(0.95) !important;
 }
 
 .cmb-collapse-button.collapsed {
-    background-color: #27ae60 !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
 }
 
 .cmb-collapse-button.collapsed:hover {
-    background-color: #229954 !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(1.1) !important;
 }
 
 .cmb-collapse-button.collapsed:active {
-    background-color: #1e8449 !important;
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(0.9) !important;
+}
+
+.cmb-collapse-button.expanded {
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+}
+
+.cmb-collapse-button.expanded:hover {
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(1.1) !important;
+}
+
+.cmb-collapse-button.expanded:active {
+    background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    filter: brightness(0.9) !important;
 }
 
 /* 确保按钮在各种容器中都能显示 */
@@ -85,4 +103,38 @@
     .canvas-node .cmb-collapse-button {
         right: -30px !important;
     }
+}
+
+/* ============================================================================
+   文本节点内容区域滚动样式
+   当节点高度达到最大值时，内容可滚动
+   ============================================================================ */
+
+/* 文本节点内容区域 - 超出时显示滚动条 */
+.canvas-node .canvas-node-content {
+    overflow-y: auto !important;
+}
+
+/* 自定义滚动条样式 - Webkit (Chrome, Safari, Edge) */
+.canvas-node .canvas-node-content::-webkit-scrollbar {
+    width: 6px !important;
+}
+
+.canvas-node .canvas-node-content::-webkit-scrollbar-track {
+    background: transparent !important;
+}
+
+.canvas-node .canvas-node-content::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2) !important;
+    border-radius: 3px !important;
+}
+
+.canvas-node .canvas-node-content::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Firefox 滚动条样式 */
+.canvas-node .canvas-node-content {
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent !important;
 }
