@@ -124,17 +124,9 @@ export class LayoutManager {
                 }
             });
 
-            // 计算新的布局（只考虑可见节点）
-            // 创建只包含可见节点的新 Map
-            const visibleNodes = new Map<string, any>();
-            nodes.forEach((node: any, id: string) => {
-                if (visibleNodeIds.has(id)) {
-                    visibleNodes.set(id, node);
-                }
-            });
-
-            // 从 Canvas 文件中读取原始边数据（包含已删除的边）
+            // 从 Canvas 文件中读取原始数据（包含节点文本和边）
             let originalEdges = edges;
+            let fileNodes = new Map<string, any>(); // 从文件读取的节点数据
             try {
                 const canvasFilePath = canvas.file?.path || (activeView as any).file?.path;
                 if (canvasFilePath) {
@@ -142,6 +134,15 @@ export class LayoutManager {
                     if (canvasFile instanceof TFile) {
                         const canvasContent = await this.app.vault.read(canvasFile);
                         const canvasData = JSON.parse(canvasContent);
+                        // 读取文件中的节点数据（包含 text 内容）
+                        if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
+                            for (const node of canvasData.nodes) {
+                                if (node.id) {
+                                    fileNodes.set(node.id, node);
+                                }
+                            }
+                            debug(`arrangeCanvas: 从文件读取到 ${fileNodes.size} 个节点`);
+                        }
                         if (canvasData.edges && Array.isArray(canvasData.edges)) {
                             originalEdges = canvasData.edges;
                             debug(`arrangeCanvas: 从文件读取到 ${originalEdges.length} 条原始边`);
@@ -149,8 +150,25 @@ export class LayoutManager {
                     }
                 }
             } catch (e) {
-                debug('arrangeCanvas: 无法读取原始边数据，使用当前边数据');
+                debug('arrangeCanvas: 无法读取原始数据，使用当前数据');
             }
+
+            // 计算新的布局（只考虑可见节点）
+            // 创建只包含可见节点的新 Map，合并内存节点和文件节点的数据
+            const visibleNodes = new Map<string, any>();
+            nodes.forEach((node: any, id: string) => {
+                if (visibleNodeIds.has(id)) {
+                    // 合并内存节点和文件节点的数据，优先使用文件节点的 text
+                    const fileNode = fileNodes.get(id);
+                    const mergedNode = {
+                        ...node,
+                        ...(fileNode || {}),
+                        // 确保使用文件中的文本内容（用于检测公式）
+                        text: fileNode?.text || node.text
+                    };
+                    visibleNodes.set(id, mergedNode);
+                }
+            });
 
             const layoutTimer = logTime('originalArrangeLayout');
             // 传递所有节点用于判断孤立节点，但只返回可见节点的布局
