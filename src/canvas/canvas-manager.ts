@@ -1952,7 +1952,10 @@ export class CanvasManager {
             if (!canvas?.nodes) return;
 
             // 等待渲染完成（增加延迟确保 DOM 准备好）
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // 触控设备（如安卓平板）可能需要更长的渲染时间
+            const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+            const delay = isTouchDevice ? 800 : 500;
+            await new Promise(resolve => setTimeout(resolve, delay));
 
             // 重新获取节点（确保是最新的）
             const freshNodeData = canvas.nodes.get(nodeId);
