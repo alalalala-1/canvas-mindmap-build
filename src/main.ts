@@ -1,99 +1,83 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Editor, ItemView, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
+import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
+import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
+import { CollapseStateManager } from './state/collapse-state';
+import { CanvasManager } from './canvas/canvas-manager';
+import { updateLoggerConfig, info, debug } from './utils/logger';
 
-// Remember to rename these classes and interfaces!
+export default class CanvasMindmapBuildPlugin extends Plugin {
+    settings: CanvasMindmapBuildSettings;
+    lastClickedNodeId: string | null = null;
+    private collapseStateManager: CollapseStateManager = new CollapseStateManager();
+    private canvasManager: CanvasManager;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+    constructor(app: any, manifest: any) {
+        super(app, manifest);
+        this.settings = DEFAULT_SETTINGS;
+        this.canvasManager = new CanvasManager(this, app, this.settings, this.collapseStateManager);
+    }
 
-	async onload() {
-		await this.loadSettings();
+    async onload() {
+        await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+        // 初始化日志系统配置
+        updateLoggerConfig(this.settings);
+        info('插件加载中...');
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+        // 初始化Canvas管理器
+        this.canvasManager.initialize();
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+        // 添加命令
+        this.addCommand({
+            id: 'add-to-canvas-mindmap',
+            name: 'Add to Canvas Mindmap',
+            callback: () => {
+                const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+                if (mdView && mdView.editor.getSelection()) {
+                    this.canvasManager.addNodeToCanvas(mdView.editor.getSelection(), mdView.file);
+                } else {
+                    new Notice('Please select some text in a Markdown editor.');
+                }
+            }
+        });
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
-		});
+        this.addCommand({
+            id: 'arrange-canvas-mindmap-layout',
+            name: 'Arrange Canvas Mindmap Layout',
+            callback: () => this.canvasManager.arrangeCanvas(),
+        });
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+        this.addCommand({
+            id: 'delete-selected-edge',
+            name: 'Delete Selected Edge',
+            callback: () => this.canvasManager.deleteSelectedEdge(),
+        });
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
+        this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+        debug('插件加载完成');
+    }
 
-	}
+    onunload() {
+        info('插件卸载中...');
+        this.canvasManager.unload();
+        info('插件已卸载');
+    }
 
-	onunload() {
-	}
+    async loadSettings() {
+        const data = await this.loadData();
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+        this.lastClickedNodeId = data?.lastClickedNodeId || null;
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
-	}
+        // 更新日志配置
+        updateLoggerConfig(this.settings);
+        debug('设置已加载', this.settings);
+    }
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+    async saveSettings() {
+        await this.saveData(this.settings);
+        // 更新日志配置
+        updateLoggerConfig(this.settings);
+        debug('设置已保存', this.settings);
+    }
 }

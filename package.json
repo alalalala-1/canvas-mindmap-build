@@ -1,7 +1,7 @@
 {
-	"name": "obsidian-sample-plugin",
+	"name": "canvas-mindmap-build",
 	"version": "1.0.0",
-	"description": "This is a sample plugin for Obsidian (https://obsidian.md)",
+	"description": "Canvas Mindmap plugin for Obsidian - Add nodes to canvas from markdown and manage collapsible mindmap structures",
 	"main": "main.js",
 	"type": "module",
 	"scripts": {

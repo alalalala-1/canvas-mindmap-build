@@ -1,90 +1,85 @@
-# Obsidian Sample Plugin
+# Canvas Mindmap Build for Obsidian
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+一个 Obsidian 插件，用于在 Canvas 画布中构建和管理思维导图。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## 功能特性
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+### 📝 添加节点到 Canvas
+- 在 Markdown 编辑器中选中文字或图片
+- 运行命令 `Add to Canvas Mindmap`
+- 自动将选中的内容作为节点添加到 Canvas
 
-## First time developing plugins?
+### 🔗 从链接跳转
+- 点击 Canvas 节点可跳转到源文件
+- 自动记录节点与源文件的链接关系
+- 支持文本节点和图片节点的链接跳转
 
-Quick starting guide for new plugin devs:
+### 📐 节点折叠/展开
+- 自动为有子节点的父节点添加折叠按钮
+- 点击按钮可折叠/展开子节点
+- 支持多级节点的递归折叠/展开
+- **新增**：折叠/展开时自动重新布局可见节点，保持合理的间距
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### 🗑️ 节点删除确认
+- **新增**：删除节点时弹出确认对话框
+- 提供三种删除选项：
+  - **取消**：不执行删除操作
+  - **单个**：删除当前节点，子节点自动连接到父节点
+  - **级联**：删除当前节点及其所有子节点
 
-## Releasing new releases
+## 使用方法
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### 1. 配置目标 Canvas 文件
+1. 打开 Obsidian 设置
+2. 进入插件设置 → Canvas Mindmap
+3. 设置目标 Canvas 文件路径（相对于保险库根目录）
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+### 2. 添加节点
+1. 在 Markdown 文件中选中文字或图片
+2. 使用命令面板（Ctrl/Cmd + P）运行 `Add to Canvas Mindmap`
+3. 新节点将自动添加到 Canvas 中
 
-## Adding your plugin to the community plugin list
+### 3. 折叠/展开节点
+- 节点右侧会自动显示折叠按钮（红色）
+- 点击按钮可展开/折叠子节点
+- 按钮状态：红色实心=已折叠，红色边框=已展开
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+## 设置选项
 
-## How to use
+| 设置项 | 说明 | 默认值 |
+|-------|------|-------|
+| Target Canvas File | 目标 Canvas 文件路径 | - |
+| Text Node Width | 文本节点宽度 | 300 |
+| Text Node Max Height | 文本节点最大高度 | 400 |
+| Image Node Width | 图片节点宽度 | 400 |
+| Image Node Height | 图片节点高度 | 400 |
+| Horizontal Spacing | 水平间距（父子节点） | 200 |
+| Vertical Spacing | 垂直间距（兄弟节点） | 40 |
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## 安装
 
-## Manually installing the plugin
+### 手动安装
+1. 将 `main.js`、`manifest.json`、`styles.css` 复制到 `<保险库>/.obsidian/plugins/canvas-mindmap-build/`
+2. 在 Obsidian 设置中启用插件
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+### 社区插件
+通过 Obsidian 设置 → 社区插件 → 浏览搜索 "Canvas Mindmap"
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+## 系统要求
 
-## Funding URL
+- Obsidian v0.15.0+
+- 支持 macOS、iOS、Android
 
-You can include funding URLs where people who use your plugin can financially support it.
+## 技术说明
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+- 使用 TypeScript 开发
+- 无外部运行时依赖
+- 纯本地操作，不收集任何数据
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
+## 更新日志
 
-If you have multiple URLs, you can also do:
-
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
-
-## API Documentation
-
-See https://docs.obsidian.md
+### v1.0.0
+- 初始版本
+- 添加节点到 Canvas 功能
+- 节点折叠/展开功能
+- 从链接跳转功能
