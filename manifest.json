@@ -1,9 +1,9 @@
 {
 	"id": "canvas-mindmap-build",
 	"name": "Canvas Mindmap Build",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"minAppVersion": "0.15.0",
-	"description": "Build and manage mindmaps in Obsidian Canvas with collapsible nodes and links to source files.",
+	"description": "Build and manage mindmaps in Obsidian Canvas with collapsible nodes and links to source files. Optimized for tablet and stylus input.",
 	"author": "Saga",
 	"isDesktopOnly": false
 }

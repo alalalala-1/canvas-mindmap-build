@@ -1,4 +1,7 @@
 export interface CanvasMindmapBuildSettings {
+    // 设置版本号
+    version?: string;
+
     canvasFilePath: string;
 
     // Text Node Settings
@@ -28,6 +31,9 @@ export interface CanvasMindmapBuildSettings {
 }
 
 export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
+    // 设置版本号
+    version: '1.2.0',
+
     canvasFilePath: '',
 
     enableTextAutoSize: true,

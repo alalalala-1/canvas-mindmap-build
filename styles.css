@@ -91,17 +91,62 @@
     transform: none !important;
 }
 
-/* 移动端优化 */
-@media (max-width: 768px) {
+/* 平板设备优化 (13.3寸，支持笔和手指触摸) */
+@media (min-width: 1024px) and (pointer: coarse) {
     .cmb-collapse-button {
-        width: 30px !important;
-        min-width: 30px !important;
-        max-width: 30px !important;
+        width: 24px !important;
+        min-width: 24px !important;
+        max-width: 24px !important;
         min-height: 44px !important;
+        /* 增大触摸区域 */
+        padding: 4px !important;
+        margin: -4px !important;
     }
 
     .canvas-node .cmb-collapse-button {
-        right: -30px !important;
+        right: -24px !important;
+    }
+
+    /* 优化触摸反馈 */
+    .cmb-collapse-button:active {
+        transform: scale(0.95) !important;
+        filter: brightness(0.85) !important;
+    }
+}
+
+/* 支持触控的设备通用优化 */
+@media (pointer: coarse) {
+    .cmb-collapse-button {
+        /* 禁用 hover 效果（触摸设备上不需要） */
+        pointer-events: auto !important;
+        touch-action: manipulation !important;
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1) !important;
+    }
+
+    /* 增大触摸目标 */
+    .cmb-collapse-button::before {
+        content: '' !important;
+        position: absolute !important;
+        top: -8px !important;
+        bottom: -8px !important;
+        left: -8px !important;
+        right: -8px !important;
+        z-index: -1 !important;
+    }
+}
+
+/* 支持笔输入的设备 */
+@media (any-pointer: fine) {
+    .cmb-collapse-button {
+        /* 笔输入优化 */
+        cursor: pointer !important;
+    }
+}
+
+/* 暗黑模式支持 */
+@media (prefers-color-scheme: dark) {
+    .cmb-collapse-button {
+        box-shadow: 2px 0 4px rgba(0,0,0,0.4) !important;
     }
 }
 

@@ -3,7 +3,9 @@ import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
 import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
 import { CollapseStateManager } from './state/collapse-state';
 import { CanvasManager } from './canvas/canvas-manager';
-import { updateLoggerConfig, info, debug } from './utils/logger';
+import { updateLoggerConfig, info, debug, error } from './utils/logger';
+import { validateSettings, migrateSettings } from './settings/validator';
+import { CSS_VARS } from './constants';
 
 export default class CanvasMindmapBuildPlugin extends Plugin {
     settings: CanvasMindmapBuildSettings;
@@ -74,13 +76,25 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
     }
 
     async loadSettings() {
-        const data = await this.loadData();
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
-        this.lastClickedNodeId = data?.lastClickedNodeId || null;
+        try {
+            const data = await this.loadData();
 
-        // 更新日志配置
-        updateLoggerConfig(this.settings);
-        debug('设置已加载', this.settings);
+            // 验证和迁移设置
+            const validatedData = validateSettings(data || {});
+            let mergedSettings = { ...DEFAULT_SETTINGS, ...validatedData };
+            mergedSettings = migrateSettings(mergedSettings);
+
+            this.settings = mergedSettings;
+            this.lastClickedNodeId = data?.lastClickedNodeId || null;
+
+            // 更新日志配置
+            updateLoggerConfig(this.settings);
+            debug('设置已加载', this.settings);
+        } catch (e) {
+            error('加载设置失败:', e);
+            this.settings = { ...DEFAULT_SETTINGS };
+            new Notice('加载插件设置失败，使用默认设置');
+        }
     }
 
     async saveSettings() {
@@ -92,6 +106,6 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
     updateCollapseButtonColor() {
         // 更新 CSS 变量
-        document.documentElement.style.setProperty('--cmb-collapse-button-color', this.settings.collapseButtonColor);
+        document.documentElement.style.setProperty(CSS_VARS.COLLAPSE_BUTTON_COLOR, this.settings.collapseButtonColor);
     }
 }
