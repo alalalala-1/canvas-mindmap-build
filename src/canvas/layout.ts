@@ -77,14 +77,18 @@ export function arrangeLayout(
     const nodesForInit = allNodes || nodes;
 
     // 初始化所有节点
+    let formulaNodeCount = 0;
     nodesForInit.forEach((nodeData, nodeId) => {
         // 检测是否是公式节点（内容以 $$ 开头和结尾）
-        const isFormula = nodeData.text && /^\$\$[\s\S]*\$\$$/.test(nodeData.text.trim());
+        const nodeText = nodeData.text || '';
+        const isFormula = nodeText && /^\$\$[\s\S]*\$\$$/.test(nodeText.trim());
 
         // 根据节点类型确定高度
         let nodeHeight: number;
         if (isFormula) {
             nodeHeight = settings.formulaNodeHeight || 80;
+            formulaNodeCount++;
+            debug(`布局节点 ${nodeId}: 公式节点, 高度=${nodeHeight}, 内容=${nodeText.substring(0, 30)}...`);
         } else {
             nodeHeight = nodeData.height || 60;
         }
@@ -100,7 +104,7 @@ export function arrangeLayout(
         });
     });
 
-    debug('布局节点数量:', layoutNodes.size);
+    debug(`布局节点数量: ${layoutNodes.size}, 其中公式节点: ${formulaNodeCount}`);
 
     // 构建父子关系映射（用于查找原父节点）- 使用原始边数据
     const parentMap = new Map<string, string>(); // childId -> parentId

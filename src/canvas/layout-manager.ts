@@ -160,15 +160,25 @@ export class LayoutManager {
                 if (visibleNodeIds.has(id)) {
                     // 合并内存节点和文件节点的数据，优先使用文件节点的 text
                     const fileNode = fileNodes.get(id);
+                    const nodeText = fileNode?.text || node.text;
+                    
+                    // 检测是否是公式节点
+                    const isFormula = nodeText && /^\$\$[\s\S]*\$\$$/.test(nodeText.trim());
+                    if (isFormula) {
+                        debug(`arrangeCanvas: 检测到公式节点 ${id}: ${nodeText?.substring(0, 50)}...`);
+                    }
+                    
                     const mergedNode = {
                         ...node,
                         ...(fileNode || {}),
                         // 确保使用文件中的文本内容（用于检测公式）
-                        text: fileNode?.text || node.text
+                        text: nodeText
                     };
                     visibleNodes.set(id, mergedNode);
                 }
             });
+            
+            debug(`arrangeCanvas: 可见节点数量: ${visibleNodes.size}`);
 
             const layoutTimer = logTime('originalArrangeLayout');
             // 传递所有节点用于判断孤立节点，但只返回可见节点的布局
