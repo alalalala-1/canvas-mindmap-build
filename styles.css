@@ -1,18 +1,22 @@
 /* Canvas Mindmap Build Plugin - Collapse Button Styles */
 
 .cmb-collapse-button {
-    /* 基础定位和尺寸 - 竖条按钮 */
+    /* 基础定位和尺寸 - 正方形按钮 */
     position: absolute !important;
     z-index: 9999 !important;
     cursor: pointer !important;
     border: none !important;
     outline: none !important;
     background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
+    /* 正方形，宽度固定 */
     width: 20px !important;
     min-width: 20px !important;
     max-width: 20px !important;
-    /* 高度由 JS 动态设置，为节点高度的 130% */
-    border-radius: 6px !important;
+    height: 20px !important;
+    min-height: 20px !important;
+    max-height: 20px !important;
+    /* 右侧两个角为圆角 */
+    border-radius: 0 3px 3px 0 !important;
     padding: 0 !important;
     margin: 0 !important;
 
@@ -83,7 +87,8 @@
 /* 确保按钮在各种容器中都能显示 - 右侧定位，左侧与节点重叠 */
 .canvas-node .cmb-collapse-button {
     position: absolute !important;
-    right: -10px !important;
+    /* 按钮左侧与节点右侧重叠 */
+    right: -20px !important;
     top: 0 !important;
     left: auto !important;
     transform: none !important;
@@ -95,7 +100,11 @@
         width: 24px !important;
         min-width: 24px !important;
         max-width: 24px !important;
-        /* 高度由 JS 动态设置 */
+        height: 24px !important;
+        min-height: 24px !important;
+        max-height: 24px !important;
+        /* 右侧两个角为圆角 */
+        border-radius: 0 3px 3px 0 !important;
         /* 保持按钮紧贴节点边框 */
         padding: 0 !important;
         margin: 0 !important;
@@ -103,7 +112,7 @@
 
     .canvas-node .cmb-collapse-button {
         /* 精确定位，按钮左侧与节点右侧重叠 */
-        right: -12px !important;
+        right: -24px !important;
         top: 0 !important;
         left: auto !important;
         transform: none !important;

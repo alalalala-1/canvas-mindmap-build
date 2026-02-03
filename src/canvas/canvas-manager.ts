@@ -593,8 +593,9 @@ export class CanvasManager {
         btn.style.fontWeight = 'bold';
         btn.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
         btn.style.pointerEvents = 'auto';
-        // 按钮左侧与节点右侧重叠一半，顶部对齐
-        btn.style.right = `-${btnWidth / 2}px`;
+        // 按钮为正方形，左侧与节点右侧重叠，顶部对齐
+        // right = -按钮宽度，这样按钮左侧就与节点右侧重叠
+        btn.style.right = `-${btnWidth}px`;
         btn.style.top = '0px';
         btn.style.left = 'auto';
         btn.style.transform = 'none';
