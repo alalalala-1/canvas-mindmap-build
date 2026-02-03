@@ -1,5 +1,5 @@
 /**
- * 统一日志系统 - 极简版本
+ * 统一日志系统 - 已禁用
  */
 
 import { CanvasMindmapBuildSettings } from '../settings/types';
@@ -12,14 +12,6 @@ export enum LogLevel {
     TRACE = 4
 }
 
-const LOG_LEVEL_NAMES: Record<LogLevel, string> = {
-    [LogLevel.ERROR]: 'ERR',
-    [LogLevel.WARN]: 'WARN',
-    [LogLevel.INFO]: 'INFO',
-    [LogLevel.DEBUG]: 'DBG',
-    [LogLevel.TRACE]: 'TRC'
-};
-
 interface LoggerConfig {
     enabled: boolean;
     level: LogLevel;
@@ -27,101 +19,48 @@ interface LoggerConfig {
 
 const DEFAULT_CONFIG: LoggerConfig = {
     enabled: false,
-    level: LogLevel.INFO
+    level: LogLevel.ERROR
 };
 
 let loggerConfig: LoggerConfig = { ...DEFAULT_CONFIG };
 
 export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>): void {
-    if (settings.enableDebugLogging !== undefined) {
-        loggerConfig.enabled = settings.enableDebugLogging;
-    }
-    if (settings.logLevel !== undefined) {
-        loggerConfig.level = parseLogLevel(settings.logLevel);
-    }
-}
-
-function parseLogLevel(levelStr: string): LogLevel {
-    switch (levelStr.toLowerCase()) {
-        case 'error': return LogLevel.ERROR;
-        case 'warn': return LogLevel.WARN;
-        case 'info': return LogLevel.INFO;
-        case 'debug': return LogLevel.DEBUG;
-        case 'verbose':
-        case 'trace': return LogLevel.TRACE;
-        default: return LogLevel.INFO;
-    }
+    // 日志系统已禁用，不响应配置更新
+    loggerConfig.enabled = false;
 }
 
 function logLevel(level: LogLevel, ...messages: any[]): void {
-    if (!loggerConfig.enabled || level > loggerConfig.level) {
-        return;
-    }
-
-    const body = messages.map(msg => {
-        if (msg === null) return 'null';
-        if (msg === undefined) return 'undefined';
-        if (typeof msg === 'object') {
-            try {
-                return JSON.stringify(msg);
-            } catch (e) {
-                return String(msg);
-            }
-        }
-        return String(msg);
-    }).join(' ');
-
-    switch (level) {
-        case LogLevel.ERROR:
-            console.error(body);
-            break;
-        case LogLevel.WARN:
-            console.warn(body);
-            break;
-        case LogLevel.INFO:
-        case LogLevel.DEBUG:
-        case LogLevel.TRACE:
-            console.log(body);
-            break;
-    }
+    // 日志系统已禁用，不输出任何日志
+    return;
 }
 
 export function error(...messages: any[]): void {
-    logLevel(LogLevel.ERROR, ...messages);
+    // 禁用
 }
 
 export function warn(...messages: any[]): void {
-    logLevel(LogLevel.WARN, ...messages);
+    // 禁用
 }
 
 export function info(...messages: any[]): void {
-    logLevel(LogLevel.INFO, ...messages);
+    // 禁用
 }
 
 export function debug(...messages: any[]): void {
-    logLevel(LogLevel.DEBUG, ...messages);
+    // 禁用
 }
 
 export function trace(...messages: any[]): void {
-    logLevel(LogLevel.TRACE, ...messages);
+    // 禁用
 }
 
 export function logTime(label: string, level: LogLevel = LogLevel.DEBUG): () => void {
-    if (!loggerConfig.enabled || level > loggerConfig.level) {
-        return () => {};
-    }
-
-    const startTime = performance.now();
-    logLevel(level, `▶ ${label}`);
-
-    return () => {
-        const duration = performance.now() - startTime;
-        logLevel(level, `◀ ${label} ${duration.toFixed(1)}ms`);
-    };
+    // 禁用，返回空函数
+    return () => {};
 }
 
 export default function log(...messages: any[]): void {
-    logLevel(LogLevel.INFO, ...messages);
+    // 禁用
 }
 
 export { log };
