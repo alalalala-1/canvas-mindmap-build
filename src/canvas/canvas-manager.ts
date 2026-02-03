@@ -565,8 +565,10 @@ export class CanvasManager {
     // 应用按钮样式
     // =========================================================================
     private applyButtonStyle(btn: HTMLElement, direction: string, nodeWidth: number, nodeHeight: number) {
-        const btnWidth = 20;
-        
+        // 检测是否是触控设备，使用不同的按钮宽度
+        const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+        const btnWidth = isTouchDevice ? 24 : 20;
+
         btn.style.position = 'absolute';
         btn.style.zIndex = '100';
         btn.style.cursor = 'pointer';

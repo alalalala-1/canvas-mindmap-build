@@ -98,13 +98,17 @@
         min-width: 24px !important;
         max-width: 24px !important;
         min-height: 44px !important;
-        /* 增大触摸区域 */
-        padding: 4px !important;
-        margin: -4px !important;
+        /* 保持按钮紧贴节点边框 */
+        padding: 0 !important;
+        margin: 0 !important;
     }
 
     .canvas-node .cmb-collapse-button {
+        /* 精确定位，紧贴节点右边框 */
         right: -24px !important;
+        top: 0 !important;
+        left: auto !important;
+        transform: none !important;
     }
 
     /* 优化触摸反馈 */
