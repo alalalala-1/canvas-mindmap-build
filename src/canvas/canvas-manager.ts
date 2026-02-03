@@ -1785,12 +1785,16 @@ export class CanvasManager {
                 return;
             }
 
+            debug(`总共 ${canvasData.nodes.length} 个节点`);
+
             const maxHeight = this.settings.textNodeMaxHeight || 800;
             const textNodeWidth = this.settings.textNodeWidth || 400;
             let adjustedCount = 0;
             let skippedCount = 0;
 
             for (const node of canvasData.nodes) {
+                debug(`检查节点 ${node.id}: type=${node.type}, hasText=${!!node.text}`);
+                
                 // 只处理文本节点（没有 media 或 attachment 类型的节点）
                 if (!node.type || node.type === 'text' || node.type === 'file') {
                     // 如果节点有文本内容
@@ -1800,25 +1804,35 @@ export class CanvasManager {
                         const isFormula = this.settings.enableFormulaDetection && 
                             /^\$\$[\s\S]*\$\$$/.test(trimmedContent);
                         
+                        debug(`节点 ${node.id}: 内容前50字符="${trimmedContent.substring(0, 50)}", isFormula=${isFormula}`);
+                        
                         let newHeight: number;
                         
                         if (isFormula) {
                             // 公式节点使用固定高度和宽度
                             newHeight = this.settings.formulaNodeHeight || 80;
                             node.width = this.settings.formulaNodeWidth || 400;
+                            debug(`节点 ${node.id}: 公式节点，设置高度=${newHeight}, 宽度=${node.width}`);
                         } else {
                             // 普通文本节点根据内容计算高度
                             const calculatedHeight = this.calculateTextNodeHeight(node.text);
                             newHeight = Math.min(calculatedHeight, maxHeight);
+                            debug(`节点 ${node.id}: 普通文本节点，计算高度=${calculatedHeight}, 最终高度=${newHeight}`);
                         }
                         
                         if (node.height !== newHeight) {
+                            debug(`节点 ${node.id}: 高度从 ${node.height} 调整为 ${newHeight}`);
                             node.height = newHeight;
                             adjustedCount++;
                         } else {
+                            debug(`节点 ${node.id}: 高度未变化 (${node.height})`);
                             skippedCount++;
                         }
+                    } else {
+                        debug(`节点 ${node.id}: 无文本内容，跳过`);
                     }
+                } else {
+                    debug(`节点 ${node.id}: 非文本节点 (type=${node.type})，跳过`);
                 }
             }
 
