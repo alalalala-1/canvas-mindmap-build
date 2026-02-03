@@ -1799,10 +1799,11 @@ export class CanvasManager {
                 if (!node.type || node.type === 'text' || node.type === 'file') {
                     // 如果节点有文本内容
                     if (node.text) {
-                        // 检测是否是公式节点（使用正则表达式，支持换行）
+                        // 检测是否是公式节点（使用正则表达式，支持换行和fromLink注释）
                         const trimmedContent = node.text.trim();
+                        // 公式以 $$ 开头和结尾，后面可能有 fromLink 注释
                         const isFormula = this.settings.enableFormulaDetection && 
-                            /^\$\$[\s\S]*\$\$$/.test(trimmedContent);
+                            /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(trimmedContent);
                         
                         const contentPreview = trimmedContent.length > 60 
                             ? `${trimmedContent.substring(0, 30)}...${trimmedContent.substring(trimmedContent.length - 30)}`

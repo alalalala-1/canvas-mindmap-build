@@ -79,9 +79,9 @@ export function arrangeLayout(
     // 初始化所有节点
     let formulaNodeCount = 0;
     nodesForInit.forEach((nodeData, nodeId) => {
-        // 检测是否是公式节点（内容以 $$ 开头和结尾）
+        // 检测是否是公式节点（内容以 $$ 开头和结尾，后面可能有 fromLink 注释）
         const nodeText = nodeData.text || '';
-        const isFormula = nodeText && /^\$\$[\s\S]*\$\$$/.test(nodeText.trim());
+        const isFormula = nodeText && /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(nodeText.trim());
 
         // 根据节点类型确定高度
         let nodeHeight: number;
