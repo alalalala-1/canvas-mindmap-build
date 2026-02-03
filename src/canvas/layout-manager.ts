@@ -1,7 +1,7 @@
 import { App, ItemView, Notice, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
-import { log, debug, info, warn, error, trace, logTime } from '../utils/logger';
+import { debug, info, warn, error, trace, logTime } from '../utils/logger';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 
 /**

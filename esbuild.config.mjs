@@ -39,6 +39,13 @@ const context = await esbuild.context({
 	treeShaking: true,
 	outfile: "main.js",
 	minify: prod,
+	// 生产环境优化
+	define: prod ? {
+		// 定义全局常量，帮助 tree-shaking
+		'process.env.NODE_ENV': '"production"',
+	} : {},
+	// 优化选项
+	metafile: true,
 });
 
 if (prod) {
