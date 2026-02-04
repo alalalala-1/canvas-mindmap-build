@@ -93,10 +93,11 @@ export function arrangeLayout(
             nodeHeight = nodeData.height || 60;
         }
 
+        // 保留原始位置，用于孤立节点
         layoutNodes.set(nodeId, {
             id: nodeId,
-            x: 0,
-            y: 0,
+            x: nodeData.x || 0,
+            y: nodeData.y || 0,
             width: nodeData.width || settings.textNodeWidth,
             height: nodeHeight,
             children: [],
@@ -345,65 +346,11 @@ export function arrangeLayout(
         }
     }
 
-    // 处理孤立节点：放在根节点下方（包括其所有子节点）
+    // 处理孤立节点：完全保持其原始位置（不调整X和Y坐标）
     if (isolatedNodes.length > 0) {
-        // 找到根节点层级的最大Y值
-        let maxRootY = 0;
-        rootNodes.forEach(rootId => {
-            const node = layoutNodes.get(rootId);
-            if (node) {
-                const nodeBottom = node.y + node._subtreeHeight;
-                if (nodeBottom > maxRootY) {
-                    maxRootY = nodeBottom;
-                }
-            }
-        });
-
-        const isolatedX = levelX.get(0) || 0;
-        let currentY = maxRootY + settings.verticalSpacing;
-
-        // 获取孤立节点及其所有子节点（从原始边数据中）
-        function getNodeAndDescendants(nodeId: string, visited: Set<string> = new Set()): string[] {
-            if (visited.has(nodeId)) return [];
-            visited.add(nodeId);
-
-            const result = [nodeId];
-            const node = layoutNodes.get(nodeId);
-            if (node) {
-                for (const childId of node.children) {
-                    result.push(...getNodeAndDescendants(childId, visited));
-                }
-            }
-            return result;
-        }
-
-        // 处理每个孤立节点及其子节点
-        const visitedNodes = new Set<string>();
-        for (const isolatedNodeId of isolatedNodes) {
-            if (visitedNodes.has(isolatedNodeId)) continue;
-
-            // 获取该孤立节点及其所有子节点
-            const nodeGroup = getNodeAndDescendants(isolatedNodeId, visitedNodes);
-
-            // 计算该组的原始位置（用于保持相对位置）
-            const groupNodes = nodeGroup.map(id => layoutNodes.get(id)).filter(n => n) as LayoutNode[];
-            if (groupNodes.length === 0) continue;
-
-            const minGroupY = Math.min(...groupNodes.map(n => n.y));
-
-            // 放置该组的所有节点，保持相对位置
-            for (const node of groupNodes) {
-                const relativeY = node.y - minGroupY;
-                node.x = isolatedX;
-                node.y = currentY + relativeY;
-            }
-
-            // 更新 currentY 为下一组的起始位置
-            const maxGroupHeight = Math.max(...groupNodes.map(n => n.height));
-            currentY += maxGroupHeight + settings.verticalSpacing;
-        }
-
-        debug('孤立节点布局完成:', isolatedNodes.length, '个孤立节点组放在根节点下方');
+        // 孤立节点保持原位置不变，仅记录日志
+        debug('孤立节点保持原位置:', isolatedNodes.length, '个孤立节点');
+        trace('孤立节点ID:', isolatedNodes);
     }
 
     // 生成最终结果
