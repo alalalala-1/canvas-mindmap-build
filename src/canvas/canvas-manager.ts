@@ -331,7 +331,27 @@ export class CanvasManager {
             }, 50);
         });
 
-        canvas.on('node-select', () => {
+        canvas.on('node-select', async (node: any) => {
+            // 检查选中的节点是否是浮动节点，如果是，清除浮动状态
+            if (node?.id) {
+                const nodeId = node.id;
+                
+                // 获取浮动节点列表（从内存和文件中都检查）
+                const memoryFloatingNodes = canvas.fileData?.metadata?.floatingNodes || {};
+                
+                // 检查节点是否处于浮动状态
+                if (memoryFloatingNodes[nodeId]) {
+                    // 检查节点是否有边连接（入边或出边）
+                    const hasIncomingEdge = this.checkNodeHasIncomingEdge(nodeId, canvas);
+                    const hasOutgoingEdge = this.checkNodeHasOutgoingEdge(nodeId, canvas);
+                    
+                    if (hasIncomingEdge || hasOutgoingEdge) {
+                        info(`节点 ${nodeId} 被选中，有边连接且处于浮动状态，清除浮动状态`);
+                        await this.clearFloatingNodeState(nodeId);
+                    }
+                }
+            }
+            
             setTimeout(() => this.checkAndAddCollapseButtons(), 30);
         });
 
@@ -1182,6 +1202,44 @@ export class CanvasManager {
         }
 
         return null;
+    }
+
+    // =========================================================================
+    // 检查节点是否有入边
+    // =========================================================================
+    private checkNodeHasIncomingEdge(nodeId: string, canvas: any): boolean {
+        if (!canvas?.edges) return false;
+        
+        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
+                     Array.isArray(canvas.edges) ? canvas.edges : [];
+        
+        for (const edge of edges) {
+            const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+            if (toNodeId === nodeId) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    // =========================================================================
+    // 检查节点是否有出边
+    // =========================================================================
+    private checkNodeHasOutgoingEdge(nodeId: string, canvas: any): boolean {
+        if (!canvas?.edges) return false;
+        
+        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
+                     Array.isArray(canvas.edges) ? canvas.edges : [];
+        
+        for (const edge of edges) {
+            const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+            if (fromNodeId === nodeId) {
+                return true;
+            }
+        }
+        
+        return false;
     }
 
     // =========================================================================
