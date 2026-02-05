@@ -134,7 +134,7 @@ export function arrangeLayout(
 
     // 获取浮动节点信息
     let { floatingNodes, originalParents } = getFloatingNodesInfo(canvasData);
-    
+
     // 过滤掉不存在的浮动节点（只保留当前nodes中存在的节点）
     const validFloatingNodes = new Set<string>();
     const validOriginalParents = new Map<string, string>();
@@ -148,7 +148,7 @@ export function arrangeLayout(
     });
     floatingNodes = validFloatingNodes;
     originalParents = validOriginalParents;
-    
+
     debug('检测到浮动节点数量:', floatingNodes.size);
     trace('浮动节点ID:', Array.from(floatingNodes));
 

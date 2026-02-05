@@ -46,10 +46,13 @@ export class FloatingNodeManager {
                     if (!canvasData.nodes) canvasData.nodes = [];
                     
                     for (const subtreeNodeId of floatingSubtreeNodes) {
+                        // 只有根节点设置原父节点，子节点不设置
+                        const isRoot = subtreeNodeId === nodeId;
+                        
                         // metadata 标记（向后兼容）
                         canvasData.metadata.floatingNodes[subtreeNodeId] = {
                             isFloating: true,
-                            originalParent: originalParentId
+                            originalParent: isRoot ? originalParentId : undefined
                         };
                         
                         // 节点本身 data 属性标记（主要持久化方式）
@@ -57,7 +60,9 @@ export class FloatingNodeManager {
                         if (nodeData) {
                             if (!nodeData.data) nodeData.data = {};
                             nodeData.data.isFloating = true;
-                            nodeData.data.originalParent = originalParentId;
+                            if (isRoot) {
+                                nodeData.data.originalParent = originalParentId;
+                            }
                             nodeData.data.floatingTimestamp = Date.now();
                         }
                     }

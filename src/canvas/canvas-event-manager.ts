@@ -6,6 +6,12 @@ import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
 import { FloatingNodeManager } from './floating-node-manager';
 import { CanvasManager } from './canvas-manager';
 import { debug, info, warn, error } from '../utils/logger';
+import {
+    getCanvasView,
+    getCurrentCanvasFilePath,
+    getNodeIdFromEdgeEndpoint,
+    debounce
+} from '../utils/canvas-utils';
 
 export class CanvasEventManager {
     private plugin: Plugin;
@@ -807,77 +813,18 @@ export class CanvasEventManager {
     }
 
     private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-        if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
-        return null;
+        return getNodeIdFromEdgeEndpoint(endpoint);
     }
 
     private getCanvasView(): ItemView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-            return activeLeaf.view as ItemView;
-        }
-
-        const leaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of leaves) {
-            if (leaf.view && (leaf.view as any).canvas) {
-                return leaf.view as ItemView;
-            }
-        }
-
-        const view = this.app.workspace.getActiveViewOfType(ItemView);
-        if (view && view.getViewType() === 'canvas') {
-            return view;
-        }
-
-        return null;
+        return getCanvasView(this.app);
     }
 
     // =========================================================================
     // 获取当前 Canvas 文件路径
     // =========================================================================
     private getCurrentCanvasFilePath(): string | undefined {
-        // 方法1: 从 activeLeaf 获取
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view?.getViewType() === 'canvas') {
-            const canvas = (activeLeaf.view as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeLeaf.view as any).file?.path) {
-                return (activeLeaf.view as any).file.path;
-            }
-        }
-        
-        // 方法2: 从 getActiveViewOfType 获取
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (activeView?.getViewType() === 'canvas') {
-            const canvas = (activeView as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeView as any).file?.path) {
-                return (activeView as any).file.path;
-            }
-        }
-        
-        // 方法3: 从所有 leaves 中查找 canvas
-        const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of canvasLeaves) {
-            if (leaf.view?.getViewType() === 'canvas') {
-                const canvas = (leaf.view as any).canvas;
-                if (canvas?.file?.path) {
-                    return canvas.file.path;
-                }
-                if ((leaf.view as any).file?.path) {
-                    return (leaf.view as any).file.path;
-                }
-            }
-        }
-        
-        return undefined;
+        return getCurrentCanvasFilePath(this.app);
     }
 
     // =========================================================================
