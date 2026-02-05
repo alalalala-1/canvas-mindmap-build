@@ -21,6 +21,7 @@ export class CanvasEventManager {
     private isObserverSetup = false;
     private edgeChangeInterval: number | null = null;
     private lastEdgeCount: number = 0;
+    private edgeChangeProcessed: boolean = false; // 防止重复处理同一次边增加
 
     constructor(
         plugin: Plugin,
@@ -55,9 +56,12 @@ export class CanvasEventManager {
     private registerEventListeners() {
         // 监听 Canvas 边创建事件（标准 API）
         // 使用类型断言，因为这些事件在 Obsidian v1.11+ 中可用但类型定义可能不完整
+        info('[registerEventListeners] 注册 canvas:edge-created 事件监听');
         this.plugin.registerEvent(
             (this.app.workspace as any).on('canvas:edge-created', (canvas: any, edge: any) => {
                 info('[canvas:edge-created] 边创建事件触发');
+                info(`[canvas:edge-created] canvas type: ${typeof canvas}, edge type: ${typeof edge}`);
+                info(`[canvas:edge-created] edge:`, edge);
                 const fromNodeId = edge?.from?.node;
                 const toNodeId = edge?.to?.node;
                 info(`[canvas:edge-created] 新边: ${fromNodeId} -> ${toNodeId}`);
@@ -71,6 +75,16 @@ export class CanvasEventManager {
                 }
             })
         );
+        
+        // 调试：监听所有 canvas 相关事件
+        const canvasEvents = ['canvas:node-created', 'canvas:node-deleted', 'canvas:edge-deleted', 'canvas:selection-change'];
+        for (const eventName of canvasEvents) {
+            this.plugin.registerEvent(
+                (this.app.workspace as any).on(eventName, (...args: any[]) => {
+                    info(`[debug] 事件触发: ${eventName}`, args.length);
+                })
+            );
+        }
         
         // 监听 Canvas 边删除事件（标准 API）
         this.plugin.registerEvent(
@@ -526,11 +540,12 @@ export class CanvasEventManager {
                 this.canvasManager.checkAndAddCollapseButtons();
             }
 
-            // 如果有新边添加，检查是否需要清除浮动状态
-            if (shouldCheckEdges) {
-                info('MutationObserver 调用 checkAndClearFloatingStateForNewEdges');
-                this.canvasManager.checkAndClearFloatingStateForNewEdges();
-            }
+            // 注意：边创建时的浮动状态清除已由 canvas:edge-created 事件处理
+            // 这里不再重复调用 checkAndClearFloatingStateForNewEdges
+            // if (shouldCheckEdges) {
+            //     info('MutationObserver 调用 checkAndClearFloatingStateForNewEdges');
+            //     this.canvasManager.checkAndClearFloatingStateForNewEdges();
+            // }
         });
 
         this.mutationObserverRetryCount = 0;
@@ -585,21 +600,27 @@ export class CanvasEventManager {
             this.edgeChangeInterval = window.setInterval(() => {
                 checkCount++;
                 const currentEdgeCount = this.getEdgeCount(canvas);
-                
-                if (currentEdgeCount > this.lastEdgeCount) {
+
+                if (currentEdgeCount > this.lastEdgeCount && !this.edgeChangeProcessed) {
                     info(`[EdgeChangeDetection] 检测到边数量增加: ${this.lastEdgeCount} -> ${currentEdgeCount}`);
                     this.lastEdgeCount = currentEdgeCount;
-                    // 延迟一点执行，确保边数据已完全更新
+                    this.edgeChangeProcessed = true; // 标记已处理，防止重复
+                    // canvas:edge-created 事件在某些情况下不触发，使用轮询作为备用方案
                     setTimeout(() => {
                         this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                        // 处理完成后重置标志
+                        setTimeout(() => {
+                            this.edgeChangeProcessed = false;
+                        }, 500);
                     }, 100);
                     // 检测到变化后，再检查几次确保没有更多变化
                     checkCount = Math.max(checkCount, MAX_CHECKS - 5);
                 } else if (currentEdgeCount < this.lastEdgeCount) {
                     // 边数量减少，只更新计数
                     this.lastEdgeCount = currentEdgeCount;
+                    this.edgeChangeProcessed = false; // 重置标志
                 }
-                
+
                 // 达到最大检查次数后停止
                 if (checkCount >= MAX_CHECKS) {
                     info('[EdgeChangeDetection] 达到最大检查次数，停止轮询');

@@ -447,13 +447,13 @@ export class CanvasManager {
             if (childNodeId && parentNodeId) {
                 info(`标记孤立节点 ${childNodeId} 为浮动状态，原父节点: ${parentNodeId}`);
                 // 不要重新加载 canvas，而是直接标记浮动状态
-                // 延迟稍短一些，给DOM更新时间
-                setTimeout(() => {
-                    this.floatingNodeManager.markNodeAsFloating(childNodeId, canvas, parentNodeId);
+                // 使用 async 函数确保标记完成
+                (async () => {
+                    await this.floatingNodeManager.markNodeAsFloating(childNodeId, canvas, parentNodeId);
                     // 标记浮动状态后，启动边变化检测轮询
                     // 这样当用户手动连接边时，可以自动清除浮动状态
                     this.startEdgeChangeDetectionForFloatingNodes(canvas);
-                }, 100);
+                })();
             }
 
             // 触发UI更新（而不是重新加载整个canvas）

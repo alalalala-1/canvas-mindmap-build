@@ -150,20 +150,33 @@ export class LayoutManager {
                             debug(`arrangeCanvas: 从文件读取到 ${originalEdges.length} 条原始边`);
                         }
                         // 读取浮动节点标记（只保留当前存在的节点）
-                        if (canvasData.metadata?.floatingNodes) {
-                            const allNodeIds = new Set<string>();
-                            nodes.forEach((node: any, id: string) => {
-                                allNodeIds.add(id);
-                            });
-                            
-                            for (const nodeId of Object.keys(canvasData.metadata.floatingNodes)) {
-                                // 只添加当前存在的节点
+                        // 从 metadata 和节点 data 属性中读取
+                        const allNodeIds = new Set<string>();
+                        nodes.forEach((node: any, id: string) => {
+                            allNodeIds.add(id);
+                        });
+                        
+                        // 1. 从 metadata 读取（向后兼容）
+                        const floatingNodesData = canvas.fileData?.metadata?.floatingNodes || canvasData.metadata?.floatingNodes;
+                        if (floatingNodesData) {
+                            for (const nodeId of Object.keys(floatingNodesData)) {
                                 if (allNodeIds.has(nodeId)) {
                                     floatingNodes.add(nodeId);
-                                } else {
-                                    warn(`arrangeCanvas: 浮动节点 ${nodeId} 不存在于当前 Canvas，已忽略`);
                                 }
                             }
+                        }
+                        
+                        // 2. 从节点本身的 data 属性读取（主要方式）
+                        const nodesArray = canvas.fileData?.nodes || canvasData.nodes;
+                        if (nodesArray && Array.isArray(nodesArray)) {
+                            for (const node of nodesArray) {
+                                if (node.data?.isFloating && allNodeIds.has(node.id)) {
+                                    floatingNodes.add(node.id);
+                                }
+                            }
+                        }
+                        
+                        if (floatingNodes.size > 0) {
                             info(`arrangeCanvas: 发现 ${floatingNodes.size} 个有效浮动节点: [${Array.from(floatingNodes).join(', ')}]`);
                         }
                     }
@@ -295,11 +308,15 @@ export class LayoutManager {
             // this.canvasManager.updateAllCollapseButtonSizes(canvas);
             debug("arrangeCanvas: 折叠按钮尺寸同步完成");
 
-            // 在 arrange 完成后，检查并清除已连接节点的浮动状态
-            await this.checkAndClearConnectedFloatingNodes(canvas);
+            // 注意：不要在 arrange 后自动清除浮动节点状态
+            // 浮动节点应该保持状态直到手动连接边（通过 canvas:edge-created 事件清除）
+            // await this.checkAndClearConnectedFloatingNodes(canvas);
 
-            // 清理残留的浮动节点数据（不存在的节点）
+            // 清理残留的浮动节点数据（不存在的节点）- 只清理已经不存在的节点
             await this.cleanupStaleFloatingNodes(canvas, nodes);
+            
+            // 重新应用浮动节点的红框样式（因为 arrange 可能会重置 DOM）
+            await this.reapplyFloatingNodeStyles(canvas);
 
             new Notice(`Canvas arranged successfully! ${updatedCount} nodes updated.`);
             info(`arrangeCanvas: 完成！成功更新 ${updatedCount} 个节点`);
@@ -338,6 +355,28 @@ export class LayoutManager {
             // 获取所有子节点ID（包括后代）
             const allChildNodeIds = new Set<string>();
             this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allChildNodeIds);
+            
+            // 从 canvasData 中读取浮动节点信息，将浮动子节点也添加到集合中
+            const canvasData = canvas.fileData || canvas;
+            if (canvasData?.metadata?.floatingNodes) {
+                for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
+                    // 兼容旧格式（boolean）和新格式（object）
+                    let isFloating = false;
+                    let originalParent = '';
+                    if (typeof info === 'boolean') {
+                        isFloating = info;
+                    } else if (typeof info === 'object' && info !== null) {
+                        isFloating = (info as any).isFloating;
+                        originalParent = (info as any).originalParent || '';
+                    }
+                    
+                    // 如果浮动节点的原父节点是当前节点，添加到子节点集合
+                    if (isFloating && originalParent === nodeId && !allChildNodeIds.has(floatingNodeId)) {
+                        allChildNodeIds.add(floatingNodeId);
+                        debug(`autoArrangeAfterToggle: 添加浮动子节点 ${floatingNodeId}`);
+                    }
+                }
+            }
             
             debug(`autoArrangeAfterToggle: 节点 ${nodeId} 的所有子节点: [${Array.from(allChildNodeIds).join(', ')}]`);
 
@@ -429,7 +468,7 @@ export class LayoutManager {
                 }
             });
             
-            const newLayout = originalArrangeLayout(visibleNodes, edges, layoutSettings);
+            const newLayout = originalArrangeLayout(visibleNodes, edges, layoutSettings, undefined, undefined, canvasData);
 
             if (!newLayout || newLayout.size === 0) {
                 warn('autoArrangeAfterToggle: 布局计算返回空结果');
@@ -715,6 +754,52 @@ export class LayoutManager {
             }
         } catch (err) {
             error('清理残留浮动节点数据失败:', err);
+        }
+    }
+
+    // =========================================================================
+    // 重新应用浮动节点的红框样式
+    // =========================================================================
+    private async reapplyFloatingNodeStyles(canvas: any): Promise<void> {
+        try {
+            const canvasFilePath = canvas.file?.path;
+            if (!canvasFilePath) return;
+
+            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+            if (!(canvasFile instanceof TFile)) return;
+
+            const canvasContent = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(canvasContent);
+            const floatingNodes = canvasData.metadata?.floatingNodes || {};
+
+            let appliedCount = 0;
+            for (const [nodeId, data] of Object.entries(floatingNodes)) {
+                // 兼容旧格式（boolean）和新格式（object）
+                let isFloating = false;
+                if (typeof data === 'boolean') {
+                    isFloating = data;
+                } else if (typeof data === 'object' && data !== null) {
+                    isFloating = (data as any).isFloating;
+                }
+
+                if (isFloating) {
+                    // 应用红框样式
+                    const node = canvas.nodes?.get(nodeId);
+                    if (node?.nodeEl) {
+                        (node.nodeEl as HTMLElement).style.border = '4px solid rgb(255, 68, 68)';
+                        (node.nodeEl as HTMLElement).style.borderRadius = '8px';
+                        (node.nodeEl as HTMLElement).classList.add('cmb-floating-node');
+                        appliedCount++;
+                        info(`[reapplyFloatingNodeStyles] 已为节点 ${nodeId} 应用红框样式`);
+                    }
+                }
+            }
+
+            if (appliedCount > 0) {
+                info(`[reapplyFloatingNodeStyles] 已重新应用 ${appliedCount} 个浮动节点的红框样式`);
+            }
+        } catch (err) {
+            error('[reapplyFloatingNodeStyles] 重新应用浮动节点样式失败:', err);
         }
     }
 }

@@ -52,14 +52,16 @@ function getNodeIdFromEndpoint(endpoint: any): string | null {
 
 /**
  * 获取浮动节点集合和原父节点映射
+ * 从 metadata 和节点 data 属性中读取
  */
-function getFloatingNodesInfo(canvasData: any): { 
-    floatingNodes: Set<string>, 
-    originalParents: Map<string, string> 
+function getFloatingNodesInfo(canvasData: any): {
+    floatingNodes: Set<string>,
+    originalParents: Map<string, string>
 } {
     const floatingNodes = new Set<string>();
     const originalParents = new Map<string, string>();
-    
+
+    // 1. 从 metadata 读取（向后兼容）
     if (canvasData?.metadata?.floatingNodes) {
         for (const [nodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
             // 兼容旧格式（boolean）和新格式（object）
@@ -77,6 +79,19 @@ function getFloatingNodesInfo(canvasData: any): {
             }
         }
     }
+
+    // 2. 从节点本身的 data 属性读取（主要方式）
+    if (canvasData?.nodes && Array.isArray(canvasData.nodes)) {
+        for (const node of canvasData.nodes) {
+            if (node.data?.isFloating) {
+                floatingNodes.add(node.id);
+                if (node.data.originalParent) {
+                    originalParents.set(node.id, node.data.originalParent);
+                }
+            }
+        }
+    }
+
     return { floatingNodes, originalParents };
 }
 
@@ -272,9 +287,9 @@ export function arrangeLayout(
             const parentNode = layoutNodes.get(originalParentId);
             const childNode = layoutNodes.get(rootId);
             if (parentNode && childNode) {
-                // 确保子节点在父节点的children列表中
+                // 确保子节点在父节点的children列表中（插入到开头，确保浮动子树排在前面）
                 if (!parentNode.children.includes(rootId)) {
-                    parentNode.children.push(rootId);
+                    parentNode.children.unshift(rootId); // 使用 unshift 而不是 push
                 }
                 layoutParentMap.set(rootId, originalParentId);
             }
@@ -322,20 +337,21 @@ export function arrangeLayout(
     }
 
     // 应用绝对位置 - 实现垂直居中对齐
+    // 所有子节点（包括浮动节点）都作为正常子节点处理
     function applyAbsolutePositions(nodeId: string, parentY: number = 0) {
         const node = layoutNodes.get(nodeId);
         if (!node) return;
 
-        // 如果是根节点，Y位置为0
-        if (parentY === 0 && nodeId && rootNodes.includes(nodeId)) {
+        // 设置当前节点的Y坐标
+        if (parentY === 0 && rootNodes.includes(nodeId)) {
             node.y = 0;
         } else {
             node.y = parentY;
         }
 
-        // 递归处理子节点
+        // 递归处理所有子节点（包括浮动节点，都作为正常子节点）
         if (node.children.length > 0) {
-            // 计算子节点总高度
+            // 计算所有子节点总高度
             let childrenTotalHeight = 0;
             for (const childId of node.children) {
                 const childNode = layoutNodes.get(childId);
