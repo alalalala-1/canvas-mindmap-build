@@ -604,7 +604,7 @@ export class FloatingNodeManager {
         }
         
         // 方法2: 从 getActiveViewOfType 获取
-        const activeView = this.app.workspace.getActiveViewOfType('canvas' as any);
+        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
         if (activeView?.getViewType() === 'canvas') {
             const canvas = (activeView as any).canvas;
             if (canvas?.file?.path) {

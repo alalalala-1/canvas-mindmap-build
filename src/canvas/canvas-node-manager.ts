@@ -2,21 +2,28 @@ import { App, ItemView, Notice, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { DeleteConfirmationModal } from '../ui/delete-modal';
-import { debug, info, error } from '../utils/logger';
+import { debug, info, warn, error } from '../utils/logger';
 
 export class CanvasNodeManager {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
+    private canvasManager: any;
 
     constructor(
         app: App,
         settings: CanvasMindmapBuildSettings,
-        collapseStateManager: CollapseStateManager
+        collapseStateManager: CollapseStateManager,
+        canvasManager?: any
     ) {
         this.app = app;
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
+        this.canvasManager = canvasManager;
+    }
+
+    setCanvasManager(canvasManager: any) {
+        this.canvasManager = canvasManager;
     }
 
     // =========================================================================
@@ -156,18 +163,17 @@ export class CanvasNodeManager {
             this.collapseStateManager.clearCache();
             
             // 调用 CanvasManager 的公共方法
-            const canvasView = this.getCanvasView();
-            if (canvasView) {
-                const canvasManager = (canvasView as any).plugin?.canvasManager;
-                if (canvasManager) {
-                    canvasManager.checkAndAddCollapseButtons();
-                    canvasManager.scheduleButtonCheck();
-                    
-                    // 延迟调整新节点高度
-                    setTimeout(() => {
-                        canvasManager.adjustNodeHeightAfterRender(newNodeId);
-                    }, 200);
-                }
+            if (this.canvasManager) {
+                this.canvasManager.checkAndAddCollapseButtons();
+                this.canvasManager.scheduleButtonCheck();
+                
+                // 延迟调整新节点高度
+                setTimeout(() => {
+                    info(`[addNodeToCanvas] 开始调整新节点 ${newNodeId} 高度`);
+                    this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+                }, 200);
+            } else {
+                warn('[addNodeToCanvas] canvasManager 未设置');
             }
 
             new Notice('Node added to canvas successfully!');

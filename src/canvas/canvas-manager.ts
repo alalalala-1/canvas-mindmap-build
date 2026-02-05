@@ -34,7 +34,7 @@ export class CanvasManager {
         this.layoutManager = new LayoutManager(plugin, app, settings, collapseStateManager);
         this.floatingNodeManager = new FloatingNodeManager(app, settings);
         this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this.floatingNodeManager, this);
-        this.nodeManager = new CanvasNodeManager(app, settings, collapseStateManager);
+        this.nodeManager = new CanvasNodeManager(app, settings, collapseStateManager, this);
         this.uiManager = new CanvasUIManager(app, settings, collapseStateManager);
         debug('CanvasManager 实例化完成');
     }
@@ -116,8 +116,62 @@ export class CanvasManager {
     }
 
     public async adjustNodeHeightAfterRender(nodeId: string) {
-        // 这里可以实现单个节点高度调整
-        await this.adjustAllTextNodeHeights();
+        // 调整指定节点的高度
+        try {
+            const canvasFilePath = this.getCurrentCanvasFilePath();
+            if (!canvasFilePath) return;
+
+            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+            if (!(canvasFile instanceof TFile)) return;
+
+            const canvasContent = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(canvasContent);
+
+            if (!canvasData.nodes) return;
+
+            // 找到指定节点
+            const node = canvasData.nodes.find((n: any) => n.id === nodeId);
+            if (!node) return;
+
+            // 只处理文本节点
+            if (!node.type || node.type === 'text') {
+                if (node.text) {
+                    // 检测是否是公式节点
+                    const trimmedContent = node.text.trim();
+                    const isFormula = this.settings.enableFormulaDetection &&
+                        /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(trimmedContent);
+
+                    let newHeight: number;
+
+                    if (isFormula) {
+                        newHeight = this.settings.formulaNodeHeight || 80;
+                        node.width = this.settings.formulaNodeWidth || 400;
+                    } else {
+                        // 获取节点 DOM 元素以计算实际高度
+                        const canvasView = this.getCanvasView();
+                        const canvas = canvasView ? (canvasView as any).canvas : null;
+                        let nodeEl: Element | undefined;
+                        if (canvas?.nodes) {
+                            const nodeData = canvas.nodes.get(nodeId);
+                            if (nodeData?.nodeEl) {
+                                nodeEl = nodeData.nodeEl;
+                            }
+                        }
+                        const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
+                        const maxHeight = this.settings.textNodeMaxHeight || 800;
+                        newHeight = Math.min(calculatedHeight, maxHeight);
+                    }
+
+                    if (node.height !== newHeight) {
+                        node.height = newHeight;
+                        await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+                        info(`新节点 ${nodeId} 高度已调整为 ${newHeight}`);
+                    }
+                }
+            }
+        } catch (err) {
+            error(`调整新节点高度失败: ${err}`);
+        }
     }
 
     public async checkAndClearFloatingStateForNewEdges() {
