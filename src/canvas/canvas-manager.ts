@@ -7,6 +7,14 @@ import { CanvasNodeManager } from './canvas-node-manager';
 import { CanvasUIManager } from './canvas-ui-manager';
 import { FloatingNodeManager } from './floating-node-manager';
 import { debug, info, warn, error } from '../utils/logger';
+import {
+    getCanvasView,
+    getCurrentCanvasFilePath,
+    readCanvasData,
+    writeCanvasData,
+    isFormulaContent,
+    debounce
+} from '../utils/canvas-utils';
 
 export class CanvasManager {
     private plugin: Plugin;
@@ -137,9 +145,7 @@ export class CanvasManager {
             if (!node.type || node.type === 'text') {
                 if (node.text) {
                     // 检测是否是公式节点
-                    const trimmedContent = node.text.trim();
-                    const isFormula = this.settings.enableFormulaDetection &&
-                        /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(trimmedContent);
+                    const isFormula = this.settings.enableFormulaDetection && isFormulaContent(node.text);
 
                     let newHeight: number;
 
@@ -242,12 +248,10 @@ export class CanvasManager {
                 if (!node.type || node.type === 'text' || node.type === 'file') {
                     // 如果节点有文本内容
                     if (node.text) {
-                        // 检测是否是公式节点（使用正则表达式，支持换行和fromLink注释）
-                        const trimmedContent = node.text.trim();
-                        // 公式以 $$ 开头和结尾，后面可能有 fromLink 注释
-                        const isFormula = this.settings.enableFormulaDetection && 
-                            /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(trimmedContent);
+                        // 检测是否是公式节点
+                        const isFormula = this.settings.enableFormulaDetection && isFormulaContent(node.text);
                         
+                        const trimmedContent = node.text.trim();
                         const contentPreview = trimmedContent.length > 60 
                             ? `${trimmedContent.substring(0, 30)}...${trimmedContent.substring(trimmedContent.length - 30)}`
                             : trimmedContent;
@@ -327,69 +331,14 @@ export class CanvasManager {
     }
 
     // =========================================================================
-    // 辅助方法（保持向后兼容）
+    // 辅助方法（使用 canvas-utils）
     // =========================================================================
     private getCanvasView(): ItemView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-            return activeLeaf.view as ItemView;
-        }
-
-        const leaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of leaves) {
-            if (leaf.view && (leaf.view as any).canvas) {
-                return leaf.view as ItemView;
-            }
-        }
-
-        const view = this.app.workspace.getActiveViewOfType(ItemView);
-        if (view && view.getViewType() === 'canvas') {
-            return view;
-        }
-
-        return null;
+        return getCanvasView(this.app);
     }
 
     private getCurrentCanvasFilePath(): string | undefined {
-        // 方法1: 从 activeLeaf 获取
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view?.getViewType() === 'canvas') {
-            const canvas = (activeLeaf.view as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeLeaf.view as any).file?.path) {
-                return (activeLeaf.view as any).file.path;
-            }
-        }
-        
-        // 方法2: 从 getActiveViewOfType 获取
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (activeView?.getViewType() === 'canvas') {
-            const canvas = (activeView as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeView as any).file?.path) {
-                return (activeView as any).file.path;
-            }
-        }
-        
-        // 方法3: 从所有 leaves 中查找 canvas
-        const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of canvasLeaves) {
-            if (leaf.view?.getViewType() === 'canvas') {
-                const canvas = (leaf.view as any).canvas;
-                if (canvas?.file?.path) {
-                    return canvas.file.path;
-                }
-                if ((leaf.view as any).file?.path) {
-                    return (leaf.view as any).file.path;
-                }
-            }
-        }
-        
-        return undefined;
+        return getCurrentCanvasFilePath(this.app);
     }
 
     private getSelectedEdge(canvas: any): any | null {

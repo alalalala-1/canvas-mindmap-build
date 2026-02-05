@@ -62,8 +62,10 @@ export class CanvasEventManager {
                 info('[canvas:edge-created] 边创建事件触发');
                 info(`[canvas:edge-created] canvas type: ${typeof canvas}, edge type: ${typeof edge}`);
                 info(`[canvas:edge-created] edge:`, edge);
-                const fromNodeId = edge?.from?.node;
-                const toNodeId = edge?.to?.node;
+                
+                // 正确获取节点 ID
+                const fromNodeId = edge?.from?.node?.id || edge?.fromNode;
+                const toNodeId = edge?.to?.node?.id || edge?.toNode;
                 info(`[canvas:edge-created] 新边: ${fromNodeId} -> ${toNodeId}`);
                 
                 // 清除源节点和目标节点的浮动状态
