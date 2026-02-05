@@ -19,6 +19,8 @@ export class CanvasEventManager {
     private mutationObserverRetryCount = 0;
     private readonly MAX_MUTATION_OBSERVER_RETRIES = 10;
     private isObserverSetup = false;
+    private edgeChangeInterval: number | null = null;
+    private lastEdgeCount: number = 0;
 
     constructor(
         plugin: Plugin,
@@ -51,6 +53,33 @@ export class CanvasEventManager {
     }
 
     private registerEventListeners() {
+        // 监听 Canvas 边创建事件（标准 API）
+        // 使用类型断言，因为这些事件在 Obsidian v1.11+ 中可用但类型定义可能不完整
+        this.plugin.registerEvent(
+            (this.app.workspace as any).on('canvas:edge-created', (canvas: any, edge: any) => {
+                info('[canvas:edge-created] 边创建事件触发');
+                const fromNodeId = edge?.from?.node;
+                const toNodeId = edge?.to?.node;
+                info(`[canvas:edge-created] 新边: ${fromNodeId} -> ${toNodeId}`);
+                
+                // 清除源节点和目标节点的浮动状态
+                if (fromNodeId) {
+                    this.floatingNodeManager.clearFloatingNodeState(fromNodeId, canvas);
+                }
+                if (toNodeId) {
+                    this.floatingNodeManager.clearFloatingNodeState(toNodeId, canvas);
+                }
+            })
+        );
+        
+        // 监听 Canvas 边删除事件（标准 API）
+        this.plugin.registerEvent(
+            (this.app.workspace as any).on('canvas:edge-deleted', (canvas: any, edgeId: string) => {
+                info(`[canvas:edge-deleted] 边删除事件触发: ${edgeId}`);
+                // 可以在这里添加额外的清理逻辑
+            })
+        );
+        
         // 监听 Canvas 视图打开
         this.plugin.registerEvent(
             this.app.workspace.on('active-leaf-change', async (leaf) => {
@@ -297,6 +326,14 @@ export class CanvasEventManager {
         const canvas = (canvasView as any).canvas;
         if (!canvas?.on) return;
 
+        // 监听所有可能的事件
+        const events = ['edge-add', 'edge-change', 'edge-modify', 'connection-add', 'link-add'];
+        for (const eventName of events) {
+            canvas.on(eventName, async (data: any) => {
+                info(`[canvas-event] 事件触发: ${eventName}`, data);
+            });
+        }
+        
         canvas.on('edge-add', async (edge: any) => {
             info('[edge-add] Canvas 事件: edge-add');
             
@@ -464,15 +501,19 @@ export class CanvasEventManager {
                                                   node.querySelector('path') &&
                                                   (node.querySelector('path.canvas-display-path') || 
                                                    node.querySelector('path.canvas-interaction-path'));
+                            // 检测 svg 元素（边通常使用 svg 渲染）
+                            const isSvgElement = node.tagName === 'svg' || node.closest('svg');
+                            // 检测 line 元素（边可能使用 line 元素）
+                            const hasLineElements = node.tagName === 'line' || node.querySelector('line');
                             
-                            if (hasCanvasEdges || hasCanvasEdge || hasPathElements) {
+                            if (hasCanvasEdges || hasCanvasEdge || hasPathElements || isSvgElement || hasLineElements) {
                                 shouldCheckEdges = true;
-                                info('MutationObserver 检测到边添加:', node.className || node.tagName);
+                                info('MutationObserver 检测到边添加:', node.className || node.tagName, 'isSvg:', isSvgElement, 'hasLine:', hasLineElements);
                             }
                             
-                            // 调试：输出所有添加的节点类名
+                            // 调试：输出所有添加的节点类名和标签
                             if (node.className) {
-                                debug('MutationObserver 添加节点:', node.className);
+                                debug('MutationObserver 添加节点:', node.className, 'tag:', node.tagName);
                             } else if (node.tagName) {
                                 debug('MutationObserver 添加元素:', node.tagName);
                             }
@@ -499,6 +540,180 @@ export class CanvasEventManager {
             subtree: true
         });
         debug('MutationObserver 已成功设置');
+        
+        // 启动边变化检测轮询（备用方案）
+        const canvas = (canvasView as any).canvas;
+        if (canvas) {
+            this.startEdgeChangeDetection(canvas);
+        }
+    }
+    
+    // =========================================================================
+    // 边变化检测轮询 - 当 MutationObserver 无法检测到边变化时使用
+    // 优化：只在有浮动节点时才启动，使用更长的间隔减少性能影响
+    // =========================================================================
+    public startEdgeChangeDetection(canvas: any) {
+        // 先停止之前的检测
+        this.stopEdgeChangeDetection();
+        
+        // 检查是否有浮动节点，如果没有则不启动轮询
+        const canvasFilePath = this.getCurrentCanvasFilePath();
+        if (!canvasFilePath) return;
+        
+        const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+        if (!(canvasFile instanceof TFile)) return;
+        
+        // 异步检查是否有浮动节点
+        this.app.vault.read(canvasFile).then(canvasContent => {
+            const canvasData = JSON.parse(canvasContent);
+            const floatingNodes = canvasData.metadata?.floatingNodes || {};
+            const floatingNodeCount = Object.keys(floatingNodes).length;
+            
+            if (floatingNodeCount === 0) {
+                info('[EdgeChangeDetection] 没有浮动节点，不启动轮询');
+                return;
+            }
+            
+            // 初始化边数量
+            this.lastEdgeCount = this.getEdgeCount(canvas);
+            info(`[EdgeChangeDetection] 启动轮询，初始边数量: ${this.lastEdgeCount}，浮动节点: ${floatingNodeCount}`);
+            
+            // 每 2000ms（2秒）检查一次边数量变化，减少性能影响
+            let checkCount = 0;
+            const MAX_CHECKS = 30; // 最多检查30次（60秒）后自动停止
+            
+            this.edgeChangeInterval = window.setInterval(() => {
+                checkCount++;
+                const currentEdgeCount = this.getEdgeCount(canvas);
+                
+                if (currentEdgeCount > this.lastEdgeCount) {
+                    info(`[EdgeChangeDetection] 检测到边数量增加: ${this.lastEdgeCount} -> ${currentEdgeCount}`);
+                    this.lastEdgeCount = currentEdgeCount;
+                    // 延迟一点执行，确保边数据已完全更新
+                    setTimeout(() => {
+                        this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                    }, 100);
+                    // 检测到变化后，再检查几次确保没有更多变化
+                    checkCount = Math.max(checkCount, MAX_CHECKS - 5);
+                } else if (currentEdgeCount < this.lastEdgeCount) {
+                    // 边数量减少，只更新计数
+                    this.lastEdgeCount = currentEdgeCount;
+                }
+                
+                // 达到最大检查次数后停止
+                if (checkCount >= MAX_CHECKS) {
+                    info('[EdgeChangeDetection] 达到最大检查次数，停止轮询');
+                    this.stopEdgeChangeDetection();
+                }
+            }, 2000);
+        }).catch(err => {
+            error('[EdgeChangeDetection] 启动失败:', err);
+        });
+    }
+    
+    // =========================================================================
+    // 获取当前边数量
+    // =========================================================================
+    private getEdgeCount(canvas: any): number {
+        if (!canvas?.edges) return 0;
+        if (canvas.edges instanceof Map) {
+            return canvas.edges.size;
+        } else if (Array.isArray(canvas.edges)) {
+            return canvas.edges.length;
+        }
+        return 0;
+    }
+
+    // =========================================================================
+    // 当 Canvas 文件被修改时检查并清除浮动节点
+    // =========================================================================
+    private async checkAndClearFloatingNodesOnFileChange(file: TFile): Promise<void> {
+        try {
+            info(`[checkAndClearFloatingNodesOnFileChange] 检查文件: ${file.path}`);
+
+            // 读取文件内容
+            const canvasContent = await this.app.vault.read(file);
+            const canvasData = JSON.parse(canvasContent);
+
+            // 获取浮动节点列表
+            const floatingNodes = canvasData.metadata?.floatingNodes || {};
+            const floatingNodeIds = Object.keys(floatingNodes);
+
+            if (floatingNodeIds.length === 0) {
+                info('[checkAndClearFloatingNodesOnFileChange] 没有浮动节点需要检查');
+                return;
+            }
+
+            info(`[checkAndClearFloatingNodesOnFileChange] 发现 ${floatingNodeIds.length} 个浮动节点`);
+
+            // 获取所有边
+            const edges = canvasData.edges || [];
+            const connectedFloatingNodes: string[] = [];
+
+            // 检查每个浮动节点是否有连接
+            for (const nodeId of floatingNodeIds) {
+                // 兼容旧格式（boolean）和新格式（object）
+                let isFloating = false;
+                if (typeof floatingNodes[nodeId] === 'boolean') {
+                    isFloating = floatingNodes[nodeId];
+                } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
+                    isFloating = floatingNodes[nodeId].isFloating;
+                }
+
+                if (!isFloating) continue;
+
+                // 检查节点是否有边连接
+                const hasConnection = edges.some((edge: any) => {
+                    const fromId = edge.fromNode || edge.from?.node?.id;
+                    const toId = edge.toNode || edge.to?.node?.id;
+                    return fromId === nodeId || toId === nodeId;
+                });
+
+                if (hasConnection) {
+                    connectedFloatingNodes.push(nodeId);
+                    info(`[checkAndClearFloatingNodesOnFileChange] 节点 ${nodeId} 有连接，需要清除浮动状态`);
+                }
+            }
+
+            if (connectedFloatingNodes.length === 0) {
+                info('[checkAndClearFloatingNodesOnFileChange] 没有已连接的浮动节点需要清除');
+                return;
+            }
+
+            // 获取当前 canvas 视图
+            const canvasView = this.getCanvasView();
+            if (!canvasView) {
+                warn('[checkAndClearFloatingNodesOnFileChange] 无法获取 canvas 视图');
+                return;
+            }
+
+            const canvas = (canvasView as any).canvas;
+            if (!canvas) {
+                warn('[checkAndClearFloatingNodesOnFileChange] 无法获取 canvas 对象');
+                return;
+            }
+
+            // 清除每个已连接浮动节点的状态
+            for (const nodeId of connectedFloatingNodes) {
+                info(`[checkAndClearFloatingNodesOnFileChange] 清除节点 ${nodeId} 的浮动状态`);
+                await this.floatingNodeManager.clearFloatingNodeState(nodeId, canvas);
+            }
+
+            info(`[checkAndClearFloatingNodesOnFileChange] 已清除 ${connectedFloatingNodes.length} 个浮动节点的状态`);
+        } catch (err) {
+            error('[checkAndClearFloatingNodesOnFileChange] 检查失败:', err);
+        }
+    }
+    
+    // =========================================================================
+    // 停止边变化检测
+    // =========================================================================
+    private stopEdgeChangeDetection() {
+        if (this.edgeChangeInterval) {
+            clearInterval(this.edgeChangeInterval);
+            this.edgeChangeInterval = null;
+            info('[EdgeChangeDetection] 已停止');
+        }
     }
 
     // =========================================================================

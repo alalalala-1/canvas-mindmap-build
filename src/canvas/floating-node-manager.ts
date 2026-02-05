@@ -304,17 +304,24 @@ export class FloatingNodeManager {
     // 检查新添加的边，清除目标节点的浮动状态
     // =========================================================================
     async checkAndClearFloatingStateForNewEdges(canvas: any): Promise<void> {
-        if (!canvas?.edges) return;
+        info('[checkAndClearFloatingStateForNewEdges] 开始检查新边的浮动状态');
+        if (!canvas?.edges) {
+            info('[checkAndClearFloatingStateForNewEdges] canvas.edges 不存在');
+            return;
+        }
 
         // 获取当前所有边
         const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
                      Array.isArray(canvas.edges) ? canvas.edges : [];
+        info(`[checkAndClearFloatingStateForNewEdges] 当前有 ${edges.length} 条边`);
 
         // 获取浮动节点列表
         const canvasFilePath = this.getCurrentCanvasFilePath();
+        info(`[checkAndClearFloatingStateForNewEdges] canvasFilePath=${canvasFilePath || 'undefined'}`);
         if (!canvasFilePath) {
             // 如果无法获取文件路径，尝试从 canvas.fileData 中读取
             if (canvas.fileData?.metadata?.floatingNodes) {
+                info('[checkAndClearFloatingStateForNewEdges] 从内存中读取浮动节点');
                 await this.checkAndClearFromMemory(canvas, canvas.fileData.metadata.floatingNodes);
             }
             return;
@@ -322,16 +329,22 @@ export class FloatingNodeManager {
 
         try {
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-            if (!(canvasFile instanceof TFile)) return;
+            if (!(canvasFile instanceof TFile)) {
+                info('[checkAndClearFloatingStateForNewEdges] 无法获取 canvas 文件');
+                return;
+            }
 
             const canvasContent = await this.app.vault.read(canvasFile);
             const canvasData = JSON.parse(canvasContent);
             const floatingNodes = canvasData.metadata?.floatingNodes || {};
+            const floatingNodeCount = Object.keys(floatingNodes).length;
+            info(`[checkAndClearFloatingStateForNewEdges] 文件中有 ${floatingNodeCount} 个浮动节点记录`);
 
             // 检查每条边的源节点和目标节点是否是浮动节点
             for (const edge of edges) {
                 const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
                 const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                info(`[checkAndClearFloatingStateForNewEdges] 检查边: ${fromNodeId} -> ${toNodeId}`);
 
                 // 检查源节点
                 if (fromNodeId && floatingNodes[fromNodeId] !== undefined) {
@@ -344,7 +357,7 @@ export class FloatingNodeManager {
                     }
 
                     if (isFloating) {
-                        info(`检测到新边从浮动节点 ${fromNodeId} 发出，清除浮动状态`);
+                        info(`[checkAndClearFloatingStateForNewEdges] 检测到新边从浮动节点 ${fromNodeId} 发出，清除浮动状态`);
                         await this.clearFloatingNodeState(fromNodeId, canvas);
                     }
                 }

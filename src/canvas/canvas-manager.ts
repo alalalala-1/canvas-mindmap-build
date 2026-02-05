@@ -130,6 +130,14 @@ export class CanvasManager {
         await this.floatingNodeManager.checkAndClearFloatingStateForNewEdges(canvas);
     }
 
+    // =========================================================================
+    // 启动边变化检测轮询 - 当有浮动节点时调用
+    // =========================================================================
+    public startEdgeChangeDetectionForFloatingNodes(canvas: any) {
+        // 通过 eventManager 启动轮询
+        this.eventManager.startEdgeChangeDetection(canvas);
+    }
+
     public async adjustAllTextNodeHeights(): Promise<void> {
         try {
             const canvasFilePath = this.getCurrentCanvasFilePath();
@@ -442,6 +450,9 @@ export class CanvasManager {
                 // 延迟稍短一些，给DOM更新时间
                 setTimeout(() => {
                     this.floatingNodeManager.markNodeAsFloating(childNodeId, canvas, parentNodeId);
+                    // 标记浮动状态后，启动边变化检测轮询
+                    // 这样当用户手动连接边时，可以自动清除浮动状态
+                    this.startEdgeChangeDetectionForFloatingNodes(canvas);
                 }, 100);
             }
 
