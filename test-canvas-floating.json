@@ -1,0 +1,53 @@
+{
+  "nodes": [
+    {
+      "id": "root",
+      "type": "text",
+      "text": "Root Node",
+      "x": 0,
+      "y": 0,
+      "width": 250,
+      "height": 80
+    },
+    {
+      "id": "child1",
+      "type": "text", 
+      "text": "Child 1",
+      "x": 300,
+      "y": -50,
+      "width": 250,
+      "height": 80
+    },
+    {
+      "id": "child2",
+      "type": "text",
+      "text": "Child 2 (Floating)",
+      "x": 300,
+      "y": 50,
+      "width": 250,
+      "height": 80
+    },
+    {
+      "id": "grandchild",
+      "type": "text",
+      "text": "Grandchild (Floating)",
+      "x": 600,
+      "y": 50,
+      "width": 250,
+      "height": 80
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge1",
+      "fromNode": "root",
+      "toNode": "child1"
+    }
+  ],
+  "metadata": {
+    "floatingNodes": {
+      "child2": true,
+      "grandchild": true
+    }
+  }
+}

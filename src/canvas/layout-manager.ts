@@ -128,13 +128,14 @@ export class LayoutManager {
             let originalEdges = edges;
             let fileNodes = new Map<string, any>(); // 从文件读取的节点数据
             let floatingNodes = new Set<string>(); // 浮动节点集合
+            let canvasData: any = null; // 用于传递给布局算法
             try {
                 const canvasFilePath = canvas.file?.path || (activeView as any).file?.path;
                 if (canvasFilePath) {
                     const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
                     if (canvasFile instanceof TFile) {
                         const canvasContent = await this.app.vault.read(canvasFile);
-                        const canvasData = JSON.parse(canvasContent);
+                        canvasData = JSON.parse(canvasContent);
                         // 读取文件中的节点数据（包含 text 内容）
                         if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
                             for (const node of canvasData.nodes) {
@@ -148,12 +149,22 @@ export class LayoutManager {
                             originalEdges = canvasData.edges;
                             debug(`arrangeCanvas: 从文件读取到 ${originalEdges.length} 条原始边`);
                         }
-                        // 读取浮动节点标记
+                        // 读取浮动节点标记（只保留当前存在的节点）
                         if (canvasData.metadata?.floatingNodes) {
+                            const allNodeIds = new Set<string>();
+                            nodes.forEach((node: any, id: string) => {
+                                allNodeIds.add(id);
+                            });
+                            
                             for (const nodeId of Object.keys(canvasData.metadata.floatingNodes)) {
-                                floatingNodes.add(nodeId);
+                                // 只添加当前存在的节点
+                                if (allNodeIds.has(nodeId)) {
+                                    floatingNodes.add(nodeId);
+                                } else {
+                                    warn(`arrangeCanvas: 浮动节点 ${nodeId} 不存在于当前 Canvas，已忽略`);
+                                }
                             }
-                            info(`arrangeCanvas: 发现 ${floatingNodes.size} 个浮动节点: [${Array.from(floatingNodes).join(', ')}]`);
+                            info(`arrangeCanvas: 发现 ${floatingNodes.size} 个有效浮动节点: [${Array.from(floatingNodes).join(', ')}]`);
                         }
                     }
                 }
@@ -161,46 +172,15 @@ export class LayoutManager {
                 debug('arrangeCanvas: 无法读取原始数据，使用当前数据');
             }
 
-            // 检查浮动节点是否有入边，如果有则清除浮动状态
-            const edgesArray = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
-                               Array.isArray(canvas.edges) ? canvas.edges : [];
-            const nodesWithIncomingEdges = new Set<string>();
-            for (const edge of edgesArray) {
-                const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
-                if (toNodeId) {
-                    nodesWithIncomingEdges.add(toNodeId);
-                }
-            }
+            // 在 arrange 时不需要清除浮动状态，因为浮动子树应该参与布局
+            // 浮动状态的清除应该在添加新边时处理
 
-            // 清除有入边的浮动节点的浮动状态
-            for (const floatingNodeId of floatingNodes) {
-                if (nodesWithIncomingEdges.has(floatingNodeId)) {
-                    info(`arrangeCanvas: 浮动节点 ${floatingNodeId} 有入边，清除浮动状态`);
-                    await this.clearFloatingNodeState(floatingNodeId);
-                    floatingNodes.delete(floatingNodeId);
-                }
-            }
-
-            // 计算新的布局（只考虑可见节点，排除浮动节点）
+            // 计算新的布局（浮动子树作为整体参与布局）
             // 创建只包含可见节点的新 Map，合并内存节点和文件节点的数据
             const visibleNodes = new Map<string, any>();
-            const floatingNodePositions = new Map<string, { x: number; y: number; width: number; height: number }>();
 
             nodes.forEach((node: any, id: string) => {
                 if (visibleNodeIds.has(id)) {
-                    // 检查是否是浮动节点
-                    if (floatingNodes.has(id)) {
-                        // 记录浮动节点的原始位置，不参与布局
-                        floatingNodePositions.set(id, {
-                            x: node.x || 0,
-                            y: node.y || 0,
-                            width: node.width || this.settings.textNodeWidth,
-                            height: node.height || 60
-                        });
-                        info(`arrangeCanvas: 浮动节点 ${id} 保持原位置: (${node.x || 0}, ${node.y || 0})`);
-                        return;
-                    }
-
                     // 合并内存节点和文件节点的数据，优先使用文件节点的 text
                     const fileNode = fileNodes.get(id);
                     const nodeText = fileNode?.text || node.text;
@@ -221,11 +201,11 @@ export class LayoutManager {
                 }
             });
 
-            debug(`arrangeCanvas: 可见节点数量: ${visibleNodes.size} (排除 ${floatingNodePositions.size} 个浮动节点)`);
+            debug(`arrangeCanvas: 可见节点数量: ${visibleNodes.size}`);
 
             const layoutTimer = logTime('originalArrangeLayout');
-            // 传递所有节点用于判断孤立节点，但只返回可见节点的布局
-            const newLayout = originalArrangeLayout(visibleNodes, edges, layoutSettings, originalEdges, nodes);
+            // 传递所有节点和canvasData用于浮动子树布局
+            const newLayout = originalArrangeLayout(visibleNodes, edges, layoutSettings, originalEdges, nodes, canvasData);
             layoutTimer();
 
             if (!newLayout || newLayout.size === 0) {
@@ -234,12 +214,7 @@ export class LayoutManager {
                 return;
             }
 
-            // 将浮动节点的位置合并到布局结果中
-            for (const [nodeId, position] of floatingNodePositions.entries()) {
-                newLayout.set(nodeId, position);
-            }
-
-            info(`arrangeCanvas: 新布局计算完成，包含 ${newLayout.size} 个节点 (含 ${floatingNodePositions.size} 个浮动节点)`);
+            info(`arrangeCanvas: 新布局计算完成，包含 ${newLayout.size} 个节点`);
             debug("arrangeCanvas: 新节点位置:");
             for (const [nodeId, newPosition] of newLayout.entries()) {
                 debug(`    节点 ${nodeId}: x=${newPosition.x}, y=${newPosition.y}, width=${newPosition.width}, height=${newPosition.height}`);
@@ -320,6 +295,12 @@ export class LayoutManager {
             // this.canvasManager.updateAllCollapseButtonSizes(canvas);
             debug("arrangeCanvas: 折叠按钮尺寸同步完成");
 
+            // 在 arrange 完成后，检查并清除已连接节点的浮动状态
+            await this.checkAndClearConnectedFloatingNodes(canvas);
+
+            // 清理残留的浮动节点数据（不存在的节点）
+            await this.cleanupStaleFloatingNodes(canvas, nodes);
+
             new Notice(`Canvas arranged successfully! ${updatedCount} nodes updated.`);
             info(`arrangeCanvas: 完成！成功更新 ${updatedCount} 个节点`);
             
@@ -334,11 +315,10 @@ export class LayoutManager {
     /**
      * 在折叠/展开节点后自动整理布局
      */
-    async autoArrangeAfterToggle(nodeId: string, canvasView: ItemView) {
-        const endTimer = logTime(`autoArrangeAfterToggle(${nodeId})`);
+    async autoArrangeAfterToggle(nodeId: string, canvas: any, isCollapsing: boolean = true) {
+        const endTimer = logTime(`autoArrangeAfterToggle(${nodeId}), isCollapsing=${isCollapsing}`);
         
         // 获取当前可见的节点（未被折叠的节点）
-        const canvas = (canvasView as any).canvas;
         if (!canvas) {
             warn('autoArrangeAfterToggle: Canvas 对象无效');
             return;
@@ -355,6 +335,67 @@ export class LayoutManager {
         }
 
         try {
+            // 获取所有子节点ID（包括后代）
+            const allChildNodeIds = new Set<string>();
+            this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allChildNodeIds);
+            
+            debug(`autoArrangeAfterToggle: 节点 ${nodeId} 的所有子节点: [${Array.from(allChildNodeIds).join(', ')}]`);
+
+            // 如果是折叠操作，隐藏所有子节点和相关的边
+            if (isCollapsing) {
+                for (const childId of allChildNodeIds) {
+                    const childNode = nodes.get(childId);
+                    if (childNode?.nodeEl) {
+                        (childNode.nodeEl as HTMLElement).style.display = 'none';
+                        debug(`隐藏子节点: ${childId}`);
+                    }
+                }
+                
+                // 隐藏与子节点相关的边
+                for (const edge of edges) {
+                    const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+                    const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                    
+                    // 如果边的源节点或目标节点是子节点，隐藏这条边
+                    if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
+                        if (edge.lineGroupEl) {
+                            (edge.lineGroupEl as HTMLElement).style.display = 'none';
+                        }
+                        if (edge.lineEndGroupEl) {
+                            (edge.lineEndGroupEl as HTMLElement).style.display = 'none';
+                        }
+                        debug(`隐藏边: ${fromId} -> ${toId}`);
+                    }
+                }
+            } 
+            // 如果是展开操作，显示所有子节点和相关的边
+            else {
+                for (const childId of allChildNodeIds) {
+                    const childNode = nodes.get(childId);
+                    if (childNode?.nodeEl) {
+                        (childNode.nodeEl as HTMLElement).style.display = '';
+                        debug(`显示子节点: ${childId}`);
+                    }
+                }
+                
+                // 显示与子节点相关的边
+                for (const edge of edges) {
+                    const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+                    const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                    
+                    // 如果边的源节点或目标节点是子节点，显示这条边
+                    if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
+                        if (edge.lineGroupEl) {
+                            (edge.lineGroupEl as HTMLElement).style.display = '';
+                        }
+                        if (edge.lineEndGroupEl) {
+                            (edge.lineEndGroupEl as HTMLElement).style.display = '';
+                        }
+                        debug(`显示边: ${fromId} -> ${toId}`);
+                    }
+                }
+            }
+
             // 收集可见节点ID
             const visibleNodeIds = new Set<string>();
             nodes.forEach((node: any, id: string) => {
@@ -434,9 +475,6 @@ export class LayoutManager {
                 canvas.requestSave();
             }
             
-            // 同步更新所有折叠按钮的尺寸（需要 CanvasManager 的方法）
-            // this.canvasManager.updateAllCollapseButtonSizes(canvas);
-            
         } catch (err) {
             error('autoArrangeAfterToggle: 发生错误:', err);
         }
@@ -456,18 +494,188 @@ export class LayoutManager {
     }
 
     // =========================================================================
+    // 折叠/展开节点
+    // =========================================================================
+    async toggleNodeCollapse(nodeId: string, canvas: any) {
+        const isCurrentlyCollapsed = this.collapseStateManager.isCollapsed(nodeId);
+        
+        if (isCurrentlyCollapsed) {
+            this.collapseStateManager.markExpanded(nodeId);
+            // 展开操作
+            await this.autoArrangeAfterToggle(nodeId, canvas, false);
+        } else {
+            this.collapseStateManager.markCollapsed(nodeId);
+            // 折叠操作
+            await this.autoArrangeAfterToggle(nodeId, canvas, true);
+        }
+    }
+
+    // =========================================================================
+    // 拖拽时同步隐藏的子节点
+    // =========================================================================
+    async syncHiddenChildrenOnDrag(node: any) {
+        // 这里可以实现拖拽时同步隐藏子节点的逻辑
+        // 目前先留空，因为主要问题在删除和浮动节点
+        debug(`syncHiddenChildrenOnDrag called for node ${node?.id}`);
+    }
+
+    // =========================================================================
+    // 检查并清除已连接的浮动节点状态
+    // =========================================================================
+    private async checkAndClearConnectedFloatingNodes(canvas: any): Promise<void> {
+        info('[checkAndClearConnectedFloatingNodes] 开始检查已连接的浮动节点');
+        try {
+            // 获取当前 canvas 路径 - 使用多种方法尝试获取
+            let canvasFilePath = canvas.file?.path;
+            
+            // 如果 canvas.file?.path 不存在，尝试从 activeView 获取
+            if (!canvasFilePath) {
+                const activeView = this.app.workspace.activeLeaf?.view;
+                if (activeView && activeView.getViewType() === 'canvas') {
+                    canvasFilePath = (activeView as any).file?.path;
+                }
+            }
+            
+            if (!canvasFilePath) {
+                info('[checkAndClearConnectedFloatingNodes] 无法获取 canvas 路径');
+                return;
+            }
+            
+            info(`[checkAndClearConnectedFloatingNodes] 获取到 canvas 路径: ${canvasFilePath}`);
+
+            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+            if (!(canvasFile instanceof TFile)) {
+                info('[checkAndClearConnectedFloatingNodes] 无法获取 canvas 文件');
+                return;
+            }
+
+            const canvasContent = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(canvasContent);
+            const floatingNodes = canvasData.metadata?.floatingNodes || {};
+            const floatingNodeCount = Object.keys(floatingNodes).length;
+            info(`[checkAndClearConnectedFloatingNodes] 文件中有 ${floatingNodeCount} 个浮动节点记录`);
+
+            // 获取当前所有边
+            const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
+                         Array.isArray(canvas.edges) ? canvas.edges : [];
+            info(`[checkAndClearConnectedFloatingNodes] 当前有 ${edges.length} 条边`);
+
+            // 检查每个浮动节点是否已经有连接
+            for (const nodeId of Object.keys(floatingNodes)) {
+                // 兼容旧格式（boolean）和新格式（object）
+                let isFloating = false;
+                if (typeof floatingNodes[nodeId] === 'boolean') {
+                    isFloating = floatingNodes[nodeId];
+                } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
+                    isFloating = floatingNodes[nodeId].isFloating;
+                }
+                
+                info(`[checkAndClearConnectedFloatingNodes] 检查节点 ${nodeId}: isFloating=${isFloating}`);
+                
+                if (isFloating) {
+                    // 检查节点是否有入边或出边
+                    let hasConnection = false;
+                    
+                    for (const edge of edges) {
+                        const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+                        const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                        
+                        if (fromNodeId === nodeId || toNodeId === nodeId) {
+                            hasConnection = true;
+                            info(`[checkAndClearConnectedFloatingNodes] 节点 ${nodeId} 有连接: ${fromNodeId} -> ${toNodeId}`);
+                            break;
+                        }
+                    }
+                    
+                    if (hasConnection) {
+                        info(`[checkAndClearConnectedFloatingNodes] 节点 ${nodeId} 已有连接，调用 clearFloatingNodeState`);
+                        await this.clearFloatingNodeState(nodeId, canvas);
+                    } else {
+                        info(`[checkAndClearConnectedFloatingNodes] 节点 ${nodeId} 没有连接`);
+                    }
+                }
+            }
+            info('[checkAndClearConnectedFloatingNodes] 检查完成');
+        } catch (err) {
+            error('[checkAndClearConnectedFloatingNodes] 检查并清除已连接浮动节点状态失败:', err);
+        }
+    }
+
+    // =========================================================================
     // 辅助方法：清除浮动节点状态
     // =========================================================================
-    private async clearFloatingNodeState(nodeId: string): Promise<void> {
+    private async clearFloatingNodeState(nodeId: string, canvas?: any): Promise<void> {
+        info(`[layout-manager.clearFloatingNodeState] 开始清除节点 ${nodeId} 的浮动状态`);
         try {
             // 获取当前 canvas 路径
             const activeView = this.app.workspace.activeLeaf?.view;
-            if (!activeView || activeView.getViewType() !== 'canvas') return;
+            if (!activeView || activeView.getViewType() !== 'canvas') {
+                info(`[layout-manager.clearFloatingNodeState] 没有活动的 canvas 视图`);
+                return;
+            }
 
             const canvas = (activeView as any)?.canvas;
-            if (!canvas) return;
+            if (!canvas) {
+                info(`[layout-manager.clearFloatingNodeState] 无法获取 canvas 对象`);
+                return;
+            }
 
             const canvasFilePath = canvas.file?.path || (activeView as any).file?.path;
+            if (!canvasFilePath) {
+                info(`[layout-manager.clearFloatingNodeState] 无法获取 canvas 文件路径`);
+                return;
+            }
+
+            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+            if (!(canvasFile instanceof TFile)) {
+                info(`[layout-manager.clearFloatingNodeState] 无法获取 canvas 文件`);
+                return;
+            }
+
+            const canvasContent = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(canvasContent);
+
+            // 从 metadata 中移除浮动节点标记
+            if (canvasData.metadata?.floatingNodes?.[nodeId]) {
+                info(`[layout-manager.clearFloatingNodeState] 从 metadata 中删除节点 ${nodeId}`);
+                delete canvasData.metadata.floatingNodes[nodeId];
+
+                // 如果 floatingNodes 为空，删除整个对象
+                if (Object.keys(canvasData.metadata.floatingNodes).length === 0) {
+                    delete canvasData.metadata.floatingNodes;
+                    info(`[layout-manager.clearFloatingNodeState] floatingNodes 为空，删除整个对象`);
+                }
+
+                // 保存文件
+                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+                info(`[layout-manager.clearFloatingNodeState] 已清除节点 ${nodeId} 的浮动状态并保存文件`);
+            } else {
+                info(`[layout-manager.clearFloatingNodeState] 节点 ${nodeId} 不在 metadata.floatingNodes 中`);
+            }
+
+            // 清除样式
+            const node = canvas.nodes?.get(nodeId);
+            if (node?.nodeEl) {
+                const beforeBorder = (node.nodeEl as HTMLElement).style.border;
+                (node.nodeEl as HTMLElement).style.border = '';
+                (node.nodeEl as HTMLElement).style.borderRadius = '';
+                // 也清除可能的CSS类
+                (node.nodeEl as HTMLElement).classList.remove('cmb-floating-node');
+                info(`[layout-manager.clearFloatingNodeState] 已清除节点 ${nodeId} 的样式，清除前: "${beforeBorder}"`);
+            } else {
+                info(`[layout-manager.clearFloatingNodeState] 无法获取节点 ${nodeId} 的 DOM 元素`);
+            }
+        } catch (err) {
+            error('[layout-manager.clearFloatingNodeState] 清除浮动节点状态失败:', err);
+        }
+    }
+
+    // =========================================================================
+    // 清理残留的浮动节点数据（不存在的节点）
+    // =========================================================================
+    private async cleanupStaleFloatingNodes(canvas: any, currentNodes: Map<string, any>): Promise<void> {
+        try {
+            const canvasFilePath = canvas.file?.path;
             if (!canvasFilePath) return;
 
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
@@ -476,28 +684,37 @@ export class LayoutManager {
             const canvasContent = await this.app.vault.read(canvasFile);
             const canvasData = JSON.parse(canvasContent);
 
-            // 从 metadata 中移除浮动节点标记
-            if (canvasData.metadata?.floatingNodes?.[nodeId]) {
-                delete canvasData.metadata.floatingNodes[nodeId];
+            if (!canvasData.metadata?.floatingNodes) return;
 
-                // 如果 floatingNodes 为空，删除整个对象
-                if (Object.keys(canvasData.metadata.floatingNodes).length === 0) {
-                    delete canvasData.metadata.floatingNodes;
+            const currentNodeIds = new Set<string>();
+            currentNodes.forEach((_, id) => {
+                currentNodeIds.add(id);
+            });
+
+            const floatingNodes = canvasData.metadata.floatingNodes;
+            let hasStaleNodes = false;
+
+            // 检查并删除不存在的浮动节点记录
+            for (const nodeId of Object.keys(floatingNodes)) {
+                if (!currentNodeIds.has(nodeId)) {
+                    delete floatingNodes[nodeId];
+                    hasStaleNodes = true;
+                    warn(`cleanupStaleFloatingNodes: 删除残留的浮动节点记录: ${nodeId}`);
                 }
-
-                // 保存文件
-                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-                info(`已清除节点 ${nodeId} 的浮动状态`);
             }
 
-            // 清除样式
-            const node = canvas.nodes?.get(nodeId);
-            if (node?.nodeEl) {
-                (node.nodeEl as HTMLElement).style.border = '';
-                (node.nodeEl as HTMLElement).style.borderRadius = '';
+            // 如果 floatingNodes 为空，删除整个对象
+            if (Object.keys(floatingNodes).length === 0) {
+                delete canvasData.metadata.floatingNodes;
+            }
+
+            // 如果有残留的节点，保存文件
+            if (hasStaleNodes) {
+                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
+                info(`cleanupStaleFloatingNodes: 已清理残留的浮动节点数据`);
             }
         } catch (err) {
-            error('清除浮动节点状态失败:', err);
+            error('清理残留浮动节点数据失败:', err);
         }
     }
 }
