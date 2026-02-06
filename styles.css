@@ -171,6 +171,29 @@
     }
 }
 
+/* 触屏/平板设备长按选中时的视觉效果 */
+.canvas-node.is-selected {
+    box-shadow: 0 0 0 2px var(--color-accent) !important;
+}
+
+/* ============================================================================
+   浮动节点样式
+   ============================================================================ */
+
+.cmb-floating-node {
+    border: 4px solid #ff4444 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 0 15px rgba(255, 68, 68, 0.4) !important;
+    transition: border 0.3s ease, box-shadow 0.3s ease !important;
+}
+
+/* 浮动节点在选中时的样式 - 保持颜色一致，仅增强阴影 */
+.cmb-floating-node.is-focused,
+.cmb-floating-node.is-selected {
+    border-color: #ff4444 !important;
+    box-shadow: 0 0 20px rgba(255, 68, 68, 0.7) !important;
+}
+
 /* ============================================================================
    文本节点内容区域滚动样式
    当节点高度达到最大值时，内容可滚动

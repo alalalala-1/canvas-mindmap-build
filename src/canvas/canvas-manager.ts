@@ -5,15 +5,16 @@ import { LayoutManager } from './layout-manager';
 import { CanvasEventManager } from './canvas-event-manager';
 import { CanvasNodeManager } from './canvas-node-manager';
 import { CanvasUIManager } from './canvas-ui-manager';
-import { FloatingNodeManager } from './floating-node-manager';
+import { FloatingNodeService } from './services/floating-node-service';
+import { CanvasFileService } from './services/canvas-file-service';
+import { EdgeDeletionService } from './services/edge-deletion-service';
 import { debug, info, warn, error } from '../utils/logger';
 import {
     getCanvasView,
     getCurrentCanvasFilePath,
     readCanvasData,
     writeCanvasData,
-    isFormulaContent,
-    debounce
+    isFormulaContent
 } from '../utils/canvas-utils';
 
 export class CanvasManager {
@@ -21,13 +22,13 @@ export class CanvasManager {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
+    private canvasFileService: CanvasFileService;
     private layoutManager: LayoutManager;
     private eventManager: CanvasEventManager;
     private nodeManager: CanvasNodeManager;
     private uiManager: CanvasUIManager;
-    private floatingNodeManager: FloatingNodeManager;
-    private isLoadingCollapseState = false;
-    private lastLoadedCanvasPath: string | null = null;
+    private floatingNodeService: FloatingNodeService;
+    private edgeDeletionService: EdgeDeletionService;
 
     constructor(
         plugin: Plugin,
@@ -39,11 +40,22 @@ export class CanvasManager {
         this.app = app;
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
-        this.layoutManager = new LayoutManager(plugin, app, settings, collapseStateManager);
-        this.floatingNodeManager = new FloatingNodeManager(app, settings);
-        this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this.floatingNodeManager, this);
-        this.nodeManager = new CanvasNodeManager(app, settings, collapseStateManager, this);
+        
+        // 1. 初始化底层服务
+        this.canvasFileService = new CanvasFileService(app, settings);
+        
+        // 2. 初始化功能模块，注入底层服务
+        this.layoutManager = new LayoutManager(plugin, app, settings, collapseStateManager, this.canvasFileService);
+        this.floatingNodeService = new FloatingNodeService(app, settings);
+        this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this);
+        this.nodeManager = new CanvasNodeManager(app, plugin, settings, collapseStateManager, this.canvasFileService);
+        this.nodeManager.setCanvasManager(this);
         this.uiManager = new CanvasUIManager(app, settings, collapseStateManager);
+        this.edgeDeletionService = new EdgeDeletionService(app, plugin, settings, this.canvasFileService, this.floatingNodeService);
+
+        // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
+        this.layoutManager.setFloatingNodeService(this.floatingNodeService);
+
         debug('CanvasManager 实例化完成');
     }
 
@@ -62,38 +74,20 @@ export class CanvasManager {
         await this.layoutManager.arrangeCanvas();
     }
 
-    async addNodeToCanvas(content: string, sourceFile: TFile | null) {
+    public async addNodeToCanvas(content: string, sourceFile: TFile | null) {
         await this.nodeManager.addNodeToCanvas(content, sourceFile);
     }
 
+    public async adjustNodeHeightAfterRender(nodeId: string) {
+        await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
+    }
+
+    public async adjustAllTextNodeHeights(): Promise<void> {
+        await this.nodeManager.adjustAllTextNodeHeights();
+    }
+
     async deleteSelectedEdge() {
-        info('开始执行删除边命令');
-        
-        const canvasView = this.getCanvasView();
-        if (!canvasView) {
-            warn('未找到 canvas 视图');
-            new Notice('No active canvas found');
-            return;
-        }
-        info('找到 canvas 视图');
-
-        const canvas = (canvasView as any).canvas;
-        if (!canvas) {
-            warn('canvas 视图中没有 canvas 对象');
-            new Notice('Canvas not initialized');
-            return;
-        }
-        
-        const edge = this.getSelectedEdge(canvas);
-
-        if (!edge) {
-            warn('未找到选中的边');
-            new Notice('No edge selected');
-            return;
-        }
-        
-        info(`找到选中的边: ${edge.id || 'unknown'}`);
-        await this.deleteEdge(edge, canvas);
+        await this.edgeDeletionService.deleteSelectedEdge();
     }
 
     // =========================================================================
@@ -123,203 +117,31 @@ export class CanvasManager {
         }, 100);
     }
 
-    public async adjustNodeHeightAfterRender(nodeId: string) {
-        // 调整指定节点的高度
-        try {
-            const canvasFilePath = this.getCurrentCanvasFilePath();
-            if (!canvasFilePath) return;
-
-            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-            if (!(canvasFile instanceof TFile)) return;
-
-            const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
-
-            if (!canvasData.nodes) return;
-
-            // 找到指定节点
-            const node = canvasData.nodes.find((n: any) => n.id === nodeId);
-            if (!node) return;
-
-            // 只处理文本节点
-            if (!node.type || node.type === 'text') {
-                if (node.text) {
-                    // 检测是否是公式节点
-                    const isFormula = this.settings.enableFormulaDetection && isFormulaContent(node.text);
-
-                    let newHeight: number;
-
-                    if (isFormula) {
-                        newHeight = this.settings.formulaNodeHeight || 80;
-                        node.width = this.settings.formulaNodeWidth || 400;
-                    } else {
-                        // 获取节点 DOM 元素以计算实际高度
-                        const canvasView = this.getCanvasView();
-                        const canvas = canvasView ? (canvasView as any).canvas : null;
-                        let nodeEl: Element | undefined;
-                        if (canvas?.nodes) {
-                            const nodeData = canvas.nodes.get(nodeId);
-                            if (nodeData?.nodeEl) {
-                                nodeEl = nodeData.nodeEl;
-                            }
-                        }
-                        const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
-                        const maxHeight = this.settings.textNodeMaxHeight || 800;
-                        newHeight = Math.min(calculatedHeight, maxHeight);
-                    }
-
-                    if (node.height !== newHeight) {
-                        node.height = newHeight;
-                        await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-                        info(`新节点 ${nodeId} 高度已调整为 ${newHeight}`);
-                    }
-                }
-            }
-        } catch (err) {
-            error(`调整新节点高度失败: ${err}`);
-        }
-    }
-
     public async checkAndClearFloatingStateForNewEdges() {
         const canvasView = this.getCanvasView();
         if (!canvasView) return;
-        
+
         const canvas = (canvasView as any).canvas;
         if (!canvas) return;
 
-        await this.floatingNodeManager.checkAndClearFloatingStateForNewEdges(canvas);
+        // 使用新的服务强制检测边变化
+        this.floatingNodeService.forceEdgeDetection(canvas);
     }
 
     // =========================================================================
     // 启动边变化检测轮询 - 当有浮动节点时调用
     // =========================================================================
     public startEdgeChangeDetectionForFloatingNodes(canvas: any) {
-        // 通过 eventManager 启动轮询
-        this.eventManager.startEdgeChangeDetection(canvas);
+        // 边变化检测已经在 FloatingNodeService.initialize 中启动
+        // 这里不需要重复启动
+        info('[CanvasManager] 边变化检测已在 FloatingNodeService 中启动，跳过');
     }
 
-    public async adjustAllTextNodeHeights(): Promise<void> {
-        try {
-            const canvasFilePath = this.getCurrentCanvasFilePath();
-            if (!canvasFilePath) {
-                new Notice('No canvas file is currently open.');
-                return;
-            }
-
-            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-            if (!(canvasFile instanceof TFile)) {
-                new Notice('Canvas file not found.');
-                return;
-            }
-
-            info(`开始调整所有文本节点高度: ${canvasFilePath}`);
-            const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
-
-            if (!canvasData.nodes) {
-                new Notice('No nodes found in canvas.');
-                return;
-            }
-
-            debug(`总共 ${canvasData.nodes.length} 个节点`);
-
-            const maxHeight = this.settings.textNodeMaxHeight || 800;
-            const textNodeWidth = this.settings.textNodeWidth || 400;
-            let adjustedCount = 0;
-            let skippedCount = 0;
-
-            // 获取当前 canvas 视图中已渲染的节点 DOM 元素映射
-            const canvasView = this.getCanvasView();
-            const canvas = canvasView ? (canvasView as any).canvas : null;
-            const nodeDomMap = new Map<string, Element>();
-            
-            if (canvas?.nodes) {
-                for (const [nodeId, nodeData] of canvas.nodes) {
-                    if (nodeData?.nodeEl) {
-                        nodeDomMap.set(nodeId, nodeData.nodeEl);
-                    }
-                }
-            }
-            
-            for (const node of canvasData.nodes) {
-                debug(`检查节点 ${node.id}: type=${node.type}, hasText=${!!node.text}`);
-                
-                // 只处理文本节点（没有 media 或 attachment 类型的节点）
-                if (!node.type || node.type === 'text' || node.type === 'file') {
-                    // 如果节点有文本内容
-                    if (node.text) {
-                        // 检测是否是公式节点
-                        const isFormula = this.settings.enableFormulaDetection && isFormulaContent(node.text);
-                        
-                        const trimmedContent = node.text.trim();
-                        const contentPreview = trimmedContent.length > 60 
-                            ? `${trimmedContent.substring(0, 30)}...${trimmedContent.substring(trimmedContent.length - 30)}`
-                            : trimmedContent;
-                        debug(`节点 ${node.id}: 内容="${contentPreview}", isFormula=${isFormula}`);
-                        
-                        let newHeight: number;
-                        
-                        if (isFormula) {
-                            // 公式节点使用固定高度和宽度
-                            newHeight = this.settings.formulaNodeHeight || 80;
-                            node.width = this.settings.formulaNodeWidth || 400;
-                            debug(`节点 ${node.id}: 公式节点，设置高度=${newHeight}, 宽度=${node.width}`);
-                        } else {
-                            // 普通文本节点根据内容计算高度
-                            // 尝试获取对应的 DOM 元素以获取实际渲染样式
-                            const nodeEl = nodeDomMap.get(node.id);
-                            const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
-                            newHeight = Math.min(calculatedHeight, maxHeight);
-                            debug(`节点 ${node.id}: 普通文本节点，计算高度=${calculatedHeight}, 最终高度=${newHeight}`);
-                        }
-                        
-                        if (node.height !== newHeight) {
-                            debug(`节点 ${node.id}: 高度从 ${node.height} 调整为 ${newHeight}`);
-                            node.height = newHeight;
-                            adjustedCount++;
-                        } else {
-                            debug(`节点 ${node.id}: 高度未变化 (${node.height})`);
-                            skippedCount++;
-                        }
-                    } else {
-                        debug(`节点 ${node.id}: 无文本内容，跳过`);
-                    }
-                } else {
-                    debug(`节点 ${node.id}: 非文本节点 (type=${node.type})，跳过`);
-                }
-            }
-
-            await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-            
-            // 重新加载 canvas 以应用更改
-            const canvasViewForReload = this.getCanvasView();
-            if (canvasViewForReload) {
-                const canvasForReload = (canvasViewForReload as any).canvas;
-                if (canvasForReload) {
-                    // 尝试多种方式刷新 canvas
-                    if (typeof canvasForReload.reload === 'function') {
-                        canvasForReload.reload();
-                    } else if (typeof canvasForReload.requestSave === 'function') {
-                        canvasForReload.requestSave();
-                    } else if (typeof canvasForReload.update === 'function') {
-                        canvasForReload.update();
-                    }
-                    
-                    // 强制刷新视图
-                    setTimeout(() => {
-                        if (canvasViewForReload && typeof (canvasViewForReload as any).reload === 'function') {
-                            (canvasViewForReload as any).reload();
-                        }
-                    }, 100);
-                }
-            }
-
-            new Notice(`Adjusted ${adjustedCount} nodes, skipped ${skippedCount} nodes.`);
-            info(`调整了 ${adjustedCount} 个节点，跳过了 ${skippedCount} 个节点`);
-        } catch (err) {
-            error(`调整节点高度失败: ${err}`);
-            new Notice('Failed to adjust node heights.');
-        }
+    // =========================================================================
+    // 获取浮动节点服务
+    // =========================================================================
+    public getFloatingNodeService(): FloatingNodeService {
+        return this.floatingNodeService;
     }
 
     // =========================================================================
@@ -328,6 +150,8 @@ export class CanvasManager {
     unload() {
         this.eventManager.unload();
         this.uiManager.unload();
+        // 清理浮动节点服务的资源
+        this.floatingNodeService.cleanup();
     }
 
     // =========================================================================
@@ -339,140 +163,6 @@ export class CanvasManager {
 
     private getCurrentCanvasFilePath(): string | undefined {
         return getCurrentCanvasFilePath(this.app);
-    }
-
-    private getSelectedEdge(canvas: any): any | null {
-        debug('开始查找选中的边...');
-        
-        if (canvas.selectedEdge) {
-            debug('找到 canvas.selectedEdge');
-            return canvas.selectedEdge;
-        }
-        
-        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-            debug(`找到 canvas.selectedEdges，数量: ${canvas.selectedEdges.length}`);
-            return canvas.selectedEdges[0];
-        }
-        
-        if (canvas.edges) {
-            const edgesArray = Array.from(canvas.edges.values()) as any[];
-            debug(`检查 ${edgesArray.length} 条边...`);
-            
-            for (const edge of edgesArray) {
-                const isFocused = edge?.lineGroupEl?.classList?.contains('is-focused');
-                const isSelected = edge?.lineGroupEl?.classList?.contains('is-selected');
-                
-                if (isFocused || isSelected) {
-                    debug(`找到选中的边: ${edge?.id}, focused: ${isFocused}, selected: ${isSelected}`);
-                    return edge;
-                }
-            }
-        }
-        
-        debug('未找到选中的边');
-        return null;
-    }
-
-    private async deleteEdge(edge: any, canvas: any): Promise<void> {
-        try {
-            const parentNodeId = edge.from?.node?.id || edge.fromNode;
-            const childNodeId = edge.to?.node?.id || edge.toNode;
-            
-            info(`准备删除边: ${parentNodeId} -> ${childNodeId}`);
-
-            // 从文件中删除边 - 优先使用设置中的路径
-            let canvasFilePath: string | undefined = this.settings.canvasFilePath;
-            
-            // 如果设置中没有，尝试从 canvas 对象获取
-            if (!canvasFilePath && canvas?.file?.path) {
-                canvasFilePath = canvas.file.path;
-            }
-            
-            // 如果还没有，尝试获取当前打开的 canvas
-            if (!canvasFilePath) {
-                canvasFilePath = this.getCurrentCanvasFilePath();
-            }
-            
-            info(`Canvas 文件路径: ${canvasFilePath}`);
-            
-            if (canvasFilePath) {
-                const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-                if (canvasFile instanceof TFile) {
-                    info(`读取 canvas 文件: ${canvasFilePath}`);
-                    const canvasContent = await this.app.vault.read(canvasFile);
-                    const canvasData = JSON.parse(canvasContent);
-                    
-                    const originalEdgeCount = canvasData.edges?.length || 0;
-                    info(`原始边数量: ${originalEdgeCount}`);
-
-                    canvasData.edges = canvasData.edges.filter((e: any) => {
-                        const fromId = e.from?.node?.id || e.fromNode;
-                        const toId = e.to?.node?.id || e.toNode;
-                        const shouldDelete = fromId === parentNodeId && toId === childNodeId;
-                        if (shouldDelete) {
-                            info(`找到要删除的边: ${fromId} -> ${toId}`);
-                        }
-                        return !shouldDelete;
-                    });
-                    
-                    const newEdgeCount = canvasData.edges.length;
-                    info(`删除后边数量: ${newEdgeCount}, 删除了 ${originalEdgeCount - newEdgeCount} 条边`);
-
-                    await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-                    info('Canvas 文件已更新');
-                } else {
-                    warn(`Canvas 文件不存在或不是文件: ${canvasFilePath}`);
-                }
-            } else {
-                warn('无法获取 canvas 文件路径');
-            }
-
-            // 从 Canvas 内存中删除边（如果存在）
-            if (canvas.edges && edge.id) {
-                const edgeId = edge.id;
-                if (canvas.edges.has(edgeId)) {
-                    canvas.edges.delete(edgeId);
-                    info(`已从 Canvas 内存中删除边: ${edgeId}`);
-                }
-                // 同时清理选中状态
-                if (canvas.selectedEdge === edge) {
-                    canvas.selectedEdge = null;
-                }
-                if (canvas.selectedEdges) {
-                    const index = canvas.selectedEdges.indexOf(edge);
-                    if (index > -1) {
-                        canvas.selectedEdges.splice(index, 1);
-                    }
-                }
-            }
-
-            // 标记孤立节点为浮动状态（红色边框），不移动位置
-            if (childNodeId && parentNodeId) {
-                info(`标记孤立节点 ${childNodeId} 为浮动状态，原父节点: ${parentNodeId}`);
-                // 不要重新加载 canvas，而是直接标记浮动状态
-                // 使用 async 函数确保标记完成
-                (async () => {
-                    await this.floatingNodeManager.markNodeAsFloating(childNodeId, canvas, parentNodeId);
-                    // 标记浮动状态后，启动边变化检测轮询
-                    // 这样当用户手动连接边时，可以自动清除浮动状态
-                    this.startEdgeChangeDetectionForFloatingNodes(canvas);
-                })();
-            }
-
-            // 触发UI更新（而不是重新加载整个canvas）
-            if (typeof canvas.requestUpdate === 'function') {
-                canvas.requestUpdate();
-            }
-            if (canvas.requestSave) {
-                canvas.requestSave();
-            }
-
-            new Notice('Edge deleted successfully');
-            info('边删除成功');
-        } catch (err) {
-            error('删除边失败:', err);
-            new Notice('Failed to delete edge');
-        }
     }
 
     private calculateTextNodeHeight(content: string, nodeEl?: Element): number {

@@ -3,7 +3,6 @@ import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
 import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
 import { CollapseStateManager } from './state/collapse-state';
 import { CanvasManager } from './canvas/canvas-manager';
-import { FloatingNodeManager } from './canvas/floating-node-manager';
 import { updateLoggerConfig, info, debug, error } from './utils/logger';
 import { validateSettings, migrateSettings } from './settings/validator';
 import { CSS_VARS } from './constants';

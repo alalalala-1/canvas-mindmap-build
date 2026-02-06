@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { DeleteConfirmationModal } from '../ui/delete-modal';
 import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
-import { FloatingNodeManager } from './floating-node-manager';
+import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasManager } from './canvas-manager';
 import { debug, info, warn, error } from '../utils/logger';
 import {
@@ -18,43 +18,40 @@ export class CanvasEventManager {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
-    private floatingNodeManager: FloatingNodeManager;
+    private floatingNodeService: FloatingNodeService;
     private canvasManager: CanvasManager;
     private mutationObserver: MutationObserver | null = null;
     private clickDebounceMap = new Map<string, number>();
     private mutationObserverRetryCount = 0;
     private readonly MAX_MUTATION_OBSERVER_RETRIES = 10;
     private isObserverSetup = false;
-    private edgeChangeInterval: number | null = null;
-    private lastEdgeCount: number = 0;
-    private edgeChangeProcessed: boolean = false; // 防止重复处理同一次边增加
 
     constructor(
         plugin: Plugin,
         app: App,
         settings: CanvasMindmapBuildSettings,
         collapseStateManager: CollapseStateManager,
-        floatingNodeManager: FloatingNodeManager,
         canvasManager: CanvasManager
     ) {
         this.plugin = plugin;
         this.app = app;
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
-        this.floatingNodeManager = floatingNodeManager;
         this.canvasManager = canvasManager;
+        // 从 CanvasManager 获取 FloatingNodeService
+        this.floatingNodeService = canvasManager.getFloatingNodeService();
     }
 
     // =========================================================================
     // 初始化事件监听
     // =========================================================================
-    initialize() {
+    async initialize() {
         this.registerEventListeners();
         
         // 如果当前已经有 canvas 打开，立即启动 observer 和事件监听器
         const canvasView = this.getCanvasView();
         if (canvasView) {
-            this.setupCanvasEventListeners(canvasView);
+            await this.setupCanvasEventListeners(canvasView);
             this.setupMutationObserver();
         }
     }
@@ -68,19 +65,9 @@ export class CanvasEventManager {
                 info('[canvas:edge-created] 边创建事件触发');
                 info(`[canvas:edge-created] canvas type: ${typeof canvas}, edge type: ${typeof edge}`);
                 info(`[canvas:edge-created] edge:`, edge);
-                
-                // 正确获取节点 ID
-                const fromNodeId = edge?.from?.node?.id || edge?.fromNode;
-                const toNodeId = edge?.to?.node?.id || edge?.toNode;
-                info(`[canvas:edge-created] 新边: ${fromNodeId} -> ${toNodeId}`);
-                
-                // 清除源节点和目标节点的浮动状态
-                if (fromNodeId) {
-                    this.floatingNodeManager.clearFloatingNodeState(fromNodeId, canvas);
-                }
-                if (toNodeId) {
-                    this.floatingNodeManager.clearFloatingNodeState(toNodeId, canvas);
-                }
+
+                // 使用新的服务处理新边
+                this.floatingNodeService.handleNewEdge(edge);
             })
         );
         
@@ -113,7 +100,7 @@ export class CanvasEventManager {
                     
                     const canvasView = this.app.workspace.getActiveViewOfType(ItemView);
                     if (canvasView) {
-                        this.setupCanvasEventListeners(canvasView);
+                        await this.setupCanvasEventListeners(canvasView);
                         // Canvas打开时立即检查并添加所有必要的DOM属性和按钮
                         setTimeout(() => {
                             this.canvasManager.checkAndAddCollapseButtons();
@@ -344,9 +331,15 @@ export class CanvasEventManager {
     // =========================================================================
     // Canvas 事件监听
     // =========================================================================
-    setupCanvasEventListeners(canvasView: ItemView) {
+    async setupCanvasEventListeners(canvasView: ItemView) {
         const canvas = (canvasView as any).canvas;
         if (!canvas?.on) return;
+
+        // 初始化 FloatingNodeService（如果尚未初始化）
+        const canvasFilePath = canvas.file?.path || (canvasView as any).file?.path;
+        if (canvasFilePath) {
+            await this.floatingNodeService.initialize(canvasFilePath, canvas);
+        }
 
         // 监听所有可能的事件
         const events = ['edge-add', 'edge-change', 'edge-modify', 'connection-add', 'link-add'];
@@ -358,32 +351,20 @@ export class CanvasEventManager {
         
         canvas.on('edge-add', async (edge: any) => {
             info('[edge-add] Canvas 事件: edge-add');
-            
+
             // 清除折叠缓存，确保新添加的子节点能被正确识别
             this.collapseStateManager.clearCache();
             info('[edge-add] 已清除折叠状态缓存');
 
-            // 获取边的源节点和目标节点
-            const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-            const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
-
-            info(`[edge-add] 新边: ${fromNodeId} -> ${toNodeId}`);
-            info(`[edge-add] floatingNodeManager 存在: ${this.floatingNodeManager ? '是' : '否'}`);
-
-            // 如果源节点或目标节点是浮动节点，清除其浮动状态
-            if (fromNodeId) {
-                info(`[edge-add] 清除源节点 ${fromNodeId} 的浮动状态`);
-                await this.floatingNodeManager.clearFloatingNodeState(fromNodeId, canvas);
-                info(`[edge-add] 源节点 ${fromNodeId} 浮动状态清除完成`);
-            }
-            
-            if (toNodeId) {
-                info(`[edge-add] 清除目标节点 ${toNodeId} 的浮动状态`);
-                await this.floatingNodeManager.clearFloatingNodeState(toNodeId, canvas);
-                info(`[edge-add] 目标节点 ${toNodeId} 浮动状态清除完成`);
-            } else {
-                warn('[edge-add] 无法获取目标节点 ID，边对象:', edge);
-            }
+            // 直接处理新边，确保浮动状态立即清除（有些环境下 canvas:edge-created 不会触发）
+            // 使用下一帧保证 Canvas 的 edges 映射已更新
+            requestAnimationFrame(async () => {
+                try {
+                    await this.floatingNodeService.handleNewEdge(edge);
+                } catch (err) {
+                    error('[edge-add] 处理新边失败:', err);
+                }
+            });
 
             await this.canvasManager.checkAndAddCollapseButtons();
             info('[edge-add] 事件处理完成');
@@ -399,45 +380,22 @@ export class CanvasEventManager {
             // 检查选中的节点是否是浮动节点，如果是，清除浮动状态
             if (node?.id) {
                 const nodeId = node.id;
-                
-                // 从文件中获取浮动节点列表（更可靠）
-                const canvasFilePath = this.getCurrentCanvasFilePath();
-                if (canvasFilePath) {
-                    try {
-                        const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-                        if (canvasFile instanceof TFile) {
-                            const canvasContent = await this.app.vault.read(canvasFile);
-                            const canvasData = JSON.parse(canvasContent);
-                            const floatingNodes = canvasData.metadata?.floatingNodes || {};
-                            
-                            // 检查节点是否处于浮动状态
-                            if (floatingNodes[nodeId] !== undefined) {
-                                // 兼容旧格式（boolean）和新格式（object）
-                                let isFloating = false;
-                                if (typeof floatingNodes[nodeId] === 'boolean') {
-                                    isFloating = floatingNodes[nodeId];
-                                } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
-                                    isFloating = floatingNodes[nodeId].isFloating;
-                                }
-                                
-                                if (isFloating) {
-                                    // 检查节点是否有边连接（入边或出边）
-                                    const hasIncomingEdge = this.checkNodeHasIncomingEdge(nodeId, canvas);
-                                    const hasOutgoingEdge = this.checkNodeHasOutgoingEdge(nodeId, canvas);
-                                    
-                                    if (hasIncomingEdge || hasOutgoingEdge) {
-                                        info(`节点 ${nodeId} 被选中，有边连接且处于浮动状态，清除浮动状态`);
-                                        await this.floatingNodeManager.clearFloatingNodeState(nodeId);
-                                    }
-                                }
-                            }
-                        }
-                    } catch (err) {
-                        error('node-select 事件处理错误:', err);
+
+                // 使用新的服务检查并清除浮动状态
+                const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
+                if (isFloating) {
+                    // 检查节点是否有入边（有父节点）
+                    // 浮动节点的定义是"没有入边（没有父节点）的节点"
+                    // 它可以有出边（子节点），所以只检查入边
+                    const hasIncomingEdge = this.checkNodeHasIncomingEdge(nodeId, canvas);
+
+                    if (hasIncomingEdge) {
+                        info(`节点 ${nodeId} 被选中，有入边且处于浮动状态，清除浮动状态`);
+                        await this.floatingNodeService.clearNodeFloatingState(nodeId);
                     }
                 }
             }
-            
+
             this.canvasManager.checkAndAddCollapseButtons();
         });
 
@@ -446,18 +404,17 @@ export class CanvasEventManager {
             if (node?.id) {
                 const nodeId = node.id;
                 // 检查新添加的节点是否是浮动节点，如果是则清除状态
-                const memoryFloatingNodes = canvas.fileData?.metadata?.floatingNodes || {};
-                if (memoryFloatingNodes[nodeId]) {
+                const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
+                if (isFloating) {
                     info(`新节点 ${nodeId} 被添加，清除浮动状态`);
-                    await this.floatingNodeManager.clearFloatingNodeState(nodeId);
+                    await this.floatingNodeService.clearNodeFloatingState(nodeId);
                 }
             }
         });
 
         canvas.on('node-drag', (node: any) => {
-            if (node?.id && this.collapseStateManager.isCollapsed(node.id)) {
-                this.canvasManager.syncHiddenChildrenOnDrag(node);
-            }
+            // 只要节点有被折叠的子节点，或者有浮动子节点，就需要同步
+            this.canvasManager.syncHiddenChildrenOnDrag(node);
         });
     }
 
@@ -502,16 +459,26 @@ export class CanvasEventManager {
         // 找到容器后才创建 observer
         this.mutationObserver = new MutationObserver((mutations) => {
             let shouldCheckButtons = false;
-            let shouldCheckEdges = false;
+            let addedNodeIds: string[] = [];
 
             for (const mutation of mutations) {
                 if (mutation.type === 'childList') {
                     for (const node of Array.from(mutation.addedNodes)) {
                         if (node instanceof HTMLElement) {
                             // 检查是否有新节点添加
-                            if (node.classList.contains('canvas-node') ||
-                                node.querySelector('.canvas-node')) {
+                            if (node.classList.contains('canvas-node')) {
                                 shouldCheckButtons = true;
+                                const nodeId = node.getAttribute('data-node-id');
+                                if (nodeId) addedNodeIds.push(nodeId);
+                            } else {
+                                const internalNodes = node.querySelectorAll('.canvas-node');
+                                if (internalNodes.length > 0) {
+                                    shouldCheckButtons = true;
+                                    internalNodes.forEach(n => {
+                                        const id = n.getAttribute('data-node-id');
+                                        if (id) addedNodeIds.push(id);
+                                    });
+                                }
                             }
                             
                             // 检查是否有新边添加 - 更全面的检测
@@ -523,21 +490,11 @@ export class CanvasEventManager {
                                                   node.querySelector('path') &&
                                                   (node.querySelector('path.canvas-display-path') || 
                                                    node.querySelector('path.canvas-interaction-path'));
-                            // 检测 svg 元素（边通常使用 svg 渲染）
-                            const isSvgElement = node.tagName === 'svg' || node.closest('svg');
-                            // 检测 line 元素（边可能使用 line 元素）
-                            const hasLineElements = node.tagName === 'line' || node.querySelector('line');
                             
-                            if (hasCanvasEdges || hasCanvasEdge || hasPathElements || isSvgElement || hasLineElements) {
-                                shouldCheckEdges = true;
-                                info('MutationObserver 检测到边添加:', node.className || node.tagName, 'isSvg:', isSvgElement, 'hasLine:', hasLineElements);
-                            }
-                            
-                            // 调试：输出所有添加的节点类名和标签
-                            if (node.className) {
-                                debug('MutationObserver 添加节点:', node.className, 'tag:', node.tagName);
-                            } else if (node.tagName) {
-                                debug('MutationObserver 添加元素:', node.tagName);
+                            if (hasCanvasEdges || hasCanvasEdge || hasPathElements) {
+                                // 边添加通常意味着可能有浮动状态需要清除
+                                // 但我们已经有 canvas:edge-created 事件，所以这里主要用于日志调试
+                                // debug('MutationObserver 检测到边添加');
                             }
                         }
                     }
@@ -546,14 +503,18 @@ export class CanvasEventManager {
 
             if (shouldCheckButtons) {
                 this.canvasManager.checkAndAddCollapseButtons();
+                
+                // 关键修复：当节点重新进入 DOM 时，重新应用浮动样式
+                if (addedNodeIds.length > 0) {
+                    const canvasView = this.getCanvasView();
+                    const canvas = (canvasView as any)?.canvas;
+                    if (canvas) {
+                        requestAnimationFrame(() => {
+                            this.floatingNodeService.reapplyAllFloatingStyles(canvas);
+                        });
+                    }
+                }
             }
-
-            // 注意：边创建时的浮动状态清除已由 canvas:edge-created 事件处理
-            // 这里不再重复调用 checkAndClearFloatingStateForNewEdges
-            // if (shouldCheckEdges) {
-            //     info('MutationObserver 调用 checkAndClearFloatingStateForNewEdges');
-            //     this.canvasManager.checkAndClearFloatingStateForNewEdges();
-            // }
         });
 
         this.mutationObserverRetryCount = 0;
@@ -563,188 +524,11 @@ export class CanvasEventManager {
             subtree: true
         });
         debug('MutationObserver 已成功设置');
-        
-        // 启动边变化检测轮询（备用方案）
-        const canvas = (canvasView as any).canvas;
-        if (canvas) {
-            this.startEdgeChangeDetection(canvas);
-        }
+
+        // 注意：边变化检测已在 FloatingNodeService.initialize 中启动
+        // 这里不需要重复启动
     }
     
-    // =========================================================================
-    // 边变化检测轮询 - 当 MutationObserver 无法检测到边变化时使用
-    // 优化：只在有浮动节点时才启动，使用更长的间隔减少性能影响
-    // =========================================================================
-    public startEdgeChangeDetection(canvas: any) {
-        // 先停止之前的检测
-        this.stopEdgeChangeDetection();
-        
-        // 检查是否有浮动节点，如果没有则不启动轮询
-        const canvasFilePath = this.getCurrentCanvasFilePath();
-        if (!canvasFilePath) return;
-        
-        const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-        if (!(canvasFile instanceof TFile)) return;
-        
-        // 异步检查是否有浮动节点
-        this.app.vault.read(canvasFile).then(canvasContent => {
-            const canvasData = JSON.parse(canvasContent);
-            const floatingNodes = canvasData.metadata?.floatingNodes || {};
-            const floatingNodeCount = Object.keys(floatingNodes).length;
-            
-            if (floatingNodeCount === 0) {
-                info('[EdgeChangeDetection] 没有浮动节点，不启动轮询');
-                return;
-            }
-            
-            // 初始化边数量
-            this.lastEdgeCount = this.getEdgeCount(canvas);
-            info(`[EdgeChangeDetection] 启动轮询，初始边数量: ${this.lastEdgeCount}，浮动节点: ${floatingNodeCount}`);
-            
-            // 每 2000ms（2秒）检查一次边数量变化，减少性能影响
-            let checkCount = 0;
-            const MAX_CHECKS = 30; // 最多检查30次（60秒）后自动停止
-            
-            this.edgeChangeInterval = window.setInterval(() => {
-                checkCount++;
-                const currentEdgeCount = this.getEdgeCount(canvas);
-
-                if (currentEdgeCount > this.lastEdgeCount && !this.edgeChangeProcessed) {
-                    info(`[EdgeChangeDetection] 检测到边数量增加: ${this.lastEdgeCount} -> ${currentEdgeCount}`);
-                    this.lastEdgeCount = currentEdgeCount;
-                    this.edgeChangeProcessed = true; // 标记已处理，防止重复
-                    // canvas:edge-created 事件在某些情况下不触发，使用轮询作为备用方案
-                    setTimeout(() => {
-                        this.canvasManager.checkAndClearFloatingStateForNewEdges();
-                        // 处理完成后重置标志
-                        setTimeout(() => {
-                            this.edgeChangeProcessed = false;
-                        }, 500);
-                    }, 100);
-                    // 检测到变化后，再检查几次确保没有更多变化
-                    checkCount = Math.max(checkCount, MAX_CHECKS - 5);
-                } else if (currentEdgeCount < this.lastEdgeCount) {
-                    // 边数量减少，只更新计数
-                    this.lastEdgeCount = currentEdgeCount;
-                    this.edgeChangeProcessed = false; // 重置标志
-                }
-
-                // 达到最大检查次数后停止
-                if (checkCount >= MAX_CHECKS) {
-                    info('[EdgeChangeDetection] 达到最大检查次数，停止轮询');
-                    this.stopEdgeChangeDetection();
-                }
-            }, 2000);
-        }).catch(err => {
-            error('[EdgeChangeDetection] 启动失败:', err);
-        });
-    }
-    
-    // =========================================================================
-    // 获取当前边数量
-    // =========================================================================
-    private getEdgeCount(canvas: any): number {
-        if (!canvas?.edges) return 0;
-        if (canvas.edges instanceof Map) {
-            return canvas.edges.size;
-        } else if (Array.isArray(canvas.edges)) {
-            return canvas.edges.length;
-        }
-        return 0;
-    }
-
-    // =========================================================================
-    // 当 Canvas 文件被修改时检查并清除浮动节点
-    // =========================================================================
-    private async checkAndClearFloatingNodesOnFileChange(file: TFile): Promise<void> {
-        try {
-            info(`[checkAndClearFloatingNodesOnFileChange] 检查文件: ${file.path}`);
-
-            // 读取文件内容
-            const canvasContent = await this.app.vault.read(file);
-            const canvasData = JSON.parse(canvasContent);
-
-            // 获取浮动节点列表
-            const floatingNodes = canvasData.metadata?.floatingNodes || {};
-            const floatingNodeIds = Object.keys(floatingNodes);
-
-            if (floatingNodeIds.length === 0) {
-                info('[checkAndClearFloatingNodesOnFileChange] 没有浮动节点需要检查');
-                return;
-            }
-
-            info(`[checkAndClearFloatingNodesOnFileChange] 发现 ${floatingNodeIds.length} 个浮动节点`);
-
-            // 获取所有边
-            const edges = canvasData.edges || [];
-            const connectedFloatingNodes: string[] = [];
-
-            // 检查每个浮动节点是否有连接
-            for (const nodeId of floatingNodeIds) {
-                // 兼容旧格式（boolean）和新格式（object）
-                let isFloating = false;
-                if (typeof floatingNodes[nodeId] === 'boolean') {
-                    isFloating = floatingNodes[nodeId];
-                } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
-                    isFloating = floatingNodes[nodeId].isFloating;
-                }
-
-                if (!isFloating) continue;
-
-                // 检查节点是否有边连接
-                const hasConnection = edges.some((edge: any) => {
-                    const fromId = edge.fromNode || edge.from?.node?.id;
-                    const toId = edge.toNode || edge.to?.node?.id;
-                    return fromId === nodeId || toId === nodeId;
-                });
-
-                if (hasConnection) {
-                    connectedFloatingNodes.push(nodeId);
-                    info(`[checkAndClearFloatingNodesOnFileChange] 节点 ${nodeId} 有连接，需要清除浮动状态`);
-                }
-            }
-
-            if (connectedFloatingNodes.length === 0) {
-                info('[checkAndClearFloatingNodesOnFileChange] 没有已连接的浮动节点需要清除');
-                return;
-            }
-
-            // 获取当前 canvas 视图
-            const canvasView = this.getCanvasView();
-            if (!canvasView) {
-                warn('[checkAndClearFloatingNodesOnFileChange] 无法获取 canvas 视图');
-                return;
-            }
-
-            const canvas = (canvasView as any).canvas;
-            if (!canvas) {
-                warn('[checkAndClearFloatingNodesOnFileChange] 无法获取 canvas 对象');
-                return;
-            }
-
-            // 清除每个已连接浮动节点的状态
-            for (const nodeId of connectedFloatingNodes) {
-                info(`[checkAndClearFloatingNodesOnFileChange] 清除节点 ${nodeId} 的浮动状态`);
-                await this.floatingNodeManager.clearFloatingNodeState(nodeId, canvas);
-            }
-
-            info(`[checkAndClearFloatingNodesOnFileChange] 已清除 ${connectedFloatingNodes.length} 个浮动节点的状态`);
-        } catch (err) {
-            error('[checkAndClearFloatingNodesOnFileChange] 检查失败:', err);
-        }
-    }
-    
-    // =========================================================================
-    // 停止边变化检测
-    // =========================================================================
-    private stopEdgeChangeDetection() {
-        if (this.edgeChangeInterval) {
-            clearInterval(this.edgeChangeInterval);
-            this.edgeChangeInterval = null;
-            info('[EdgeChangeDetection] 已停止');
-        }
-    }
-
     // =========================================================================
     // 辅助方法
     // =========================================================================

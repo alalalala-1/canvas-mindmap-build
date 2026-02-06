@@ -48,15 +48,27 @@ if (canvasData?.metadata?.floatingNodes) {
 - **解决**: 额外检查浮动节点，将原父节点为当前节点的浮动子节点添加到集合
 
 #### 1.5 清除浮动状态
-- **时机**: 检测到新边连接到浮动节点时
-- **延迟清除**: 使用 debounce 延迟 5 秒清除，避免频繁操作
-- **双清策略**: 清除 metadata 和 node.data 中的标记
+- **时机**: 检测到新边连接到浮动节点时（通过 `edge-add` 或 `canvas:edge-created` 事件）
+- **立即清除**: 立即更新内存中的 `node.data.isFloating = false`，并调用 `canvas.requestSave()`
+- **视觉响应**: 立即调用 `styleManager.clearFloatingStyle` 移除红框
+- **验证机制**: 在布局计算（arrange）时同步验证，若发现节点已有入边则自动强制清除浮动状态
+
+#### 1.6 视觉样式管理 (FloatingNodeStyleManager)
+- **挑战**: Obsidian 的 Canvas 采用虚拟列表和重绘机制，普通 DOM 操作添加的样式类极易丢失。
+- **对策**:
+  - **MutationObserver**: 实时监听 Canvas 容器，一旦节点 DOM 重新进入视图，立即重新补上样式类。
+  - **延迟重试**: 应用样式时若 DOM 尚未生成，启动 300ms/1000ms 阶梯式重试。
+  - **内联兜底**: 除了样式类，额外注入内联样式并使用 `!important`，防止被主题样式覆盖。
+  - **强制重绘**: 通过访问 `offsetHeight` 触发浏览器重排，确保视觉变更立即可见。
 
 ### 踩坑记录
 1. **不要在布局时过滤浮动节点** - 会导致布局错乱
 2. **不要整体平移所有节点** - 会破坏相对位置
 3. **必须传递 canvasData 参数** - 否则折叠展开时无法识别浮动节点
 4. **getActiveViewOfType 参数必须是类** - 不能传字符串 'canvas'
+5. **边端点格式多样** - 需要统一使用 getNodeIdFromEdgeEndpoint 解析
+6. **getChildNodes 不要使用缓存** - 边内容变化但数量相同时会返回错误结果
+7. **浮动节点定义** - 没有入边（没有父节点）的节点，可以有出边（子节点）
 
 ---
 
@@ -125,6 +137,7 @@ delete canvasData.metadata.collapseState[nodeId]; // 展开
 - **直接子节点**: 从 edges 中查找 `fromNode === parentId` 的边
 - **所有后代**: 递归调用 `addAllDescendantsToSet`
 - **浮动子节点**: 额外检查 `metadata.floatingNodes`
+- **边端点解析**: 使用统一的 `getNodeIdFromEdgeEndpoint` 函数
 
 #### 3.3 自动布局
 - **折叠时**: 重新布局可见节点（排除被折叠的子树）
@@ -135,6 +148,7 @@ delete canvasData.metadata.collapseState[nodeId]; // 展开
 1. **必须清除缓存** - 操作后调用 `collapseStateManager.clearCache()`
 2. **浮动节点也要处理** - 折叠时要隐藏浮动子节点
 3. **边也要隐藏** - 不只是节点，相关的边也要隐藏
+4. **不要使用缓存的 getChildNodes** - 边内容变化时返回错误结果
 
 ---
 
@@ -279,12 +293,13 @@ try {
 await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
 ```
 
-#### 6.3 数据更新模式
+#### 6.3 数据更新模式 (原子操作)
 ```typescript
-await this.updateCanvasData(canvas, (data: any) => {
+await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) => {
     // 修改 data
     data.nodes.push(newNode);
     data.edges.push(newEdge);
+    return true; // 返回 true 表示数据已更改，需要保存
 });
 ```
 
@@ -292,6 +307,7 @@ await this.updateCanvasData(canvas, (data: any) => {
 1. **必须验证文件存在** - 使用 `instanceof TFile` 检查
 2. **JSON 解析要 try-catch** - 防止格式错误导致崩溃
 3. **修改后要 requestSave** - 触发 Obsidian 保存机制
+4. **优先使用内存数据** - 避免读取可能被覆盖的文件
 
 ---
 
@@ -348,6 +364,16 @@ endTimer();
 **原因**: CanvasManager 未正确注入或 DOM 元素不存在
 **解决**: 确保注入实例，做好 DOM 不存在时的回退
 
+### 8.6 浮动节点连接到新父节点后无法折叠
+**原因**: 
+- 边端点解析不一致
+- getChildNodes 缓存导致错误结果
+- 浮动状态清除不及时
+**解决**:
+- 统一使用 getNodeIdFromEdgeEndpoint 解析边
+- 移除 getChildNodes 缓存
+- 立即清除内存中的浮动标记
+
 ---
 
 ## 9. 重构注意事项
@@ -364,6 +390,7 @@ endTimer();
 - [ ] 布局算法（arrange）
 - [ ] 边删除和创建
 - [ ] 关闭重启后数据持久化
+- [ ] 浮动节点连接到新父节点后的折叠展开
 
 ### 性能基准
 - [ ] 布局 100 个节点 < 100ms
@@ -434,5 +461,5 @@ private debounce<T extends (...args: any[]) => void>(
 
 ---
 
-*最后更新: 2024-02-06*
+*最后更新: 2026-02-06*
 *版本: 1.2.0*

@@ -246,6 +246,7 @@ export class CanvasUIManager {
         if (nodeEl) {
             nodeEl.style.border = '';
             nodeEl.style.borderRadius = '';
+            nodeEl.classList.remove('cmb-floating-node');
         }
     }
 

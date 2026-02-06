@@ -101,6 +101,13 @@ export function getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
 }
 
 /**
+ * 生成随机 ID (8位 36进制字符串)
+ */
+export function generateRandomId(): string {
+    return Math.random().toString(36).substring(2, 10);
+}
+
+/**
  * 获取边的源节点 ID
  */
 export function getEdgeFromNodeId(edge: any): string | null {
@@ -353,6 +360,40 @@ export function identifyRootNodes(canvasData: any): string[] {
     }
     
     return rootNodes;
+}
+
+/**
+ * 查找节点的父节点对象
+ */
+export function findParentNode(nodeId: string, edges: any[], allNodes: any[]): any | null {
+    for (const edge of edges) {
+        const fromId = getEdgeFromNodeId(edge);
+        const toId = getEdgeToNodeId(edge);
+
+        if (toId === nodeId) {
+            const parentNode = allNodes.find((n: any) => n.id === fromId);
+            if (parentNode) return parentNode;
+        }
+    }
+    return null;
+}
+
+/**
+ * 查找节点的所有子节点 ID
+ */
+export function findChildNodes(nodeId: string, edges: any[]): string[] {
+    const childIds: string[] = [];
+    
+    for (const edge of edges) {
+        const fromId = getEdgeFromNodeId(edge);
+        const toId = getEdgeToNodeId(edge);
+
+        if (fromId === nodeId && toId) {
+            childIds.push(toId);
+        }
+    }
+    
+    return childIds;
 }
 
 /**

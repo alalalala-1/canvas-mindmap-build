@@ -109,7 +109,49 @@ function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[
 }
 
 /**
- * 计算画布节点的自动布局 - 支持浮动子树
+ * 估算文本节点高度（保守估计，防止重叠）
+ */
+function estimateTextNodeHeight(content: string, width: number, settings: CanvasArrangerSettings): number {
+    const maxHeight = settings.textNodeMaxHeight || 800;
+    const contentWidth = width - 40;
+    const fontSize = 14;
+    const lineHeight = 26;
+    
+    const chineseCharRegex = /[\u4e00-\u9fa5]/;
+    let totalLines = 0;
+    const textLines = content.split('\n');
+
+    for (const line of textLines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine === '') {
+            totalLines += 0.5;
+            continue;
+        }
+
+        const cleanLine = trimmedLine
+            .replace(/^#{1,6}\s+/, '')
+            .replace(/\*\*|\*|__|_|`/g, '');
+
+        let pixelWidth = 0;
+        for (const char of cleanLine) {
+            if (chineseCharRegex.test(char)) {
+                pixelWidth += fontSize * 1.15;
+            } else {
+                pixelWidth += fontSize * 0.6;
+            }
+        }
+
+        const linesNeeded = Math.ceil(pixelWidth / contentWidth);
+        totalLines += Math.max(1, linesNeeded);
+    }
+
+    const safetyPadding = 44;
+    const calculatedHeight = Math.ceil(totalLines * lineHeight + safetyPadding);
+    return Math.max(60, Math.min(calculatedHeight, maxHeight));
+}
+
+/**
+ * 计算画布节点的自动布局 - 支持浮动子树和“大行”布局
  * @param nodes 可见节点Map（用于布局计算）
  * @param edges 当前边数组（用于布局计算）
  * @param settings 布局设置
@@ -168,9 +210,15 @@ export function arrangeLayout(
         if (isFormula) {
             nodeHeight = settings.formulaNodeHeight || 80;
             formulaNodeCount++;
-            debug(`布局节点 ${nodeId}: 公式节点, 高度=${nodeHeight}, 内容=${nodeText.substring(0, 30)}...`);
+            debug(`布局节点 ${nodeId}: 公式节点, 高度=${nodeHeight}`);
         } else {
-            nodeHeight = nodeData.height || 60;
+            // 如果节点已有高度且不是默认值，保留它；否则重新估算
+            const currentWidth = nodeData.width || settings.textNodeWidth;
+            if (nodeData.height && nodeData.height > 60) {
+                nodeHeight = nodeData.height;
+            } else {
+                nodeHeight = estimateTextNodeHeight(nodeText, currentWidth, settings);
+            }
         }
 
         layoutNodes.set(nodeId, {
@@ -263,7 +311,7 @@ export function arrangeLayout(
                 floatingSubtreeRoots.add(nodeId);
                 // 收集整个浮动子树
                 collectFloatingSubtree(nodeId, completeChildrenMap, allFloatingSubtreeNodes);
-                // 直接使用存储的原父节点信息（这是关键修复）
+                // 直接使用存储的原父节点信息
                 const originalParent = originalParents.get(nodeId);
                 if (originalParent) {
                     floatingSubtreeOriginalParents.set(nodeId, originalParent);
@@ -277,45 +325,34 @@ export function arrangeLayout(
     });
 
     // 创建虚拟边：为浮动子树添加虚拟连接到原父节点
-    const virtualEdges: { fromId: string; toId: string }[] = [];
     floatingSubtreeRoots.forEach(rootId => {
         const originalParentId = floatingSubtreeOriginalParents.get(rootId);
         if (originalParentId) {
-            // 添加虚拟边（即使已经有父节点也要添加，确保浮动子树参与布局）
-            virtualEdges.push({ fromId: originalParentId, toId: rootId });
             // 同时更新布局图
             const parentNode = layoutNodes.get(originalParentId);
             const childNode = layoutNodes.get(rootId);
             if (parentNode && childNode) {
                 // 确保子节点在父节点的children列表中（插入到开头，确保浮动子树排在前面）
                 if (!parentNode.children.includes(rootId)) {
-                    parentNode.children.unshift(rootId); // 使用 unshift 而不是 push
+                    parentNode.children.unshift(rootId);
                 }
                 layoutParentMap.set(rootId, originalParentId);
             }
         }
     });
 
-    debug('添加虚拟边数量:', virtualEdges.length);
-
     // 找到真正的根节点（没有父节点的节点）
-    const layoutNodeIds = Array.from(layoutNodes.keys());
     const rootNodes: string[] = [];
-
-    layoutNodeIds.forEach(id => {
-        const hasParent = layoutParentMap.has(id);
-        if (!hasParent) {
+    layoutNodes.forEach((_, id) => {
+        if (!layoutParentMap.has(id)) {
             rootNodes.push(id);
         }
     });
 
     debug('根节点数量:', rootNodes.length);
     debug('浮动子树根节点数量:', floatingSubtreeRoots.size);
-    debug('浮动子树总节点数:', allFloatingSubtreeNodes.size);
-    trace('根节点ID:', rootNodes);
-    trace('浮动子树根节点ID:', Array.from(floatingSubtreeRoots));
 
-    // 计算每个节点的子树高度
+    // 1. 计算每个节点的子树高度（从右到左/自底向上）
     function calculateSubtreeHeight(nodeId: string): number {
         const node = layoutNodes.get(nodeId);
         if (!node) return 0;
@@ -327,8 +364,7 @@ export function arrangeLayout(
 
         let childrenTotalHeight = 0;
         for (const childId of node.children) {
-            const childHeight = calculateSubtreeHeight(childId);
-            childrenTotalHeight += childHeight;
+            childrenTotalHeight += calculateSubtreeHeight(childId);
         }
         childrenTotalHeight += Math.max(0, node.children.length - 1) * settings.verticalSpacing;
 
@@ -336,138 +372,205 @@ export function arrangeLayout(
         return node._subtreeHeight;
     }
 
-    // 应用绝对位置 - 实现垂直居中对齐
-    // 所有子节点（包括浮动节点）都作为正常子节点处理
-    function applyAbsolutePositions(nodeId: string, parentY: number = 0) {
+    // 2. 计算节点在层级中的深度 (用于从右到左对齐)
+    const nodeLevel = new Map<string, number>();
+    const nodeMaxDepth = new Map<string, number>(); // 节点到最远叶子节点的距离
+
+    function calculateMaxDepth(nodeId: string): number {
+        const node = layoutNodes.get(nodeId);
+        if (!node || node.children.length === 0) {
+            nodeMaxDepth.set(nodeId, 0);
+            return 0;
+        }
+        
+        let maxChildDepth = -1;
+        for (const childId of node.children) {
+            maxChildDepth = Math.max(maxChildDepth, calculateMaxDepth(childId));
+        }
+        const depth = maxChildDepth + 1;
+        nodeMaxDepth.set(nodeId, depth);
+        return depth;
+    }
+
+    // 辅助函数：计算每个节点所在的列（从最深叶子节点向左推导）
+    const nodeColumn = new Map<string, number>();
+    const columnWidths = new Map<number, number>();
+
+    // 获取所有节点的最大深度，用于对齐
+    let maxOverallDepth = 0;
+    rootNodes.forEach(rootId => {
+        maxOverallDepth = Math.max(maxOverallDepth, calculateMaxDepth(rootId));
+    });
+
+    function calculateColumns(nodeId: string, parentColumn: number) {
         const node = layoutNodes.get(nodeId);
         if (!node) return;
 
-        // 设置当前节点的Y坐标
-        if (parentY === 0 && rootNodes.includes(nodeId)) {
-            node.y = 0;
+        // 如果是根节点，初始列由其最大深度决定
+        // 这样可以保证所有叶子节点尽量靠右对齐
+        let column: number;
+        if (parentColumn === -1) {
+            // 根节点的列 = 总最大深度 - 该根节点子树的最大深度
+            column = maxOverallDepth - (nodeMaxDepth.get(nodeId) || 0);
         } else {
-            node.y = parentY;
+            column = parentColumn + 1;
         }
 
-        // 递归处理所有子节点（包括浮动节点，都作为正常子节点）
-        if (node.children.length > 0) {
-            // 计算所有子节点总高度
-            let childrenTotalHeight = 0;
-            for (const childId of node.children) {
-                const childNode = layoutNodes.get(childId);
-                if (childNode) {
-                    childrenTotalHeight += childNode._subtreeHeight;
-                }
-            }
-            childrenTotalHeight += Math.max(0, node.children.length - 1) * settings.verticalSpacing;
+        nodeColumn.set(nodeId, column);
+        
+        // 更新列宽
+        const currentWidth = columnWidths.get(column) || 0;
+        columnWidths.set(column, Math.max(currentWidth, node.width));
 
-            // 计算子节点的理想起始Y位置（垂直居中）
-            const idealChildrenStartY = node.y + (node.height / 2) - (childrenTotalHeight / 2);
-            // 确保子节点不会跑到父节点上方
-            const childrenStartY = Math.max(node.y, idealChildrenStartY);
-
-            // 设置每个子节点的位置
-            let currentY = childrenStartY;
-            for (const childId of node.children) {
-                const childNode = layoutNodes.get(childId);
-                if (childNode) {
-                    applyAbsolutePositions(childId, currentY);
-                    currentY += childNode._subtreeHeight + settings.verticalSpacing;
-                }
-            }
+        for (const childId of node.children) {
+            calculateColumns(childId, column);
         }
     }
 
-    // 计算层级X坐标
-    function calculateLevelX(): Map<number, number> {
-        const levelMap = new Map<string, number>();
-        const levelX = new Map<number, number>();
+    // 3. 计算节点位置 (从右向左居中对齐)
+    /**
+     * 从右向左计算节点位置
+     * 逻辑：
+     * 1. 叶子节点位置固定（在最后一列）
+     * 2. 父节点位置 = 其所有子节点 Y 坐标的中心
+     * 3. 如果父节点有多个子节点，子节点之间保持垂直间距
+     */
+    function calculatePositionsRightToLeft(nodeId: string): { minY: number, maxY: number, centerY: number } {
+        const node = layoutNodes.get(nodeId);
+        if (!node) return { minY: 0, maxY: 0, centerY: 0 };
 
-        // BFS计算层级
-        let queue: { nodeId: string; level: number }[] = [];
-        rootNodes.forEach(rootId => {
-            queue.push({ nodeId: rootId, level: 0 });
-            levelMap.set(rootId, 0);
-        });
-
-        while (queue.length > 0) {
-            const item = queue.shift();
-            if (!item) continue;
-            const { nodeId, level } = item;
-            const node = layoutNodes.get(nodeId);
-            if (node) {
-                node.children.forEach(childId => {
-                    if (!levelMap.has(childId)) {
-                        levelMap.set(childId, level + 1);
-                        queue.push({ nodeId: childId, level: level + 1 });
-                    }
-                });
-            }
+        if (node.children.length === 0) {
+            // 叶子节点：返回其自身的高度范围，初始 Y 设为 0（后续会加上偏移）
+            node.y = 0;
+            return { minY: 0, maxY: node.height, centerY: node.height / 2 };
         }
 
-        // 计算每层的最大宽度
-        const levelWidths = new Map<number, number>();
-        levelMap.forEach((level, nodeId) => {
-            const node = layoutNodes.get(nodeId);
-            if (node) {
-                const currentWidth = levelWidths.get(level) || 0;
-                levelWidths.set(level, Math.max(currentWidth, node.width));
-            }
-        });
+        // 有子节点的节点：先计算所有子节点的位置
+        let childrenMinY = Infinity;
+        let childrenMaxY = -Infinity;
+        let currentY = 0;
 
-        // 计算每层的X坐标
-        let currentX = 0;
-        const maxLevel = Math.max(...Array.from(levelWidths.keys()), 0);
-        for (let level = 0; level <= maxLevel; level++) {
-            levelX.set(level, currentX);
-            const width = levelWidths.get(level) || settings.textNodeWidth;
-            currentX += width + settings.horizontalSpacing;
+        const childRanges: { id: string, minY: number, maxY: number, centerY: number }[] = [];
+
+        for (const childId of node.children) {
+            const range = calculatePositionsRightToLeft(childId);
+            childRanges.push({ id: childId, ...range });
         }
 
-        return levelX;
+        // 垂直排列子节点
+        currentY = 0;
+        for (let i = 0; i < childRanges.length; i++) {
+            const range = childRanges[i];
+            if (!range) continue;
+            
+            const childNodeId = range.id;
+            
+            // 移动子树（包括其所有后代）
+            const offset = currentY - range.minY;
+            const subtreeStack = [childNodeId];
+            while (subtreeStack.length > 0) {
+                const sid = subtreeStack.pop()!;
+                const snode = layoutNodes.get(sid)!;
+                snode.y += offset;
+                subtreeStack.push(...snode.children);
+            }
+
+            childrenMinY = Math.min(childrenMinY, currentY);
+            childrenMaxY = Math.max(childrenMaxY, currentY + (range.maxY - range.minY));
+            
+            currentY += (range.maxY - range.minY) + settings.verticalSpacing;
+        }
+
+        // 父节点在子节点中心对齐
+        const childrenCenterY = (childrenMinY + childrenMaxY) / 2;
+        node.y = childrenCenterY - (node.height / 2);
+
+        // 返回该子树的总范围
+        const totalMinY = Math.min(node.y, childrenMinY);
+        const totalMaxY = Math.max(node.y + node.height, childrenMaxY);
+        
+        return { 
+            minY: totalMinY, 
+            maxY: totalMaxY, 
+            centerY: childrenCenterY 
+        };
     }
 
-    // 执行布局计算 - 包含虚拟边的完整布局
-    for (const rootId of rootNodes) {
-        calculateSubtreeHeight(rootId);
-        applyAbsolutePositions(rootId);
-    }
+    // 跟踪整个画布当前的全局最大 Y 底部位置（用于实现严格的“大行”块状布局）
+    let currentGlobalBottomY = -settings.verticalSpacing;
 
-    const levelX = calculateLevelX();
-
-    // 更新X坐标
-    const levelMap = new Map<string, number>();
-    let queue: { nodeId: string; level: number }[] = [];
+    // 为每个根节点（即每个“大行”）执行布局
     rootNodes.forEach(rootId => {
-        queue.push({ nodeId: rootId, level: 0 });
-        levelMap.set(rootId, 0);
+        // A. 计算深度和列
+        calculateMaxDepth(rootId);
+        calculateColumns(rootId, -1);
+        
+        // B. 从右向左计算该子树的内部相对位置（以根节点 y=0 为起始参考）
+        const subtreeRange = calculatePositionsRightToLeft(rootId);
+
+        // C. 收集子树所有节点
+        const subtreeNodes: string[] = [];
+        const stack = [rootId];
+        while (stack.length > 0) {
+            const id = stack.pop()!;
+            subtreeNodes.push(id);
+            const node = layoutNodes.get(id);
+            if (node) stack.push(...node.children);
+        }
+
+        // D. 计算该“大行”相对于其内部 y=0 的偏移量，使其整体位于上一个“大行”之下
+        // 用户要求：以整个“大行”中向下凸起最多的占位作为基准
+        
+        // 先找到子树在相对坐标系下的最高点（最小 Y）
+        let subtreeMinY = Infinity;
+        for (const id of subtreeNodes) {
+            const node = layoutNodes.get(id)!;
+            subtreeMinY = Math.min(subtreeMinY, node.y);
+        }
+
+        // 全局偏移量 = 当前全局底部 + 间隔 - 子树最高点
+        const globalOffsetY = (currentGlobalBottomY + settings.verticalSpacing) - subtreeMinY;
+
+        // E. 应用偏移量并更新全局底部位置
+        let maxSubtreeBottom = -Infinity;
+        for (const id of subtreeNodes) {
+            const node = layoutNodes.get(id)!;
+            node.y += globalOffsetY;
+            maxSubtreeBottom = Math.max(maxSubtreeBottom, node.y + node.height);
+        }
+
+        // 更新全局底部，确保下一个“大行”完全在当前大行之下
+        currentGlobalBottomY = maxSubtreeBottom;
     });
 
-    while (queue.length > 0) {
-        const item = queue.shift();
-        if (!item) continue;
-        const { nodeId, level } = item;
-        const node = layoutNodes.get(nodeId);
-        if (node) {
-            node.x = levelX.get(level) || 0;
-            node.children.forEach(childId => {
-                if (!levelMap.has(childId)) {
-                    levelMap.set(childId, level + 1);
-                    queue.push({ nodeId: childId, level: level + 1 });
-                }
-            });
-        }
+    // 4. 计算层级X坐标 (从左到右)
+    const columnX = new Map<number, number>();
+    let currentX = 0;
+    const sortedColumns = Array.from(columnWidths.keys()).sort((a, b) => a - b);
+    for (const col of sortedColumns) {
+        columnX.set(col, currentX);
+        const width = columnWidths.get(col) || settings.textNodeWidth;
+        currentX += width + settings.horizontalSpacing;
     }
+
+    // 更新所有节点的X坐标
+    layoutNodes.forEach((node, nodeId) => {
+        const col = nodeColumn.get(nodeId) || 0;
+        node.x = columnX.get(col) || 0;
+    });
 
     // 生成最终结果
     const result = new Map<string, { x: number; y: number; width: number; height: number }>();
     layoutNodes.forEach((node, nodeId) => {
-        result.set(nodeId, {
-            x: node.x,
-            y: node.y,
-            width: node.width,
-            height: node.height
-        });
+        // 只返回请求的节点（nodes参数中的节点）
+        if (nodes.has(nodeId)) {
+            result.set(nodeId, {
+                x: node.x,
+                y: node.y,
+                width: node.width,
+                height: node.height
+            });
+        }
     });
 
     debug('最终布局结果数量:', result.size);
@@ -476,3 +579,4 @@ export function arrangeLayout(
     endTimer();
     return result;
 }
+
