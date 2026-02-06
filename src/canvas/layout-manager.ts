@@ -6,6 +6,9 @@ import { debug, info, warn, error, trace, logTime } from '../utils/logger';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
 
+import { VisibilityService } from './services/visibility-service';
+import { LayoutDataProvider } from './services/layout-data-provider';
+
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
  */
@@ -15,6 +18,8 @@ export class LayoutManager {
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
     private canvasFileService: CanvasFileService;
+    private visibilityService: VisibilityService;
+    private layoutDataProvider: LayoutDataProvider;
     private floatingNodeService: FloatingNodeService | null = null;
 
     constructor(
@@ -22,13 +27,17 @@ export class LayoutManager {
         app: App,
         settings: CanvasMindmapBuildSettings,
         collapseStateManager: CollapseStateManager,
-        canvasFileService: CanvasFileService
+        canvasFileService: CanvasFileService,
+        visibilityService: VisibilityService,
+        layoutDataProvider: LayoutDataProvider
     ) {
         this.plugin = plugin;
         this.app = app;
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
         this.canvasFileService = canvasFileService;
+        this.visibilityService = visibilityService;
+        this.layoutDataProvider = layoutDataProvider;
         debug('LayoutManager 实例化完成');
     }
 
@@ -63,60 +72,19 @@ export class LayoutManager {
             return;
         }
 
-        // 获取节点和边，确保类型正确
-        const nodes = canvas.nodes instanceof Map ? canvas.nodes : new Map(Object.entries(canvas.nodes));
-        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) : 
-                     Array.isArray(canvas.edges) ? canvas.edges : [];
-
-        info(`arrangeCanvas: 检测到 ${nodes.size} 个节点, ${edges.length} 条边`);
-
-        if (!nodes || nodes.size === 0) {
-            new Notice("No nodes found in the canvas.");
-            warn("arrangeCanvas: 未找到任何节点");
-            return;
-        }
-
         try {
-            // 收集可见节点ID - 正确处理折叠状态
-            const visibleNodeIds = new Set<string>();
-
-            // 首先，获取所有节点ID
-            const allNodeIds = new Set<string>();
-            nodes.forEach((node: any, id: string) => {
-                allNodeIds.add(id);
-            });
-
-            debug(`arrangeCanvas: 所有节点ID: [${Array.from(allNodeIds).join(', ')}]`);
-
-            // 然后，排除被折叠的节点及其后代
-            const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
-            const allCollapsedNodes = new Set<string>(collapsedNodes);
-
-            debug(`arrangeCanvas: 折叠的节点: [${Array.from(collapsedNodes).join(', ')}]`);
-
-            // 递归添加所有后代节点到折叠集合中
-            collapsedNodes.forEach(nodeId => {
-                this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allCollapsedNodes);
-            });
-
-            debug(`arrangeCanvas: 所有被折叠的节点（包括后代）: [${Array.from(allCollapsedNodes).join(', ')}]`);
-
-            // 可见节点是所有节点减去折叠节点
-            allNodeIds.forEach(id => {
-                if (!allCollapsedNodes.has(id)) {
-                    visibleNodeIds.add(id);
-                }
-            });
-
-            debug(`arrangeCanvas: 可见节点ID: [${Array.from(visibleNodeIds).join(', ')}]`);
-
-            if (visibleNodeIds.size === 0) {
-                new Notice("No visible nodes found to arrange.");
-                warn("arrangeCanvas: 未找到任何可见节点");
+            // 1. 获取布局所需的所有数据
+            const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
+            if (!layoutData) {
+                new Notice("Failed to gather canvas data for layout.");
                 return;
             }
 
-            // 转换设置以匹配布局算法需要的格式
+            const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
+
+            info(`arrangeCanvas: 准备布局数据完成, 可见节点 ${visibleNodes.size}, 边 ${edges.length}`);
+
+            // 2. 转换设置以匹配布局算法需要的格式
             const layoutSettings: CanvasArrangerSettings = {
                 horizontalSpacing: this.settings.horizontalSpacing,
                 verticalSpacing: this.settings.verticalSpacing,
@@ -130,144 +98,23 @@ export class LayoutManager {
 
             debug('arrangeCanvas: 布局设置', layoutSettings);
 
-            // 记录原始位置
-            debug("arrangeCanvas: 原始节点位置:");
-            nodes.forEach((node: any, id: string) => {
-                if (visibleNodeIds.has(id)) {
-                    debug(`    节点 ${id}: x=${node.x || 0}, y=${node.y || 0}, width=${node.width || 'unknown'}, height=${node.height || 'unknown'}`);
-                }
-            });
-
-            // 从 Canvas 文件中读取原始数据（包含节点文本和边）
-            let originalEdges = edges;
-            let fileNodes = new Map<string, any>(); // 从文件读取的节点数据
-            let floatingNodes = new Set<string>(); // 浮动节点集合
-            let canvasData: any = null; // 用于传递给布局算法
-            try {
-                const canvasFilePath = canvas.file?.path || (activeView as any).file?.path;
-                if (canvasFilePath) {
-                    canvasData = await this.canvasFileService.readCanvasData(canvasFilePath);
-                    if (canvasData) {
-                        // 读取文件中的节点数据（包含 text 内容）
-                        const nodesList = this.canvasFileService.getNodes(canvasData);
-                        for (const node of nodesList) {
-                            if (node.id) {
-                                fileNodes.set(node.id, node);
-                            }
-                        }
-                        debug(`arrangeCanvas: 从文件读取到 ${fileNodes.size} 个节点`);
-
-                        const edgesList = this.canvasFileService.getEdges(canvasData);
-                        originalEdges = edgesList;
-                        debug(`arrangeCanvas: 从文件读取到 ${originalEdges.length} 条原始边`);
-
-                        // 读取浮动节点标记（只保留当前存在的节点）
-                        const allNodeIds = new Set<string>();
-                        nodes.forEach((node: any, id: string) => {
-                            allNodeIds.add(id);
-                        });
-
-                        const floatingInfo = this.canvasFileService.getFloatingNodesInfo(canvasData);
-                        for (const nodeId of floatingInfo.floatingNodes) {
-                            if (allNodeIds.has(nodeId)) {
-                                floatingNodes.add(nodeId);
-                            }
-                        }
-                        
-                        // 验证浮动节点：浮动节点应该是没有入边（没有父节点）的节点
-                        // 但它可能有出边（子节点），所以只检查入边
-                        const floatingNodesToRemove: string[] = [];
-                        for (const floatingNodeId of floatingNodes) {
-                            // 检查是否有边连接到该节点（作为目标节点）
-                            const hasIncomingEdge = originalEdges.some((edge: any) => {
-                                const toId = edge.to?.node?.id || edge.toNode || 
-                                            (typeof edge.to === 'string' ? edge.to : null);
-                                return toId === floatingNodeId;
-                            });
-                            
-                            // 如果浮动节点有入边（有父节点），说明它不是真正的浮动节点
-                            if (hasIncomingEdge) {
-                                floatingNodesToRemove.push(floatingNodeId);
-                                info(`arrangeCanvas: 浮动节点 ${floatingNodeId} 实际上有父节点，清除浮动状态`);
-                            }
-                        }
-                        
-                        // 从浮动节点集合中移除有父节点的节点
-                        for (const nodeId of floatingNodesToRemove) {
-                            floatingNodes.delete(nodeId);
-                            // 同时更新 canvasData，移除无效的浮动标记
-                            // 这样 arrangeLayout 就能使用验证后的数据
-                            if (canvasData?.metadata?.floatingNodes?.[nodeId]) {
-                                delete canvasData.metadata.floatingNodes[nodeId];
-                            }
-                            if (canvasData?.nodes) {
-                                const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
-                                if (nodeData?.data?.isFloating) {
-                                    delete nodeData.data.isFloating;
-                                    delete nodeData.data.originalParent;
-                                    delete nodeData.data.floatingTimestamp;
-                                }
-                            }
-                        }
-                        
-                        if (floatingNodes.size > 0) {
-                            info(`arrangeCanvas: 发现 ${floatingNodes.size} 个有效浮动节点: [${Array.from(floatingNodes).join(', ')}]`);
-                        }
-                    }
-                }
-            } catch (e) {
-                debug('arrangeCanvas: 无法读取原始数据，使用当前数据');
-            }
-
-            // 在 arrange 时不需要清除浮动状态，因为浮动子树应该参与布局
-            // 浮动状态的清除应该在添加新边时处理
-
-            // 计算新的布局（浮动子树作为整体参与布局）
-            // 创建只包含可见节点的新 Map，合并内存节点和文件节点的数据
-            const visibleNodes = new Map<string, any>();
-
-            nodes.forEach((node: any, id: string) => {
-                if (visibleNodeIds.has(id)) {
-                    // 合并内存节点和文件节点的数据，优先使用文件节点的 text
-                    const fileNode = fileNodes.get(id);
-                    const nodeText = fileNode?.text || node.text;
-
-                    // 检测是否是公式节点
-                    const isFormula = nodeText && /^\$\$[\s\S]*\$\$$/.test(nodeText.trim());
-                    if (isFormula) {
-                        debug(`arrangeCanvas: 检测到公式节点 ${id}: ${nodeText?.substring(0, 50)}...`);
-                    }
-
-                    const mergedNode = {
-                        ...node,
-                        ...(fileNode || {}),
-                        // 确保使用文件中的文本内容（用于检测公式）
-                        text: nodeText
-                    };
-                    visibleNodes.set(id, mergedNode);
-                }
-            });
-
-            debug(`arrangeCanvas: 可见节点数量: ${visibleNodes.size}`);
-
-            // 生成最终结果
+            // 3. 生成最终结果
             const result = originalArrangeLayout(
                 visibleNodes,
                 edges,
                 layoutSettings,
                 originalEdges,
-                nodes,
+                allNodes,
                 canvasData
             );
 
             info(`arrangeCanvas: 新布局计算完成，包含 ${result.size} 个节点`);
 
-            // 使用原子操作将新布局写入文件
-            const canvasFilePath = canvas.file?.path || (activeView as any).file?.path;
             if (!canvasFilePath) {
                 throw new Error('无法获取 Canvas 文件路径');
             }
 
+            // 4. 使用原子操作将新布局写入文件
             let updatedCount = 0;
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 if (!data.nodes) return false;
@@ -292,9 +139,9 @@ export class LayoutManager {
             if (success) {
                 info(`arrangeCanvas: 布局已成功保存到文件: ${canvasFilePath}`);
                 
-                // 更新内存中的节点位置以实现立即响应
+                // 5. 更新内存中的节点位置以实现立即响应
                 for (const [nodeId, newPosition] of result.entries()) {
-                    const node = nodes.get(nodeId);
+                    const node = allNodes.get(nodeId);
                     if (node && typeof node.setData === 'function') {
                         const currentData = node.getData ? node.getData() : {};
                         node.setData({
@@ -319,10 +166,8 @@ export class LayoutManager {
                 warn(`arrangeCanvas: 布局未发生变化或保存失败`);
             }
 
-            // 清理残留的浮动节点数据
-            await this.cleanupStaleFloatingNodes(canvas, nodes);
-            
-            // 重新应用浮动节点的红框样式
+            // 6. 后置处理：清理残留数据和重绘样式
+            await this.cleanupStaleFloatingNodes(canvas, allNodes);
             await this.reapplyFloatingNodeStyles(canvas);
 
             new Notice(`Canvas arranged successfully! ${updatedCount} nodes updated.`);

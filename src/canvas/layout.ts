@@ -332,11 +332,39 @@ export function arrangeLayout(
             const parentNode = layoutNodes.get(originalParentId);
             const childNode = layoutNodes.get(rootId);
             if (parentNode && childNode) {
-                // 确保子节点在父节点的children列表中（插入到开头，确保浮动子树排在前面）
+                // 确保子节点在父节点的children列表中
                 if (!parentNode.children.includes(rootId)) {
-                    parentNode.children.unshift(rootId);
+                    // 关键修复：为了保持浮动节点在原父节点下的相对顺序，
+                    // 我们查阅 originalEdges 中该父节点的所有子节点顺序
+                    const originalChildren = completeChildrenMap.get(originalParentId) || [];
+                    const rootIndex = originalChildren.indexOf(rootId);
+                    
+                    if (rootIndex !== -1) {
+                        // 寻找已经在 children 中的其他原始兄弟节点
+                        let inserted = false;
+                        for (let i = 0; i < parentNode.children.length; i++) {
+                            const currentChildId = parentNode.children[i];
+                            const currentChildOriginalIndex = originalChildren.indexOf(currentChildId);
+                            
+                            if (currentChildOriginalIndex > rootIndex) {
+                                // 插入到第一个原始序号比它大的节点之前
+                                parentNode.children.splice(i, 0, rootId);
+                                inserted = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!inserted) {
+                            parentNode.children.push(rootId);
+                        }
+                    } else {
+                        parentNode.children.push(rootId);
+                    }
                 }
-                layoutParentMap.set(rootId, originalParentId);
+                const originalParentId = floatingSubtreeOriginalParents.get(rootId);
+                if (originalParentId) {
+                    layoutParentMap.set(rootId, originalParentId);
+                }
             }
         }
     });
@@ -347,6 +375,13 @@ export function arrangeLayout(
         if (!layoutParentMap.has(id)) {
             rootNodes.push(id);
         }
+    });
+
+    // 对根节点进行排序，以便布局时的一致性
+    rootNodes.sort((a, b) => {
+        const nodeA = layoutNodes.get(a)!;
+        const nodeB = layoutNodes.get(b)!;
+        return nodeA.y - nodeB.y || nodeA.x - nodeB.x;
     });
 
     debug('根节点数量:', rootNodes.length);

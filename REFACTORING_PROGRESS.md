@@ -143,6 +143,17 @@
 
 ## 最近修复的问题
 
+### 2026-02-06 浮动节点重连样式与布局优化
+
+**修复问题：**
+1.  **重连后红框不消失**：由于 Obsidian 异步保存机制，新连的边可能尚未写入文件。重构 `LayoutDataProvider` 增加对内存中边的即时校验，确保连线后即使文件未保存也能立即识别并清除浮动状态。
+2.  **布局位置异常**：修复了浮动节点在布局时总是被强制插入到父节点子节点列表最前端的问题。现在浮动节点会根据 `originalEdges` 中的相对顺序，插入到正确的位置，保持布局的连续性。
+
+**技术改动：**
+- [layout-data-provider.ts](file:///Users/apple/Develop/canvas-mindmap-build/src/canvas/services/layout-data-provider.ts): `getValidatedFloatingNodes` 增加 `memoryEdges` 参数，实现双重校验。
+- [layout.ts](file:///Users/apple/Develop/canvas-mindmap-build/src/canvas/layout.ts): 改进虚拟边插入逻辑，通过 `completeChildrenMap` 计算相对序号进行精确位置插入。
+- [layout.ts](file:///Users/apple/Develop/canvas-mindmap-build/src/canvas/layout.ts): 增加根节点排序逻辑，增强布局稳定性。
+
 ### 2026-02-06: 浮动节点红框显示与连线逻辑优化
 
 **问题描述**:
