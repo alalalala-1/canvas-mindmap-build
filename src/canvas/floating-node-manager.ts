@@ -2,6 +2,13 @@ import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CanvasUIManager } from './canvas-ui-manager';
 import { debug, info, warn, error } from '../utils/logger';
+import {
+    getCanvasView,
+    getCurrentCanvasFilePath,
+    getNodeIdFromEdgeEndpoint,
+    readCanvasData,
+    writeCanvasData
+} from '../utils/canvas-utils';
 
 export class FloatingNodeManager {
     private app: App;
@@ -325,11 +332,7 @@ export class FloatingNodeManager {
     // 从边的端点获取节点 ID
     // =========================================================================
     private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-        if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
-        return null;
+        return getNodeIdFromEdgeEndpoint(endpoint);
     }
 
     // =========================================================================
@@ -352,29 +355,30 @@ export class FloatingNodeManager {
         const canvasFilePath = this.getCurrentCanvasFilePath();
         info(`[checkAndClearFloatingStateForNewEdges] canvasFilePath=${canvasFilePath || 'undefined'}`);
         
-        // 收集浮动节点（从 metadata 和节点 data 属性）
+        // 收集浮动节点（优先从内存中读取，确保看到最新的更改）
         const floatingNodesMap = new Map<string, any>();
         
-        if (!canvasFilePath) {
-            // 如果无法获取文件路径，尝试从 canvas.fileData 中读取
-            if (canvas.fileData?.metadata?.floatingNodes) {
-                info('[checkAndClearFloatingStateForNewEdges] 从内存中读取浮动节点');
-                Object.entries(canvas.fileData.metadata.floatingNodes).forEach(([id, data]) => {
-                    floatingNodesMap.set(id, data);
-                });
-            }
-            // 也从节点 data 属性读取
-            if (canvas.fileData?.nodes) {
-                for (const node of canvas.fileData.nodes) {
-                    if (node.data?.isFloating) {
-                        floatingNodesMap.set(node.id, {
-                            isFloating: true,
-                            originalParent: node.data.originalParent
-                        });
-                    }
+        // 1. 优先从内存中的 canvas.fileData 读取（包含最新的更改）
+        if (canvas.fileData?.metadata?.floatingNodes) {
+            info('[checkAndClearFloatingStateForNewEdges] 从内存中读取浮动节点');
+            Object.entries(canvas.fileData.metadata.floatingNodes).forEach(([id, data]) => {
+                floatingNodesMap.set(id, data);
+            });
+        }
+        // 也从内存中的节点 data 属性读取
+        if (canvas.fileData?.nodes) {
+            for (const node of canvas.fileData.nodes) {
+                if (node.data?.isFloating) {
+                    floatingNodesMap.set(node.id, {
+                        isFloating: true,
+                        originalParent: node.data.originalParent
+                    });
                 }
             }
-        } else {
+        }
+        
+        // 2. 如果内存中没有数据，再从文件中读取（兼容旧数据）
+        if (floatingNodesMap.size === 0 && canvasFilePath) {
             try {
                 const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
                 if (!(canvasFile instanceof TFile)) {
@@ -385,13 +389,13 @@ export class FloatingNodeManager {
                 const canvasContent = await this.app.vault.read(canvasFile);
                 const canvasData = JSON.parse(canvasContent);
                 
-                // 1. 从 metadata 读取（向后兼容）
+                // 从 metadata 读取（向后兼容）
                 const floatingNodes = canvasData.metadata?.floatingNodes || {};
                 Object.entries(floatingNodes).forEach(([id, data]) => {
                     floatingNodesMap.set(id, data);
                 });
                 
-                // 2. 从节点 data 属性读取（主要方式）
+                // 从节点 data 属性读取（主要方式）
                 if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
                     for (const node of canvasData.nodes) {
                         if (node.data?.isFloating) {
@@ -403,11 +407,13 @@ export class FloatingNodeManager {
                     }
                 }
                 
-                info(`[checkAndClearFloatingStateForNewEdges] 文件中有 ${floatingNodesMap.size} 个浮动节点记录`);
+                info(`[checkAndClearFloatingStateForNewEdges] 从文件中读取到 ${floatingNodesMap.size} 个浮动节点记录`);
             } catch (err) {
                 error('读取浮动节点时出错:', err);
                 return;
             }
+        } else {
+            info(`[checkAndClearFloatingStateForNewEdges] 从内存中读取到 ${floatingNodesMap.size} 个浮动节点记录`);
         }
 
         // 检查每条边的源节点和目标节点是否是浮动节点
@@ -510,8 +516,27 @@ export class FloatingNodeManager {
                 warn(`[clearFloatingNodeState] 无法获取 canvas 对象，跳过样式清除`);
             }
 
-            // 2. 延迟从文件中移除浮动标记（避免频繁修改文件导致 Obsidian 重新加载）
-            // 使用防抖策略，合并多次清除操作
+            // 2. 立即清除内存中的浮动标记（确保后续操作能立即看到更新）
+            if (canvasForStyle?.fileData) {
+                // 清除 metadata 中的标记
+                if (canvasForStyle.fileData.metadata?.floatingNodes?.[nodeId]) {
+                    delete canvasForStyle.fileData.metadata.floatingNodes[nodeId];
+                    info(`[clearFloatingNodeState] 已清除内存中节点 ${nodeId} 的浮动标记`);
+                }
+                // 清除节点 data 中的标记
+                if (canvasForStyle.fileData.nodes) {
+                    const nodeData = canvasForStyle.fileData.nodes.find((n: any) => n.id === nodeId);
+                    if (nodeData?.data?.isFloating) {
+                        delete nodeData.data.isFloating;
+                        delete nodeData.data.originalParent;
+                        delete nodeData.data.floatingTimestamp;
+                        info(`[clearFloatingNodeState] 已清除内存中节点 ${nodeId} 的 data 浮动标记`);
+                    }
+                }
+            }
+
+            // 3. 立即从文件中移除浮动标记（确保关闭再打开后不会看到旧的浮动标记）
+            // 使用防抖策略，合并多次清除操作，但延迟时间较短（100ms）
             this.debouncedClearFloatingNodeFromFile(nodeId);
             
         } catch (err) {
@@ -526,13 +551,13 @@ export class FloatingNodeManager {
         if (this.debouncedClearTimers.has(nodeId)) {
             window.clearTimeout(this.debouncedClearTimers.get(nodeId));
         }
-        
-        // 设置新的定时器，5秒后执行
+
+        // 设置新的定时器，100ms后执行（较短的延迟，既能合并操作，又能及时清除）
         const timer = window.setTimeout(() => {
             this.clearFloatingNodeFromFile(nodeId);
             this.debouncedClearTimers.delete(nodeId);
-        }, 5000);
-        
+        }, 100);
+
         this.debouncedClearTimers.set(nodeId, timer);
     }
 
@@ -541,12 +566,25 @@ export class FloatingNodeManager {
         try {
             const canvasFilePath = this.getCurrentCanvasFilePath();
             if (!canvasFilePath) return;
-            
+
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
             if (!(canvasFile instanceof TFile)) return;
-            
-            const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
+
+            // 使用内存中的 canvas 数据（如果可用），避免读取可能被覆盖的文件
+            const canvasView = this.getCanvasView();
+            const canvas = (canvasView as any)?.canvas;
+            let canvasData: any = null;
+
+            if (canvas?.fileData) {
+                // 使用内存中的数据
+                canvasData = JSON.parse(JSON.stringify(canvas.fileData));
+                info(`[clearFloatingNodeFromFile] 使用内存中的 canvas 数据`);
+            } else {
+                // 回退到读取文件
+                const canvasContent = await this.app.vault.read(canvasFile);
+                canvasData = JSON.parse(canvasContent);
+                info(`[clearFloatingNodeFromFile] 从文件读取 canvas 数据`);
+            }
 
             let modified = false;
 
@@ -574,7 +612,7 @@ export class FloatingNodeManager {
 
             if (modified) {
                 await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-                info(`[clearFloatingNodeFromFile] 已延迟清除节点 ${nodeId} 的浮动状态`);
+                info(`[clearFloatingNodeFromFile] 已清除节点 ${nodeId} 的浮动状态`);
             }
         } catch (err) {
             error('[clearFloatingNodeFromFile] 失败:', err);
@@ -596,69 +634,14 @@ export class FloatingNodeManager {
     // 获取当前 Canvas 文件路径
     // =========================================================================
     private getCurrentCanvasFilePath(): string | undefined {
-        // 方法1: 从 activeLeaf 获取
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view?.getViewType() === 'canvas') {
-            const canvas = (activeLeaf.view as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeLeaf.view as any).file?.path) {
-                return (activeLeaf.view as any).file.path;
-            }
-        }
-        
-        // 方法2: 从 getActiveViewOfType 获取
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (activeView?.getViewType() === 'canvas') {
-            const canvas = (activeView as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeView as any).file?.path) {
-                return (activeView as any).file.path;
-            }
-        }
-        
-        // 方法3: 从所有 leaves 中查找 canvas
-        const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of canvasLeaves) {
-            if (leaf.view?.getViewType() === 'canvas') {
-                const canvas = (leaf.view as any).canvas;
-                if (canvas?.file?.path) {
-                    return canvas.file.path;
-                }
-                if ((leaf.view as any).file?.path) {
-                    return (leaf.view as any).file.path;
-                }
-            }
-        }
-        
-        return undefined;
+        return getCurrentCanvasFilePath(this.app);
     }
 
     // =========================================================================
     // 获取 Canvas 视图
     // =========================================================================
     private getCanvasView(): ItemView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-            return activeLeaf.view as ItemView;
-        }
-
-        const leaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of leaves) {
-            if (leaf.view && (leaf.view as any).canvas) {
-                return leaf.view as ItemView;
-            }
-        }
-
-        const view = this.app.workspace.getActiveViewOfType(ItemView);
-        if (view && view.getViewType() === 'canvas') {
-            return view;
-        }
-
-        return null;
+        return getCanvasView(this.app);
     }
 
     // =========================================================================

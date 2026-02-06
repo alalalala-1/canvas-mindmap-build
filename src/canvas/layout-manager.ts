@@ -156,9 +156,18 @@ export class LayoutManager {
                             allNodeIds.add(id);
                         });
                         
-                        // 1. 从 metadata 读取（向后兼容）
-                        const floatingNodesData = canvas.fileData?.metadata?.floatingNodes || canvasData.metadata?.floatingNodes;
-                        if (floatingNodesData) {
+                        // 1. 优先从内存中的 canvas.fileData 读取（包含最新的更改）
+                        // 只有当内存中没有数据时，才从文件中读取
+                        const floatingNodesFromMemory = canvas.fileData?.metadata?.floatingNodes;
+                        const floatingNodesFromFile = canvasData.metadata?.floatingNodes;
+                        
+                        debug(`arrangeCanvas: 内存中的 floatingNodes:`, floatingNodesFromMemory ? Object.keys(floatingNodesFromMemory) : 'undefined');
+                        debug(`arrangeCanvas: 文件中的 floatingNodes:`, floatingNodesFromFile ? Object.keys(floatingNodesFromFile) : 'undefined');
+                        
+                        const floatingNodesData = floatingNodesFromMemory !== undefined ? 
+                            floatingNodesFromMemory : floatingNodesFromFile;
+                        
+                        if (floatingNodesData && Object.keys(floatingNodesData).length > 0) {
                             for (const nodeId of Object.keys(floatingNodesData)) {
                                 if (allNodeIds.has(nodeId)) {
                                     floatingNodes.add(nodeId);
@@ -166,12 +175,53 @@ export class LayoutManager {
                             }
                         }
                         
-                        // 2. 从节点本身的 data 属性读取（主要方式）
-                        const nodesArray = canvas.fileData?.nodes || canvasData.nodes;
+                        // 2. 从节点本身的 data 属性读取（优先内存，其次文件）
+                        const nodesArrayFromMemory = canvas.fileData?.nodes;
+                        const nodesArrayFromFile = canvasData.nodes;
+                        const nodesArray = nodesArrayFromMemory !== undefined ? 
+                            nodesArrayFromMemory : nodesArrayFromFile;
+                        
                         if (nodesArray && Array.isArray(nodesArray)) {
                             for (const node of nodesArray) {
                                 if (node.data?.isFloating && allNodeIds.has(node.id)) {
+                                    debug(`arrangeCanvas: 从 node.data 发现浮动节点: ${node.id}`);
                                     floatingNodes.add(node.id);
+                                }
+                            }
+                        }
+                        
+                        // 验证浮动节点：浮动节点应该是没有入边（没有父节点）的节点
+                        // 但它可能有出边（子节点），所以只检查入边
+                        const floatingNodesToRemove: string[] = [];
+                        for (const floatingNodeId of floatingNodes) {
+                            // 检查是否有边连接到该节点（作为目标节点）
+                            const hasIncomingEdge = originalEdges.some((edge: any) => {
+                                const toId = edge.to?.node?.id || edge.toNode || 
+                                            (typeof edge.to === 'string' ? edge.to : null);
+                                return toId === floatingNodeId;
+                            });
+                            
+                            // 如果浮动节点有入边（有父节点），说明它不是真正的浮动节点
+                            if (hasIncomingEdge) {
+                                floatingNodesToRemove.push(floatingNodeId);
+                                info(`arrangeCanvas: 浮动节点 ${floatingNodeId} 实际上有父节点，清除浮动状态`);
+                            }
+                        }
+                        
+                        // 从浮动节点集合中移除有父节点的节点
+                        for (const nodeId of floatingNodesToRemove) {
+                            floatingNodes.delete(nodeId);
+                            // 同时更新 canvasData，移除无效的浮动标记
+                            // 这样 arrangeLayout 就能使用验证后的数据
+                            if (canvasData?.metadata?.floatingNodes?.[nodeId]) {
+                                delete canvasData.metadata.floatingNodes[nodeId];
+                            }
+                            if (canvasData?.nodes) {
+                                const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
+                                if (nodeData?.data?.isFloating) {
+                                    delete nodeData.data.isFloating;
+                                    delete nodeData.data.originalParent;
+                                    delete nodeData.data.floatingTimestamp;
                                 }
                             }
                         }
@@ -343,8 +393,10 @@ export class LayoutManager {
 
         // 获取所有节点和边
         const nodes = canvas.nodes instanceof Map ? canvas.nodes : new Map(Object.entries(canvas.nodes));
-        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) : 
-                     Array.isArray(canvas.edges) ? canvas.edges : [];
+        // 优先使用 canvas.fileData.edges，因为它包含所有边（包括新添加的）
+        const edges = canvas.fileData?.edges || 
+                     (canvas.edges instanceof Map ? Array.from(canvas.edges.values()) : 
+                     Array.isArray(canvas.edges) ? canvas.edges : []);
 
         if (!nodes || nodes.size === 0) {
             trace('autoArrangeAfterToggle: 没有节点数据');
@@ -354,6 +406,12 @@ export class LayoutManager {
         try {
             // 获取所有子节点ID（包括后代）
             const allChildNodeIds = new Set<string>();
+            debug(`autoArrangeAfterToggle: 边数量: ${edges.length}`);
+            edges.forEach((edge: any, index: number) => {
+                const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+                const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                debug(`autoArrangeAfterToggle: 边 ${index}: ${fromId} -> ${toId}`);
+            });
             this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allChildNodeIds);
             
             // 从 canvasData 中读取浮动节点信息，将浮动子节点也添加到集合中
