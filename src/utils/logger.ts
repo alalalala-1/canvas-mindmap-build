@@ -42,6 +42,31 @@ export function log(...messages: any[]): void {
     console.log(body);
 }
 
+/**
+ * 关键日志函数 - 始终输出（用于浮动节点等关键诊断）
+ * 不受 enableDebugLogging 设置影响
+ */
+export function logCritical(...messages: any[]): void {
+
+    const body = messages.map(msg => {
+        if (msg === null) return 'null';
+        if (msg === undefined) return 'undefined';
+        if (typeof msg === 'object') {
+            try {
+                if (msg instanceof Error) {
+                    return `${msg.name}: ${msg.message}\n${msg.stack}`;
+                }
+                return JSON.stringify(msg);
+            } catch (e) {
+                return '[Complex Object]';
+            }
+        }
+        return String(msg);
+    }).join(' ');
+
+    console.log(body);
+}
+
 // 为了保持兼容性，暂时保留这些导出，但内部全部指向 log
 export const info = log;
 export const warn = log;

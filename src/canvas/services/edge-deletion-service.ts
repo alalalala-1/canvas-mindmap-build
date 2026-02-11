@@ -15,6 +15,7 @@ export class EdgeDeletionService {
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
     private floatingNodeService: FloatingNodeService;
+    private canvasManager: any;
 
     constructor(
         app: App,
@@ -28,6 +29,10 @@ export class EdgeDeletionService {
         this.settings = settings;
         this.canvasFileService = canvasFileService;
         this.floatingNodeService = floatingNodeService;
+    }
+
+    setCanvasManager(canvasManager: any): void {
+        this.canvasManager = canvasManager;
     }
 
     /**
@@ -165,6 +170,14 @@ export class EdgeDeletionService {
 
             // 统一刷新画布
             this.reloadCanvas(canvas);
+            
+            // 刷新折叠按钮（延迟执行确保DOM更新）
+            setTimeout(() => {
+                if (this.canvasManager) {
+                    log(`[EdgeDelete] 刷新折叠按钮`);
+                    this.canvasManager.checkAndAddCollapseButtons();
+                }
+            }, 200);
         } catch (err) {
             log(`[EdgeDelete] 失败`, err);
         }

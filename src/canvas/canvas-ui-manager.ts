@@ -24,10 +24,16 @@ export class CanvasUIManager {
     // =========================================================================
     async checkAndAddCollapseButtons() {
         const canvasView = this.getCanvasView();
-        if (!canvasView) return;
+        if (!canvasView) {
+            log(`[UI] checkAndAddCollapseButtons: 无 canvasView`);
+            return;
+        }
 
         const canvas = (canvasView as any).canvas;
-        if (!canvas) return;
+        if (!canvas) {
+            log(`[UI] checkAndAddCollapseButtons: 无 canvas`);
+            return;
+        }
 
         // 获取节点和边数据
         let nodes: any[] = [];
@@ -36,12 +42,17 @@ export class CanvasUIManager {
         if (canvas.fileData?.nodes) {
             nodes = canvas.fileData.nodes;
             edges = canvas.fileData?.edges || [];
+            log(`[UI] checkAndAddCollapseButtons: 从 fileData 获取, nodes=${nodes.length}, edges=${edges.length}`);
         } else if (canvas.nodes && canvas.edges) {
             nodes = Array.from(canvas.nodes.values());
             edges = Array.from(canvas.edges.values());
+            log(`[UI] checkAndAddCollapseButtons: 从内存获取, nodes=${nodes.length}, edges=${edges.length}`);
         }
 
-        if (nodes.length === 0 || edges.length === 0) return;
+        if (nodes.length === 0) {
+            log(`[UI] checkAndAddCollapseButtons: 无节点`);
+            return;
+        }
 
         // 获取所有存在的DOM节点元素
         const existingNodeEls = document.querySelectorAll('.canvas-node');
@@ -74,6 +85,7 @@ export class CanvasUIManager {
             if (!hasChildren) {
                 const existingBtn = nodeEl.querySelector('.cmb-collapse-button');
                 if (existingBtn) {
+                    log(`[UI] 移除折叠按钮: ${nodeId} (无子节点)`);
                     existingBtn.remove();
                     this.collapseStateManager.markExpanded(nodeId);
                 }

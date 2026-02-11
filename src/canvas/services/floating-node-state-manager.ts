@@ -50,6 +50,7 @@ export class FloatingNodeStateManager {
         _subtreeIds: string[] = []
     ): Promise<boolean> {
         try {
+            log(`[FloatingState] 标记节点为浮动: ${nodeId}, 原父节点: ${originalParentId}`);
             const timestamp = Date.now();
             const floatingData = {
                 isFloating: true,
@@ -71,6 +72,7 @@ export class FloatingNodeStateManager {
                         originalParent: originalParentId
                     };
                     modified = true;
+                    log(`[FloatingState] 更新 metadata.floatingNodes`);
                 }
 
                 if (canvasData.nodes) {
@@ -82,10 +84,14 @@ export class FloatingNodeStateManager {
                             nodeData.data.originalParent = originalParentId;
                             nodeData.data.floatingTimestamp = timestamp;
                             modified = true;
+                            log(`[FloatingState] 更新 node.data`);
                         }
+                    } else {
+                        log(`[FloatingState] 警告: 未找到节点 ${nodeId} 在 canvas 数据中`);
                     }
                 }
 
+                log(`[FloatingState] 标记回调返回 modified=${modified}`);
                 return modified;
             });
         } catch (err) {
@@ -200,10 +206,13 @@ export class FloatingNodeStateManager {
             const canvasContent = await this.app.vault.read(canvasFile);
             const canvasData = JSON.parse(canvasContent);
 
+            log(`[FloatingState] 读取文件: ${canvasFilePath}, nodes=${canvasData.nodes?.length || 0}, metadata=${canvasData.metadata ? 'exists' : 'null'}`);
+
             // 从节点 data 属性读取
             if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
                 for (const node of canvasData.nodes) {
                     if (node.data?.isFloating) {
+                        log(`[FloatingState] 从 node.data 找到浮动节点: ${node.id}`);
                         floatingNodes.set(node.id, {
                             isFloating: true,
                             originalParent: node.data.originalParent,
@@ -216,11 +225,18 @@ export class FloatingNodeStateManager {
 
             // 从 metadata 读取补充
             const metadataFloatingNodes = canvasData.metadata?.floatingNodes || {};
+            const metaCount = Object.keys(metadataFloatingNodes).length;
+            if (metaCount > 0) {
+                log(`[FloatingState] metadata.floatingNodes 数量: ${metaCount}`);
+            }
             for (const [nodeId, data] of Object.entries(metadataFloatingNodes)) {
                 if (!floatingNodes.has(nodeId)) {
-                    floatingNodes.set(nodeId, data);
+                    log(`[FloatingState] 从 metadata 找到浮动节点: ${nodeId}`);
+                    floatingNodes.set(nodeId, data as any);
                 }
             }
+
+            log(`[FloatingState] 从文件读取到浮动节点数: ${floatingNodes.size}`);
 
             // 更新缓存
             this.floatingNodesCache.set(canvasFilePath, floatingNodes);
@@ -264,6 +280,22 @@ export class FloatingNodeStateManager {
             log(`[FloatingState] 节点状态查询: ${nodeId} = 浮动 (原父节点: ${data?.originalParent})`);
         }
         
+        return isFloating;
+    }
+
+    /**
+     * 仅从内存缓存检查节点是否是浮动节点（不触发文件读取）
+     * 用于边创建事件处理，避免读取旧文件数据
+     */
+    isNodeFloatingFromCache(nodeId: string, canvasFilePath: string): boolean {
+        const canvasCache = this.floatingNodesCache.get(canvasFilePath);
+        if (!canvasCache) {
+            log(`[FloatingState] 内存缓存不存在: ${canvasFilePath}`);
+            return false;
+        }
+        const data = canvasCache.get(nodeId);
+        const isFloating = data?.isFloating === true;
+        log(`[FloatingState] 内存缓存查询: ${nodeId} = ${isFloating}`);
         return isFloating;
     }
 

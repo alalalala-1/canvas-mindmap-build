@@ -7,6 +7,14 @@ import { log } from '../../utils/logger';
  */
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
+    private canvas: any = null;
+
+    /**
+     * 设置当前 Canvas 对象（用于 DOM 元素查找）
+     */
+    setCanvas(canvas: any): void {
+        this.canvas = canvas;
+    }
 
     // =========================================================================
     // 样式应用
@@ -19,6 +27,7 @@ export class FloatingNodeStyleManager {
         try {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
+                log(`[Style] 找不到节点元素: ${nodeId}，将延迟重试`);
                 setTimeout(() => this.applyFloatingStyleRetry(nodeId, 1), 300);
                 setTimeout(() => this.applyFloatingStyleRetry(nodeId, 2), 1000);
                 return false;
@@ -31,7 +40,7 @@ export class FloatingNodeStyleManager {
             nodeEl.style.setProperty('box-shadow', '0 0 15px rgba(255, 68, 68, 0.4)', 'important');
             nodeEl.style.setProperty('outline', '0px solid transparent', 'important');
 
-            log(`[Style] 应用红框: ${nodeId}`);
+            log(`[Style] 成功应用红框: ${nodeId}`);
 
             // 强制重绘
             void nodeEl.offsetHeight;
@@ -74,11 +83,14 @@ export class FloatingNodeStyleManager {
         try {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
-                // 如果找不到元素，仅在重试时记录，减少初次尝试失败的日志噪音
+                log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
                 setTimeout(() => this.clearFloatingStyleRetry(nodeId, 1), 300);
+                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 2), 600);
+                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 3), 1000);
                 return false;
             }
 
+            log(`[Style] 清除红框: ${nodeId}, hasClass=${nodeEl.classList.contains(this.FLOATING_CLASS)}`);
             if (nodeEl.classList.contains(this.FLOATING_CLASS)) {
                 nodeEl.classList.remove(this.FLOATING_CLASS);
                 
@@ -92,17 +104,17 @@ export class FloatingNodeStyleManager {
                     contentEl.style.removeProperty('border-radius');
                 }
 
-                log(`[Style] 清除红框: ${nodeId}`);
                 // 强制重绘
                 void nodeEl.offsetHeight;
             } else {
-                // 如果没有类名，但也可能存在内联样式残留，尝试清除
-                if (nodeEl.style.getPropertyValue('border').includes('#ff4444')) {
+                // 即使没有类名，也检查并清除可能的内联样式
+                const border = nodeEl.style.getPropertyValue('border');
+                if (border && border.includes('#ff4444')) {
+                    log(`[Style] 强制清除残留内联样式: ${nodeId}`);
                     nodeEl.style.removeProperty('border');
                     nodeEl.style.removeProperty('border-radius');
                     nodeEl.style.removeProperty('box-shadow');
                     nodeEl.style.removeProperty('outline');
-                    log(`[Style] 强制清除残留内联样式: ${nodeId}`);
                 }
             }
             return true;
@@ -159,12 +171,31 @@ export class FloatingNodeStyleManager {
             return nodeEl;
         }
 
-        // 方法2: 遍历所有 canvas-node 元素
-        const allNodeEls = document.querySelectorAll('.canvas-node');
-        for (const el of Array.from(allNodeEls)) {
-            const dataNodeId = el.getAttribute('data-node-id');
-            if (dataNodeId === nodeId) {
-                return el as HTMLElement;
+        // 方法2: 通过 canvas 对象查找（如果已设置）
+        if (this.canvas?.nodes) {
+            const node = this.canvas.nodes.get(nodeId);
+            if (node?.nodeEl) {
+                return node.nodeEl as HTMLElement;
+            }
+        }
+
+        // 方法3: 遍历所有 canvas-node 元素，通过 canvas 对象匹配
+        if (this.canvas?.nodes) {
+            const allNodeEls = document.querySelectorAll('.canvas-node');
+            for (const el of Array.from(allNodeEls)) {
+                const dataNodeId = el.getAttribute('data-node-id');
+                if (dataNodeId === nodeId) {
+                    return el as HTMLElement;
+                }
+                // 尝试通过 canvas.nodes 匹配
+                const nodes = Array.from(this.canvas.nodes.values()) as any[];
+                for (const node of nodes) {
+                    if (node.nodeEl === el || (node.nodeEl && el.contains(node.nodeEl))) {
+                        if (node.id === nodeId) {
+                            return el as HTMLElement;
+                        }
+                    }
+                }
             }
         }
 

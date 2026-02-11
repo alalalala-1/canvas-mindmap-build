@@ -17,13 +17,18 @@ export class FloatingNodeService {
     private styleManager: FloatingNodeStyleManager;
     private edgeDetector: EdgeChangeDetector;
     private currentCanvasFilePath: string | null = null;
-    private canvas: any = null; // 缓存当前 canvas 对象
+    private canvas: any = null;
+    private canvasManager: any = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
         this.stateManager = new FloatingNodeStateManager(app, this.canvasFileService);
         this.styleManager = new FloatingNodeStyleManager();
         this.edgeDetector = new EdgeChangeDetector();
+    }
+
+    setCanvasManager(canvasManager: any): void {
+        this.canvasManager = canvasManager;
     }
 
     // =========================================================================
@@ -34,20 +39,49 @@ export class FloatingNodeService {
      * 为 Canvas 初始化浮动节点服务
      */
     async initialize(canvasFilePath: string, canvas: any): Promise<void> {
+        log(`[FloatingNode] initialize 被调用: canvasFilePath=${canvasFilePath}, canvas=${canvas ? 'exists' : 'null'}`);
+        
         this.canvas = canvas;
+        this.styleManager.setCanvas(canvas);
 
         if (this.currentCanvasFilePath === canvasFilePath) {
+            log(`[FloatingNode] 相同路径，重新初始化缓存并应用样式: ${canvasFilePath}`);
+            await this.stateManager.initializeCache(canvasFilePath, true);
+            await this.reapplyAllFloatingStyles(canvas);
+            this.startEdgeDetection(canvas);
             return;
         }
 
-        log(`[FloatingNode] 初始化: ${canvasFilePath} (已修正)`);
+        log(`[FloatingNode] 开始初始化: ${canvasFilePath}`);
         this.currentCanvasFilePath = canvasFilePath;
 
+        log(`[FloatingNode] 正在初始化缓存...`);
         await this.stateManager.initializeCache(canvasFilePath);
+        log(`[FloatingNode] 缓存初始化完成`);
 
+        log(`[FloatingNode] 正在重新应用浮动节点样式...`);
         await this.reapplyAllFloatingStyles(canvas);
+        log(`[FloatingNode] 样式应用完成`);
 
         this.startEdgeDetection(canvas);
+        log(`[FloatingNode] 初始化完成: ${canvasFilePath}`);
+        
+        // 如果 canvas 节点数为0，延迟重试（canvas可能还没加载完）
+        const nodeCount = canvas?.nodes instanceof Map ? canvas.nodes.size : 
+                         Array.isArray(canvas?.nodes) ? canvas.nodes.length : 0;
+        if (nodeCount === 0) {
+            log(`[FloatingNode] Canvas 节点数为0，延迟500ms重试样式应用`);
+            setTimeout(async () => {
+                if (this.canvas) {
+                    const retryNodeCount = this.canvas.nodes instanceof Map ? this.canvas.nodes.size : 
+                                          Array.isArray(this.canvas.nodes) ? this.canvas.nodes.length : 0;
+                    log(`[FloatingNode] 重试时 Canvas 节点数: ${retryNodeCount}`);
+                    if (retryNodeCount > 0) {
+                        await this.reapplyAllFloatingStyles(this.canvas);
+                    }
+                }
+            }, 500);
+        }
     }
 
     /**
@@ -82,49 +116,42 @@ export class FloatingNodeService {
             return false;
         }
 
-        if (this.canvas) {
-            let modified = false;
-            const timestamp = Date.now();
+        // 先更新内存缓存
+        const timestamp = Date.now();
+        this.stateManager.updateMemoryCache(filePath, nodeId, {
+            isFloating: true,
+            originalParent: originalParentId,
+            floatingTimestamp: timestamp
+        });
 
+        // 持久化到文件（通过 stateManager）
+        const persistSuccess = await this.stateManager.markNodeAsFloating(
+            nodeId,
+            originalParentId,
+            filePath,
+            subtreeIds
+        );
+        log(`[FloatingNode] 持久化浮动状态: ${nodeId}, success=${persistSuccess}`);
+
+        // 更新 canvas 内存中的节点数据
+        if (this.canvas) {
             const node = this.canvas.nodes.get(nodeId);
             if (node) {
                 if (!node.data) node.data = {};
                 node.data.isFloating = true;
                 node.data.originalParent = originalParentId;
                 node.data.floatingTimestamp = timestamp;
-                modified = true;
-            }
-            this.stateManager.updateMemoryCache(filePath, nodeId, {
-                isFloating: true,
-                originalParent: originalParentId,
-                floatingTimestamp: timestamp
-            });
-
-            if (modified) {
-                if (typeof this.canvas.requestSave === 'function') {
-                    this.canvas.requestSave();
-                } else if (typeof this.canvas.requestFrame === 'function') {
-                    this.canvas.requestFrame();
-                }
             }
 
-            this.styleManager.applyFloatingStyle(nodeId);
-
-            return true;
+            if (typeof this.canvas.requestSave === 'function') {
+                this.canvas.requestSave();
+            }
         }
 
-        const success = await this.stateManager.markNodeAsFloating(
-            nodeId,
-            originalParentId,
-            filePath,
-            []
-        );
+        // 应用样式
+        this.styleManager.applyFloatingStyle(nodeId);
 
-        if (success) {
-            this.styleManager.applyFloatingStyle(nodeId);
-        }
-
-        return success;
+        return persistSuccess;
     }
 
     /**
@@ -141,22 +168,30 @@ export class FloatingNodeService {
             nodesToClear.push(...subtreeChildren);
         }
 
-        // 仅在实际需要清除时输出日志
         if (nodesToClear.length > 0) {
             log(`[FloatingNode] 清除: ${nodeId} (共 ${nodesToClear.length} 个)`);
         }
 
+        // 1. 清除样式
         for (const id of nodesToClear) {
             this.styleManager.clearFloatingStyle(id);
         }
 
+        // 2. 更新内存缓存
         for (const id of nodesToClear) {
             this.stateManager.updateMemoryCache(this.currentCanvasFilePath, id, null);
         }
 
+        // 3. 持久化到文件（通过 stateManager）
+        const persistSuccess = await this.stateManager.clearNodeFloatingState(
+            nodeId, 
+            this.currentCanvasFilePath, 
+            clearSubtree
+        );
+        log(`[FloatingNode] 持久化清除浮动状态: ${nodeId}, success=${persistSuccess}`);
+
+        // 4. 更新 canvas 内存中的节点数据
         if (this.canvas) {
-            let modified = false;
-            
             for (const id of nodesToClear) {
                 const node = this.canvas.nodes.get(id);
                 if (node?.data) {
@@ -164,19 +199,15 @@ export class FloatingNodeService {
                     delete node.data.originalParent;
                     delete node.data.floatingTimestamp;
                     delete node.data.isSubtreeNode;
-                    modified = true;
                 }
             }
 
-            if (modified) {
-                if (typeof this.canvas.requestSave === 'function') {
-                    this.canvas.requestSave();
-                }
+            if (typeof this.canvas.requestSave === 'function') {
+                this.canvas.requestSave();
             }
-            return true;
         }
 
-        return await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath, clearSubtree);
+        return persistSuccess;
     }
 
     /**
@@ -199,6 +230,8 @@ export class FloatingNodeService {
 
     /**
      * 处理新边（当检测到新边时调用）
+     * 注意：此方法在边创建时被调用，此时边可能还未保存到文件
+     * 因此只更新内存状态，不触发文件操作
      */
     async handleNewEdge(edge: any): Promise<void> {
         const toNodeId = edge?.to?.node?.id || edge?.toNode || 
@@ -223,31 +256,43 @@ export class FloatingNodeService {
         // 1. 立即清除目标节点的视觉样式（入边消除红框）
         this.styleManager.clearFloatingStyle(toNodeId);
 
-        // 2. 强制刷新缓存并验证状态
-        await this.stateManager.initializeCache(this.currentCanvasFilePath, true);
+        // 2. 检查内存缓存中的浮动状态（不刷新缓存，避免读取旧文件数据）
+        const isToNodeFloating = await this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
+        log(`[FloatingNode] 目标节点 ${toNodeId} 浮动状态(内存): ${isToNodeFloating}`);
 
-        // 3. 检查并清除目标节点状态
-        const isToNodeFloating = await this.stateManager.isNodeFloating(toNodeId, this.currentCanvasFilePath);
+        // 3. 如果目标节点是浮动节点，清除其浮动状态（仅内存）
         if (isToNodeFloating) {
-            log(`[FloatingNode] 目标节点 ${toNodeId} 仍标记为浮动，正在清除状态...`);
-            await this.clearNodeFloatingState(toNodeId, true);
+            log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态（仅内存）...`);
+            // 只更新内存缓存，不触发文件修改
+            this.stateManager.updateMemoryCache(this.currentCanvasFilePath, toNodeId, null);
+            // 更新 canvas 内存中的节点数据
+            if (this.canvas) {
+                const node = this.canvas.nodes.get(toNodeId);
+                if (node) {
+                    if (!node.data) node.data = {};
+                    delete node.data.isFloating;
+                    delete node.data.originalParent;
+                    delete node.data.floatingTimestamp;
+                    delete node.data.isSubtreeNode;
+                    log(`[FloatingNode] 已清除 canvas 内存中的浮动数据: ${toNodeId}`);
+                }
+            }
         }
 
-        // 4. 检查源节点是否原本是浮动节点，如果是，则它变成了一个子树的根或中间节点
-        // 注意：不清除源节点的红框，除非它本身也有了入边
+        // 4. 检查源节点是否原本是浮动节点，如果是，保持其红框样式
         if (fromNodeId) {
-            const isFromNodeFloating = await this.stateManager.isNodeFloating(fromNodeId, this.currentCanvasFilePath);
+            const isFromNodeFloating = await this.stateManager.isNodeFloatingFromCache(fromNodeId, this.currentCanvasFilePath);
+            log(`[FloatingNode] 源节点 ${fromNodeId} 浮动状态(内存): ${isFromNodeFloating}`);
             if (isFromNodeFloating) {
                 log(`[FloatingNode] 源节点 ${fromNodeId} 是浮动节点，新边作为出边，保持其红框样式`);
-                // 确保样式还在（以防万一被误删）
                 this.styleManager.applyFloatingStyle(fromNodeId);
             }
         }
 
-        // 5. 如果有 canvas 对象，触发一次全局验证（处理可能存在的状态不同步）
-        if (this.canvas) {
-            const edges = Array.from(this.canvas.edges?.values() || []);
-            await this.validateFloatingNodes(edges);
+        // 5. 刷新折叠按钮（父节点可能需要显示折叠按钮）
+        if (this.canvasManager) {
+            log(`[FloatingNode] 新连线后刷新折叠按钮`);
+            this.canvasManager.checkAndAddCollapseButtons();
         }
     }
 
@@ -286,7 +331,17 @@ export class FloatingNodeService {
      * @param canvas 可选，Canvas 对象。如果提供，只应用当前 Canvas 中存在的节点
      */
     async reapplyAllFloatingStyles(canvas?: any): Promise<void> {
-        if (!this.currentCanvasFilePath) return;
+        log(`[FloatingNode] reapplyAllFloatingStyles 被调用, currentCanvasFilePath=${this.currentCanvasFilePath || 'null'}`);
+        
+        if (canvas) {
+            this.canvas = canvas;
+            this.styleManager.setCanvas(canvas);
+        }
+
+        if (!this.currentCanvasFilePath) {
+            log(`[FloatingNode] 警告: currentCanvasFilePath 为空，跳过样式应用`);
+            return;
+        }
 
         // 获取当前 Canvas 中的所有节点 ID
         const canvasNodeIds = new Set<string>();
@@ -300,6 +355,7 @@ export class FloatingNodeService {
                 if (nodeId) canvasNodeIds.add(nodeId);
             }
         }
+        log(`[FloatingNode] Canvas 中节点数: ${canvasNodeIds.size}`);
 
         // 获取当前 Canvas 中的所有边（用于验证浮动节点是否真的有入边）
         const edges: any[] = [];
@@ -313,13 +369,15 @@ export class FloatingNodeService {
                 if (edge) edges.push(edge);
             }
         }
+        log(`[FloatingNode] Canvas 中边数: ${edges.length}`);
 
         const floatingNodes = await this.stateManager.getAllFloatingNodes(
             this.currentCanvasFilePath
         );
 
+        log(`[FloatingNode] 从状态管理器获取的浮动节点数: ${floatingNodes.size}`);
         if (floatingNodes.size > 0) {
-            log(`[FloatingNode] 重新应用样式，当前记录数: ${floatingNodes.size}`);
+            log(`[FloatingNode] 浮动节点列表: ${Array.from(floatingNodes.keys()).join(', ')}`);
         }
 
         // 过滤出当前 Canvas 中存在的浮动节点
@@ -383,13 +441,18 @@ export class FloatingNodeService {
         }
 
 
+        log(`[FloatingNode] 有效浮动节点: ${validFloatingNodes.length}, 有入边: ${connectedFloatingNodes.length}, 无效: ${invalidFloatingNodes.length}`);
+
         // 应用有效节点的样式
         for (const nodeId of validFloatingNodes) {
+            log(`[FloatingNode] 正在应用样式到节点: ${nodeId}`);
             this.styleManager.applyFloatingStyle(nodeId);
         }
+        log(`[FloatingNode] 样式应用完成，共 ${validFloatingNodes.length} 个节点`);
 
         // 清理有入边的浮动节点状态（异步执行，不阻塞）
         if (connectedFloatingNodes.length > 0) {
+            log(`[FloatingNode] 清理有入边的浮动节点: ${connectedFloatingNodes.join(', ')}`);
             this.cleanupConnectedFloatingNodes(connectedFloatingNodes);
         }
 

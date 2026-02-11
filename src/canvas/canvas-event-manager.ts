@@ -46,13 +46,18 @@ export class CanvasEventManager {
      * 初始化事件监听
      */
     async initialize() {
+        log(`[Event] CanvasEventManager.initialize() 被调用`);
         this.registerEventListeners();
         
         // 如果当前已经有 canvas 打开，立即启动 observer 和事件监听器
         const canvasView = this.getCanvasView();
+        log(`[Event] getCanvasView() 返回: ${canvasView ? 'exists' : 'null'}`);
         if (canvasView) {
+            log(`[Event] 立即设置 canvas 事件监听器`);
             await this.setupCanvasEventListeners(canvasView);
             this.setupMutationObserver();
+        } else {
+            log(`[Event] 当前没有打开的 canvas，等待 active-leaf-change 事件`);
         }
     }
 
@@ -60,7 +65,9 @@ export class CanvasEventManager {
         // 监听 Canvas 视图打开
         this.plugin.registerEvent(
             this.app.workspace.on('active-leaf-change', async (leaf) => {
+                log(`[Event] active-leaf-change 触发, leaf=${leaf ? 'exists' : 'null'}, viewType=${leaf?.view?.getViewType() || 'null'}`);
                 if (leaf?.view?.getViewType() === 'canvas') {
+                    log(`[Event] Canvas 视图打开，开始设置事件监听`);
                     // 启动 MutationObserver
                     this.setupMutationObserver();
                     
@@ -298,95 +305,101 @@ export class CanvasEventManager {
     }
 
     // =========================================================================
-    // Canvas 事件监听
+    // Canvas 事件监听（使用 Obsidian 官方事件系统）
     // =========================================================================
     async setupCanvasEventListeners(canvasView: ItemView) {
         const canvas = (canvasView as any).canvas;
-        if (!canvas?.on) return;
-
-        // 初始化 FloatingNodeService（如果尚未初始化）
-        const canvasFilePath = canvas.file?.path || (canvasView as any).file?.path;
-        if (canvasFilePath) {
-            await this.floatingNodeService.initialize(canvasFilePath, canvas);
-        }
-
-        // 监听所有可能的事件
-        const events = ['edge-add', 'edge-change', 'edge-modify', 'connection-add', 'link-add'];
-        for (const eventName of events) {
-            canvas.on(eventName, async (data: any) => {
-                // 仅在关键事件时输出 log
-            });
-        }
+        log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
         
-        canvas.on('edge-add', async (edge: any) => {
-            const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-            const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
-            log(`[Event] Canvas:EdgeAdd: ${edge.id} (${fromId} -> ${toId})`);
+        if (!canvas) {
+            log(`[Event] canvas 不存在，跳过设置`);
+            return;
+        }
 
-            this.collapseStateManager.clearCache();
-            requestAnimationFrame(async () => {
-                try {
-                    await this.floatingNodeService.handleNewEdge(edge);
-                } catch (err) {
-                    log(`[EdgeAdd] 异常: ${err}`);
-                }
-            });
-            await this.canvasManager.checkAndAddCollapseButtons();
-        });
+        const canvasFilePath = canvas.file?.path || (canvasView as any).file?.path;
+        log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
+        
+        if (canvasFilePath) {
+            log(`[Event] 正在初始化 FloatingNodeService...`);
+            await this.floatingNodeService.initialize(canvasFilePath, canvas);
+            log(`[Event] FloatingNodeService 初始化完成`);
+        } else {
+            log(`[Event] 警告: 无法获取 canvas 文件路径，跳过 FloatingNodeService 初始化`);
+        }
 
-        canvas.on('edge-delete', (edge: any) => {
-            const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-            const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
-            log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
+        this.registerCanvasWorkspaceEvents(canvas);
+    }
 
-            this.collapseStateManager.clearCache();
-            this.canvasManager.checkAndAddCollapseButtons();
-        });
+    private registerCanvasWorkspaceEvents(canvas: any) {
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:edge-create' as any, async (edge: any) => {
+                const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
+                const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
-        canvas.on('node-select', async (node: any) => {
-            // 检查选中的节点是否是浮动节点，如果是，清除浮动状态
-            if (node?.id) {
-                const nodeId = node.id;
-
-                // 使用新的服务检查并清除浮动状态
-                const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
-                if (isFloating) {
-                    // 检查节点是否有入边（有父节点）
-                    // 浮动节点的定义是"没有入边（没有父节点）的节点"
-                    // 它可以有出边（子节点），所以只检查入边
-                    const hasIncomingEdge = this.checkNodeHasIncomingEdge(nodeId, canvas);
-
-                    if (hasIncomingEdge) {
-                        await this.floatingNodeService.clearNodeFloatingState(nodeId);
+                this.collapseStateManager.clearCache();
+                requestAnimationFrame(async () => {
+                    try {
+                        await this.floatingNodeService.handleNewEdge(edge);
+                    } catch (err) {
+                        log(`[EdgeCreate] 异常: ${err}`);
                     }
+                });
+                await this.canvasManager.checkAndAddCollapseButtons();
+            })
+        );
+
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:edge-delete' as any, (edge: any) => {
+                const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
+                const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
+
+                this.collapseStateManager.clearCache();
+                this.canvasManager.checkAndAddCollapseButtons();
+            })
+        );
+
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:node-create' as any, async (node: any) => {
+                log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(node?.id || node)}`);
+                if (node?.id) {
+                    const isFloating = await this.floatingNodeService.isNodeFloating(node.id);
+                    if (isFloating) {
+                        await this.floatingNodeService.clearNodeFloatingState(node.id);
+                    }
+                    log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${node.id}`);
+                    setTimeout(() => {
+                        this.canvasManager.adjustNodeHeightAfterRender(node.id);
+                    }, 100);
+                } else {
+                    log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
                 }
-            }
+            })
+        );
 
-            this.canvasManager.checkAndAddCollapseButtons();
-        });
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:node-delete' as any, (node: any) => {
+                log(`[Event] Canvas:NodeDelete: ${node.id}`);
+                this.floatingNodeService.clearFloatingMarks(node);
+                this.canvasManager.checkAndAddCollapseButtons();
+            })
+        );
 
-        canvas.on('node-add', async (node: any) => {
-            if (node?.id) {
-                const isFloating = await this.floatingNodeService.isNodeFloating(node.id);
-                if (isFloating) {
-                    await this.floatingNodeService.clearNodeFloatingState(node.id);
-                }
-                setTimeout(() => {
-                    this.canvasManager.adjustNodeHeightAfterRender(node.id);
-                }, 100);
-            }
-        });
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:node-move' as any, (node: any) => {
+                this.canvasManager.syncHiddenChildrenOnDrag(node);
+            })
+        );
 
-        canvas.on('node-delete', (node: any) => {
-            log(`[Event] Canvas:NodeDelete: ${node.id}`);
-            this.floatingNodeService.clearFloatingMarks(node);
-            this.canvasManager.checkAndAddCollapseButtons();
-        });
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:change' as any, async (canvasObj: any) => {
+                this.collapseStateManager.clearCache();
+                await this.canvasManager.checkAndAddCollapseButtons();
+            })
+        );
 
-        canvas.on('node-drag', (node: any) => {
-            // 只要节点有被折叠的子节点，或者有浮动子节点，就需要同步
-            this.canvasManager.syncHiddenChildrenOnDrag(node);
-        });
+        log(`[Event] Canvas 工作区事件已注册`);
     }
 
     // =========================================================================

@@ -176,16 +176,19 @@ export class CanvasFileService {
             const data = JSON.parse(content);
 
             const shouldModify = await updateCallback(data);
+            log(`[File] 原子修改第一次检查: shouldModify=${shouldModify}`);
 
             if (shouldModify) {
                 const latestContent = await this.app.vault.read(canvasFile);
                 const latestData = JSON.parse(latestContent);
                 
                 const finalShouldModify = await updateCallback(latestData);
+                log(`[File] 原子修改第二次检查: finalShouldModify=${finalShouldModify}`);
                 
                 if (finalShouldModify) {
                     const output = JSON.stringify(latestData, null, 2);
                     await this.app.vault.modify(canvasFile, output);
+                    log(`[File] 原子修改成功: ${filePath}`);
                     return true;
                 }
             }

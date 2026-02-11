@@ -63,11 +63,13 @@ export class CanvasManager {
             this.layoutDataProvider
         );
         this.floatingNodeService = new FloatingNodeService(app, settings);
+        this.floatingNodeService.setCanvasManager(this);
         this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this);
         this.nodeManager = new CanvasNodeManager(app, plugin, settings, collapseStateManager, this.canvasFileService);
         this.nodeManager.setCanvasManager(this);
         this.uiManager = new CanvasUIManager(app, settings, collapseStateManager);
         this.edgeDeletionService = new EdgeDeletionService(app, plugin, settings, this.canvasFileService, this.floatingNodeService);
+        this.edgeDeletionService.setCanvasManager(this);
 
         // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
         this.layoutManager.setFloatingNodeService(this.floatingNodeService);

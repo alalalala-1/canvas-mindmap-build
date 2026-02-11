@@ -30,20 +30,21 @@
   - 若无入边：`FloatingNodeService.markNodeAsFloating(childId, parentId, canvasFilePath, subtreeIds)`
 
 #### 1.4 新连线清理与一致性
-- **触发**: `CanvasEventManager` 监听 `edge-add`
+- **触发**: `CanvasEventManager` 监听 `canvas:edge-create`
 - **核心方法**: `FloatingNodeService.handleNewEdge(edge)`
   - 立即清除目标节点红框
-  - `initializeCache(force = true)` 强制刷新缓存
-  - 若目标节点仍标记浮动 → `clearNodeFloatingState(toNodeId, true)`
+  - 只查询内存缓存 `isNodeFloatingFromCache`，避免读取旧文件造成竞态
+  - 若目标节点仍标记浮动 → 仅清除内存缓存与 Canvas 内存节点的 `data` 字段
   - 源节点为浮动时仅保持红框，不主动清除
 
 #### 1.5 全量验证与样式重放
-- **方法**: `reapplyAllFloatingStyles(canvas)`
+- **方法**: `FloatingNodeService.reapplyAllFloatingStyles(canvas)`
 - **策略**:
   - 过滤当前 Canvas 中存在的节点
   - 校验入边，区分 `validFloatingNodes / connectedFloatingNodes / invalidFloatingNodes`
   - 对有入边的节点异步清理浮动状态
   - 对不存在的节点清理历史记录
+ - 布局后由 `LayoutManager.reapplyFloatingNodeStyles` 再次触发样式重放
 
 #### 1.6 视觉样式实现
 - **方法**: `FloatingNodeStyleManager.applyFloatingStyle(nodeId)`
@@ -185,7 +186,7 @@
 
 ### 技术实现要点
 
-#### 3.1 折叠状态存储
+#### 4.1 折叠状态存储
 ```typescript
 // 存储在 canvas 文件 metadata 中
 if (!canvasData.metadata) canvasData.metadata = {};
@@ -194,16 +195,22 @@ canvasData.metadata.collapseState[nodeId] = true; // 折叠
 delete canvasData.metadata.collapseState[nodeId]; // 展开
 ```
 
-#### 3.2 子节点识别
+#### 4.2 子节点识别
 - **直接子节点**: 从 edges 中查找 `fromNode === parentId` 的边
 - **所有后代**: 递归调用 `addAllDescendantsToSet`
 - **浮动子节点**: 额外检查 `metadata.floatingNodes`
 - **边端点解析**: 使用统一的 `getNodeIdFromEdgeEndpoint` 函数
 
-#### 3.3 自动布局
+#### 4.3 自动布局
 - **折叠时**: 重新布局可见节点（排除被折叠的子树）
 - **展开时**: 恢复子节点位置，可选择重新布局
 - **位置保持**: 使用 `originalArrangeLayout` 保持相对位置
+
+#### 4.4 折叠按钮渲染与清理
+- **入口**: `CanvasUIManager.checkAndAddCollapseButtons`
+- **DOM 映射**: 遍历 `.canvas-node` 并设置 `data-node-id`
+- **按钮条件**: 有子节点则添加按钮，无子节点则移除按钮并调用 `markExpanded`
+- **刷新时机**: 新增/删除边、节点创建/删除、Canvas 变化、MutationObserver 监听新增节点
 
 ### 踩坑记录
 1. **必须清除缓存** - 操作后调用 `collapseStateManager.clearCache()`
@@ -213,7 +220,7 @@ delete canvasData.metadata.collapseState[nodeId]; // 展开
 
 ---
 
-## 4. 思维导图布局算法
+## 5. 思维导图布局算法
 
 ### 核心概念
 - **树形布局**: 从左到右，父节点在左，子节点在右
@@ -222,14 +229,14 @@ delete canvasData.metadata.collapseState[nodeId]; // 展开
 
 ### 技术实现要点
 
-#### 4.1 布局流程
+#### 5.1 布局流程
 1. **构建图结构**: 从 nodes 和 edges 构建布局图
 2. **识别根节点**: 没有父节点的节点（排除浮动节点）
 3. **计算子树高度**: 递归计算每个节点的子树总高度
 4. **应用绝对位置**: 递归设置每个节点的 x、y 坐标
 5. **计算层级 X**: 根据层级计算每层的 X 坐标
 
-#### 4.2 子树高度计算
+#### 5.2 子树高度计算
 ```typescript
 function calculateSubtreeHeight(nodeId: string): number {
     const node = layoutNodes.get(nodeId);
@@ -251,7 +258,7 @@ function calculateSubtreeHeight(nodeId: string): number {
 }
 ```
 
-#### 4.3 位置计算
+#### 5.3 位置计算
 ```typescript
 // 子节点垂直居中
 const idealChildrenStartY = node.y + (node.height / 2) - (childrenTotalHeight / 2);
@@ -259,7 +266,7 @@ const idealChildrenStartY = node.y + (node.height / 2) - (childrenTotalHeight / 
 const childrenStartY = Math.max(node.y, idealChildrenStartY);
 ```
 
-#### 4.4 浮动节点处理
+#### 5.4 浮动节点处理
 - **不参与根节点识别** - 浮动节点有父节点（原父节点）
 - **作为正常子节点布局** - 添加到 children 列表，统一处理
 - **不显示连线** - 没有真实的边，只有虚拟边
@@ -272,7 +279,7 @@ const childrenStartY = Math.max(node.y, idealChildrenStartY);
 
 ---
 
-## 5. Canvas 事件处理
+## 6. Canvas 事件处理
 
 ### 核心概念
 - **MutationObserver**: 监听 DOM 变化，自动添加折叠按钮
@@ -281,7 +288,7 @@ const childrenStartY = Math.max(node.y, idealChildrenStartY);
 
 ### 技术实现要点
 
-#### 5.1 MutationObserver 使用
+#### 6.1 MutationObserver 使用
 ```typescript
 this.mutationObserver = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
@@ -298,15 +305,30 @@ this.mutationObserver = new MutationObserver((mutations) => {
 });
 ```
 
-#### 5.2 Canvas 事件监听
+#### 6.2 Canvas 事件监听
 ```typescript
-// 监听边创建事件
-this.app.workspace.on('canvas:edge-created', (canvas: any, edge: any) => {
-    // 处理新边
+this.app.workspace.on('canvas:edge-create', (edge: any) => {
+    // 新连线：处理浮动状态与折叠按钮
+});
+
+this.app.workspace.on('canvas:edge-delete', (edge: any) => {
+    // 删除连线：刷新折叠按钮
+});
+
+this.app.workspace.on('canvas:node-create', (node: any) => {
+    // 新节点：调整高度
+});
+
+this.app.workspace.on('canvas:node-delete', (node: any) => {
+    // 删除节点：清理浮动标记
+});
+
+this.app.workspace.on('canvas:change', () => {
+    // Canvas 变化：刷新折叠按钮
 });
 ```
 
-#### 5.3 防抖处理
+#### 6.3 防抖处理
 ```typescript
 private clickDebounceMap = new Map<string, number>();
 
@@ -328,7 +350,7 @@ private isDebounced(nodeId: string): boolean {
 
 ---
 
-## 6. 文件操作最佳实践
+## 7. 文件操作最佳实践
 
 ### 核心概念
 - **原子操作**: 读取 -> 修改 -> 写入，确保数据一致性
@@ -337,7 +359,7 @@ private isDebounced(nodeId: string): boolean {
 
 ### 技术实现要点
 
-#### 6.1 安全读取
+#### 7.1 安全读取
 ```typescript
 const canvasContent = await this.app.vault.read(canvasFile);
 let canvasData: any;
@@ -349,12 +371,12 @@ try {
 }
 ```
 
-#### 6.2 安全写入
+#### 7.2 安全写入
 ```typescript
 await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
 ```
 
-#### 6.3 数据更新模式 (原子操作)
+#### 7.3 数据更新模式 (原子操作)
 ```typescript
 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) => {
     // 修改 data
@@ -372,12 +394,12 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) 
 
 ---
 
-## 7. 调试技巧
+## 8. 调试技巧
 
 ### 日志系统
-- **分级日志**: debug、info、warn、error
-- **条件输出**: 根据 settings.enableDebugLogging 控制
-- **性能计时**: 使用 `logTime` 函数测量函数执行时间
+- **单一出口**: `log(...)` 统一输出格式
+- **条件输出**: 根据 `settings.enableDebugLogging` 控制
+- **关键日志**: `logCritical(...)` 不受设置开关影响
 
 ### 常用调试代码
 ```typescript
@@ -403,7 +425,7 @@ endTimer();
 
 ---
 
-## 8. 删除流程（节点与连线）
+## 9. 删除流程（节点与连线）
 
 ### 核心概念
 - **节点删除**: 提供单节点删除与级联删除两种策略
@@ -412,13 +434,13 @@ endTimer();
 
 ### 技术实现要点
 
-#### 8.1 节点删除入口与弹窗
+#### 9.1 节点删除入口与弹窗
 - **入口**: `CanvasEventManager.executeDeleteOperation`
 - **对话框**: `DeleteConfirmationModal` 返回 `cancel/single/cascade`
 - **子节点判断**: `CollapseStateManager.getChildNodes(nodeId, edges)`
 - **执行链路**: `handleSingleDelete` / `handleCascadeDelete`
 
-#### 8.2 单节点删除（子节点上移）
+#### 9.2 单节点删除（子节点上移）
 ```typescript
 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
     data.nodes = data.nodes.filter((n) => n.id !== node.id);
@@ -435,12 +457,12 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
 - **父节点获取**: `findParentNode` 根据 `edges` 反向查找
 - **刷新**: `clearCache` → `checkAndAddCollapseButtons` → `canvas.reload/requestUpdate`
 
-#### 8.3 级联删除（删除子树）
+#### 9.3 级联删除（删除子树）
 - **收集子树**: 递归 `CollapseStateManager.getChildNodes`
 - **删除策略**: 过滤 `nodes` 与 `edges` 中包含 `nodesToDelete` 的项
 - **提示**: `Notice` 显示删除数量
 
-#### 8.4 连线删除与浮动节点标记
+#### 9.4 连线删除与浮动节点标记
 - **入口**: `EdgeDeletionService.deleteSelectedEdge`
 - **边定位**: `canvas.selectedEdge / canvas.selectedEdges / lineGroupEl`
 - **删除逻辑**: 过滤 `fromNode/toNode` 匹配的边
@@ -449,7 +471,7 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
 
 ---
 
-## 9. UI 按钮与交互处理
+## 10. UI 按钮与交互处理
 
 ### 核心概念
 - **折叠按钮**: 只对有子节点的节点渲染
@@ -458,23 +480,23 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
 
 ### 技术实现要点
 
-#### 9.1 折叠按钮渲染与更新
+#### 10.1 折叠按钮渲染与更新
 - **入口**: `CanvasUIManager.checkAndAddCollapseButtons`
 - **DOM 映射**: `document.querySelectorAll('.canvas-node')` → `data-node-id`
 - **子节点判断**: `edges.some(fromId === nodeId)`
 - **状态更新**: `collapsed/expanded` class 与 `title`
 
-#### 9.2 按钮样式参数
+#### 10.2 按钮样式参数
 - **触摸检测**: `matchMedia('(pointer: coarse)')`
 - **尺寸**: `btnWidth = 24 (触摸) / 20 (鼠标)`，`btnHeight = nodeHeight * 1.3`
 - **位置**: `right = -btnWidth`，`top = 0`
 
-#### 9.3 点击拦截与防抖
+#### 10.3 点击拦截与防抖
 - **删除按钮识别**: `data-type="trash"` / `.clickable-icon` / svg / aria-label
 - **折叠按钮**: 300ms 防抖，调用 `toggleNodeCollapse`
 - **fromLink**: 解析 `<!-- fromLink:... -->` 并选区跳转
 
-#### 9.4 DOM 变化监听
+#### 10.4 DOM 变化监听
 ```typescript
 this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true });
 ```
@@ -483,7 +505,7 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ---
 
-## 10. 布局数据流与可见性
+## 11. 布局数据流与可见性
 
 ### 核心概念
 - **可见节点**: 排除折叠子树的节点集合
@@ -492,13 +514,13 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ### 技术实现要点
 
-#### 10.1 可见性计算
+#### 11.1 可见性计算
 - **入口**: `VisibilityService.getVisibleNodeIds`
 - **折叠集合**: `CollapseStateManager.getAllCollapsedNodes`
 - **后代扩展**: `addAllDescendantsToSet`
 - **输出**: 可见节点 `Set`
 
-#### 10.2 布局数据获取
+#### 11.2 布局数据获取
 - **入口**: `LayoutDataProvider.getLayoutData(canvas)`
 - **来源**: `canvas.nodes / canvas.edges` 与文件数据
 - **合并**: `visibleNodes.set(id, { ...node, ...(fileNode || {}) })`
@@ -506,7 +528,7 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ---
 
-## 11. 设置与生命周期
+## 12. 设置与生命周期
 
 ### 核心概念
 - **加载顺序**: `loadSettings` → `updateLoggerConfig` → `canvasManager.initialize`
@@ -515,46 +537,46 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ### 技术实现要点
 
-#### 11.1 插件生命周期
+#### 12.1 插件生命周期
 - **入口**: `main.ts onload`
 - **命令注册**: `add-to-canvas-mindmap` / `arrange-canvas-mindmap-layout` / `delete-selected-edge` / `adjust-all-text-node-heights`
 - **卸载**: `canvasManager.unload()`
 
-#### 11.2 设置面板
+#### 12.2 设置面板
 - **入口**: `CanvasMindmapBuildSettingTab.display`
 - **写入策略**: `onChange` → `saveSettings`
 - **文本宽度**: `parseInt(value) || 300`
 
-#### 11.3 验证与迁移
+#### 12.3 验证与迁移
 - **验证**: `validateSettings` 过滤非数值与非法颜色
 - **迁移**: `migrateFrom100To110` 添加 `collapseButtonColor`
 - **版本**: `CURRENT_SETTINGS_VERSION = "1.2.0"`
 
 ---
 
-## 12. 常见错误及解决方案
+## 13. 常见错误及解决方案
 
-### 12.1 "Right-hand side of 'instanceof' is not an object"
+### 13.1 "Right-hand side of 'instanceof' is not an object"
 **原因**: `getActiveViewOfType` 传入了字符串而不是类
 **解决**: 使用 `getActiveViewOfType(ItemView)` 而不是 `getActiveViewOfType('canvas')`
 
-### 12.2 "Cannot read property 'xxx' of undefined"
+### 13.2 "Cannot read property 'xxx' of undefined"
 **原因**: 访问了未初始化的对象属性
 **解决**: 使用可选链操作符 `?.` 或提前检查
 
-### 12.3 布局错乱
+### 13.3 布局错乱
 **原因**: 浮动节点处理不当，过滤或特殊处理导致
 **解决**: 浮动节点作为正常子节点处理，不特殊对待
 
-### 12.4 折叠展开不生效
+### 13.4 折叠展开不生效
 **原因**: 缓存未清除或浮动节点未处理
 **解决**: 调用 `clearCache()`，检查浮动子节点
 
-### 12.5 节点高度不自动调整
+### 13.5 节点高度不自动调整
 **原因**: CanvasManager 未正确注入或 DOM 元素不存在
 **解决**: 确保注入实例，做好 DOM 不存在时的回退
 
-### 12.6 浮动节点连接到新父节点后无法折叠
+### 13.6 浮动节点连接到新父节点后无法折叠
 **原因**: 
 - 边端点解析不一致
 - getChildNodes 缓存导致错误结果
@@ -566,7 +588,7 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ---
 
-## 13. 重构注意事项
+## 14. 重构注意事项
 
 ### 保持兼容性的原则
 1. **metadata 双写**: 新旧格式同时写入，读取时优先新格式
@@ -589,9 +611,9 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 
 ---
 
-## 14. 关键代码片段
+## 15. 关键代码片段
 
-### 14.1 安全获取 Canvas 文件路径
+### 15.1 安全获取 Canvas 文件路径
 ```typescript
 getCurrentCanvasFilePath(): string | undefined {
     // 方法1: activeLeaf
@@ -624,7 +646,7 @@ getCurrentCanvasFilePath(): string | undefined {
 }
 ```
 
-### 14.2 从边获取节点 ID
+### 15.2 从边获取节点 ID
 ```typescript
 getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
     if (!endpoint) return null;
@@ -635,7 +657,7 @@ getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
 }
 ```
 
-### 14.3 防抖函数
+### 15.3 防抖函数
 ```typescript
 private debounce<T extends (...args: any[]) => void>(
     fn: T,
@@ -651,5 +673,5 @@ private debounce<T extends (...args: any[]) => void>(
 
 ---
 
-*最后更新: 2026-02-06*
+*最后更新: 2026-02-11*
 *版本: 1.2.0*

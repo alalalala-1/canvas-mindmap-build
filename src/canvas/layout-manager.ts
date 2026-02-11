@@ -137,7 +137,18 @@ export class LayoutManager {
                 const fileEdgeIds = new Set(data.edges.map((e: any) => e.id));
                 for (const memEdge of memoryEdges) {
                     if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
-                        data.edges.push(memEdge);
+                        const serializableEdge = {
+                            id: memEdge.id,
+                            fromNode: memEdge.fromNode || memEdge.from?.node?.id || memEdge.from,
+                            toNode: memEdge.toNode || memEdge.to?.node?.id || memEdge.to,
+                            fromSide: memEdge.fromSide || memEdge.from?.side,
+                            toSide: memEdge.toSide || memEdge.to?.side,
+                            fromEnd: memEdge.fromEnd,
+                            toEnd: memEdge.toEnd,
+                            color: memEdge.color,
+                            label: memEdge.label
+                        };
+                        data.edges.push(serializableEdge);
                         changed = true;
                     }
                 }
@@ -532,14 +543,25 @@ export class LayoutManager {
     // 重新应用浮动节点的红框样式
     // =========================================================================
     private async reapplyFloatingNodeStyles(canvas: any): Promise<void> {
+        log(`[Layout] reapplyFloatingNodeStyles 被调用, floatingNodeService=${this.floatingNodeService ? 'exists' : 'null'}`);
         try {
-            const canvasFilePath = canvas.file?.path;
-            if (!canvasFilePath) return;
-
-            // 使用新的服务重新应用浮动节点样式（传入 canvas 只应用当前存在的节点）
-            if (this.floatingNodeService) {
-                await this.floatingNodeService.reapplyAllFloatingStyles(canvas);
+            const canvasFilePath = canvas.file?.path || (this.app.workspace.activeLeaf?.view as any).file?.path;
+            if (!canvasFilePath) {
+                log('[Layout] 警告: 无法获取 canvas 文件路径，跳过样式应用');
+                return;
             }
+
+            log(`[Layout] 开始重新应用浮动节点样式 for ${canvasFilePath}`);
+            // 延迟一点时间确保 DOM 已渲染完毕
+            setTimeout(async () => {
+                if (this.floatingNodeService) {
+                    log(`[Layout] 调用 floatingNodeService.reapplyAllFloatingStyles...`);
+                    await this.floatingNodeService.reapplyAllFloatingStyles(canvas);
+                    log(`[Layout] 完成重新应用浮动节点样式 for ${canvasFilePath}`);
+                } else {
+                    log(`[Layout] 警告: floatingNodeService 为 null，无法应用样式`);
+                }
+            }, 200);
         } catch (err) {
             log(`[Layout] 重新应用样式失败: ${err}`);
         }

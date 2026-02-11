@@ -20,6 +20,7 @@ export class NodeDeletionService {
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
     private canvasFileService: CanvasFileService;
+    private canvasManager: any;
 
     constructor(
         app: App,
@@ -31,6 +32,10 @@ export class NodeDeletionService {
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
         this.canvasFileService = canvasFileService;
+    }
+
+    setCanvasManager(canvasManager: any): void {
+        this.canvasManager = canvasManager;
     }
 
     /**
@@ -104,8 +109,8 @@ export class NodeDeletionService {
             }
 
             this.collapseStateManager.clearCache();
-            this.refreshCollapseButtons();
             this.reloadCanvas(canvas);
+            setTimeout(() => this.refreshCollapseButtons(), 200);
 
             new Notice('节点已删除');
         } catch (err) {
@@ -152,8 +157,8 @@ export class NodeDeletionService {
             });
 
             this.collapseStateManager.clearCache();
-            this.refreshCollapseButtons();
             this.reloadCanvas(canvas);
+            setTimeout(() => this.refreshCollapseButtons(), 200);
 
             new Notice(`已删除 ${nodesToDelete.size} 个节点`);
         } catch (err) {
@@ -205,11 +210,17 @@ export class NodeDeletionService {
      * 刷新折叠按钮
      */
     private refreshCollapseButtons(): void {
-        const canvasView = this.getCanvasView();
-        if (canvasView) {
-            const canvasManager = (canvasView as any).plugin?.canvasManager;
-            if (canvasManager) {
-                canvasManager.checkAndAddCollapseButtons();
+        log(`[Delete] refreshCollapseButtons 被调用, canvasManager=${this.canvasManager ? 'exists' : 'null'}`);
+        if (this.canvasManager) {
+            this.canvasManager.checkAndAddCollapseButtons();
+        } else {
+            log(`[Delete] canvasManager 未设置，尝试从视图获取`);
+            const canvasView = this.getCanvasView();
+            if (canvasView) {
+                const canvasManager = (canvasView as any).plugin?.canvasManager;
+                if (canvasManager) {
+                    canvasManager.checkAndAddCollapseButtons();
+                }
             }
         }
     }
