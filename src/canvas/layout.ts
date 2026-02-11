@@ -521,7 +521,9 @@ export function arrangeLayout(
     let currentGlobalBottomY = -settings.verticalSpacing;
 
     // 为每个根节点（即每个"大行"）执行布局
-    rootNodes.forEach(rootId => {
+    rootNodes.forEach((rootId, index) => {
+        log(`[Layout] 处理根节点 ${index + 1}/${rootNodes.length}: ${rootId}`);
+        
         // A. 计算深度和列
         calculateMaxDepth(rootId);
         calculateColumns(rootId, -1);
@@ -554,13 +556,19 @@ export function arrangeLayout(
         
         // 先找到子树在相对坐标系下的最高点（最小 Y）
         let subtreeMinY = Infinity;
+        let subtreeMaxY = -Infinity;
         for (const id of subtreeNodes) {
             const node = layoutNodes.get(id)!;
             subtreeMinY = Math.min(subtreeMinY, node.y);
+            subtreeMaxY = Math.max(subtreeMaxY, node.y + node.height);
         }
+        
+        const subtreeHeight = subtreeMaxY - subtreeMinY;
+        log(`[Layout] 根节点 ${rootId}: 子树高度=${subtreeHeight.toFixed(1)}, minY=${subtreeMinY.toFixed(1)}, maxY=${subtreeMaxY.toFixed(1)}`);
 
         // 全局偏移量 = 当前全局底部 + 间隔 - 子树最高点
         const globalOffsetY = (currentGlobalBottomY + settings.verticalSpacing) - subtreeMinY;
+        log(`[Layout] 根节点 ${rootId}: 全局偏移量=${globalOffsetY.toFixed(1)}, 当前底部=${currentGlobalBottomY.toFixed(1)}`);
 
         // E. 应用偏移量并更新全局底部位置
         let maxSubtreeBottom = -Infinity;
@@ -572,6 +580,7 @@ export function arrangeLayout(
 
         // 更新全局底部，确保下一个"大行"完全在当前大行之下
         currentGlobalBottomY = maxSubtreeBottom;
+        log(`[Layout] 根节点 ${rootId}: 新底部=${currentGlobalBottomY.toFixed(1)}`);
     });
 
     // 4. 计算层级X坐标 (从左到右)
