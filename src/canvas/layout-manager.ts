@@ -191,6 +191,7 @@ export class LayoutManager {
 
     /**
      * 在折叠/展开节点后自动整理布局
+     * 修复：考虑所有已折叠的节点，而不仅仅是当前操作的节点
      */
     async autoArrangeAfterToggle(nodeId: string, canvas: any, isCollapsing: boolean = true) {
         if (!canvas) return;
@@ -204,9 +205,21 @@ export class LayoutManager {
         if (!nodes || nodes.size === 0) return;
 
         try {
-            const allChildNodeIds = new Set<string>();
-            this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allChildNodeIds);
+            // 获取所有已折叠的节点（从全局状态）
+            const allCollapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
+            log(`[Layout] Toggle: 当前操作=${nodeId}, 已折叠=${Array.from(allCollapsedNodes).join(',')}`);
+
+            // 计算所有需要隐藏的节点（所有已折叠节点的后代）
+            const allHiddenNodeIds = new Set<string>();
             
+            for (const collapsedId of allCollapsedNodes) {
+                // 检查节点是否仍然存在（可能已被删除）
+                if (!nodes.has(collapsedId)) continue;
+                
+                this.collapseStateManager.addAllDescendantsToSet(collapsedId, edges, allHiddenNodeIds);
+            }
+            
+            // 也添加浮动子树节点
             const canvasData = canvas.fileData || canvas;
             if (canvasData?.metadata?.floatingNodes) {
                 for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
@@ -219,51 +232,41 @@ export class LayoutManager {
                         originalParent = (info as any).originalParent || '';
                     }
                     
-                    if (isFloating && originalParent === nodeId && !allChildNodeIds.has(floatingNodeId)) {
-                        allChildNodeIds.add(floatingNodeId);
+                    // 如果原父节点已折叠，添加浮动节点到隐藏集合
+                    if (isFloating && originalParent && allCollapsedNodes.has(originalParent)) {
+                        allHiddenNodeIds.add(floatingNodeId);
                     }
                 }
             }
             
-            if (isCollapsing) {
-                for (const childId of allChildNodeIds) {
-                    const childNode = nodes.get(childId);
-                    if (childNode?.nodeEl) {
-                        (childNode.nodeEl as HTMLElement).style.display = 'none';
-                    }
+            log(`[Layout] Toggle: 需要隐藏 ${allHiddenNodeIds.size} 个节点`);
+
+            // 应用显示/隐藏
+            nodes.forEach((node: any, id: string) => {
+                if (node?.nodeEl) {
+                    const shouldHide = allHiddenNodeIds.has(id);
+                    (node.nodeEl as HTMLElement).style.display = shouldHide ? 'none' : '';
                 }
-                
-                for (const edge of edges) {
-                    const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
-                    const toId = getNodeIdFromEdgeEndpoint(edge?.to);
-                    if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
-                        if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = 'none';
-                        if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = 'none';
-                    }
-                }
-            } else {
-                for (const childId of allChildNodeIds) {
-                    const childNode = nodes.get(childId);
-                    if (childNode?.nodeEl) {
-                        (childNode.nodeEl as HTMLElement).style.display = '';
-                    }
-                }
-                
-                for (const edge of edges) {
-                    const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
-                    const toId = getNodeIdFromEdgeEndpoint(edge?.to);
-                    if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
-                        if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = '';
-                        if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = '';
-                    }
-                }
+            });
+            
+            // 应用边的显示/隐藏
+            for (const edge of edges) {
+                const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
+                const toId = getNodeIdFromEdgeEndpoint(edge?.to);
+                const shouldHide = (fromId && allHiddenNodeIds.has(fromId)) || 
+                                  (toId && allHiddenNodeIds.has(toId));
+                if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+                if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
             }
 
+            // 计算可见节点
             const visibleNodeIds = new Set<string>();
             nodes.forEach((node: any, id: string) => {
                 const nodeEl = node.nodeEl as HTMLElement;
                 if (!nodeEl || nodeEl.style.display !== 'none') visibleNodeIds.add(id);
             });
+
+            log(`[Layout] Toggle: 可见节点=${visibleNodeIds.size}, 隐藏节点=${allHiddenNodeIds.size}`);
 
             const layoutSettings: CanvasArrangerSettings = {
                 horizontalSpacing: this.settings.horizontalSpacing,
@@ -287,7 +290,14 @@ export class LayoutManager {
                 const toId = getNodeIdFromEdgeEndpoint(edge?.to);
                 return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
             });
-            log(`[Layout] Toggle: ${visibleNodes.size} 可见节点, ${visibleEdges.length} 可见边`);
+            
+            log(`[Layout] Toggle: 可见边=${visibleEdges.length}`);
+            
+            // 如果可见节点太少，不需要布局
+            if (visibleNodes.size <= 1) {
+                log(`[Layout] Toggle: 可见节点太少，跳过布局`);
+                return;
+            }
             
             const newLayout = originalArrangeLayout(visibleNodes, visibleEdges, layoutSettings, undefined, undefined, canvasData);
 
@@ -321,6 +331,8 @@ export class LayoutManager {
 
             if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
             if (canvas.requestSave) canvas.requestSave();
+            
+            log(`[Layout] Toggle: 更新了 ${updatedCount} 个节点`);
             
         } catch (err) {
             log(`[Layout] Toggle 失败: ${err}`);
