@@ -43,6 +43,13 @@ export class LayoutDataProvider {
         const visibleNodeIds = this.visibilityService.getVisibleNodeIds(allNodes, edges);
         if (visibleNodeIds.size === 0) return null;
 
+        // 过滤可见边：只保留两个端点都可见的边
+        const visibleEdges = edges.filter((edge: any) => {
+            const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
+            const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+            return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
+        });
+
         let originalEdges = edges;
         let fileNodes = new Map<string, any>();
         let floatingNodes = new Set<string>();
@@ -83,12 +90,23 @@ export class LayoutDataProvider {
         return {
             visibleNodes,
             allNodes,
-            edges,
+            edges: visibleEdges, // 使用过滤后的可见边
             originalEdges,
             canvasData,
             floatingNodes,
             canvasFilePath: canvasFilePath || ''
         };
+    }
+
+    /**
+     * 从边的端点获取节点 ID
+     */
+    private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
+        if (!endpoint) return null;
+        if (typeof endpoint === 'string') return endpoint;
+        if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
+        if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
+        return null;
     }
 
     /**
