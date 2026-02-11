@@ -280,8 +280,16 @@ export class LayoutManager {
             nodes.forEach((node: any, id: string) => {
                 if (visibleNodeIds.has(id)) visibleNodes.set(id, node);
             });
+
+            // 过滤边：只保留两个端点都可见的边
+            const visibleEdges = edges.filter((edge: any) => {
+                const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
+                const toId = getNodeIdFromEdgeEndpoint(edge?.to);
+                return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
+            });
+            log(`[Layout] Toggle: ${visibleNodes.size} 可见节点, ${visibleEdges.length} 可见边`);
             
-            const newLayout = originalArrangeLayout(visibleNodes, edges, layoutSettings, undefined, undefined, canvasData);
+            const newLayout = originalArrangeLayout(visibleNodes, visibleEdges, layoutSettings, undefined, undefined, canvasData);
 
             if (!newLayout || newLayout.size === 0) return;
 
