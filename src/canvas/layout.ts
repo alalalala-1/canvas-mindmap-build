@@ -1,4 +1,4 @@
-import { debug, trace, logTime } from '../utils/logger';
+import { log } from '../utils/logger';
 
 interface LayoutNode {
     id: string;
@@ -168,11 +168,7 @@ export function arrangeLayout(
     allNodes?: Map<string, any>,
     canvasData?: any
 ): Map<string, { x: number; y: number; width: number; height: number }> {
-    const endTimer = logTime('arrangeLayout');
-
-    debug('arrangeLayout 开始');
-    debug('输入节点数量:', nodes.size);
-    debug('输入边数量:', edges.length);
+    log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
 
     // 获取浮动节点信息
     let { floatingNodes, originalParents } = getFloatingNodesInfo(canvasData);
@@ -191,8 +187,7 @@ export function arrangeLayout(
     floatingNodes = validFloatingNodes;
     originalParents = validOriginalParents;
 
-    debug('检测到浮动节点数量:', floatingNodes.size);
-    trace('浮动节点ID:', Array.from(floatingNodes));
+
 
     // 构建布局图
     const layoutNodes = new Map<string, LayoutNode>();
@@ -210,7 +205,6 @@ export function arrangeLayout(
         if (isFormula) {
             nodeHeight = settings.formulaNodeHeight || 80;
             formulaNodeCount++;
-            debug(`布局节点 ${nodeId}: 公式节点, 高度=${nodeHeight}`);
         } else {
             // 如果节点已有高度且不是默认值，保留它；否则重新估算
             const currentWidth = nodeData.width || settings.textNodeWidth;
@@ -231,8 +225,6 @@ export function arrangeLayout(
             _subtreeHeight: 0
         });
     });
-
-    debug(`布局节点数量: ${layoutNodes.size}, 其中公式节点: ${formulaNodeCount}`);
 
     // 构建当前边的父子关系（用于布局计算）
     const processedEdges = new Set<string>();
@@ -255,8 +247,6 @@ export function arrangeLayout(
             layoutParentMap.set(toId, fromId);
         }
     }
-
-    debug('处理后的边数量:', processedEdges.size);
 
     // 构建完整的父子关系（包括已删除的边，用于确定浮动子树的原父节点）
     const completeParentMap = new Map<string, string>(); // childId -> parentId
@@ -326,17 +316,17 @@ export function arrangeLayout(
 
     // 创建虚拟边：为浮动子树添加虚拟连接到原父节点
     floatingSubtreeRoots.forEach(rootId => {
-        const originalParentId = floatingSubtreeOriginalParents.get(rootId);
-        if (originalParentId) {
+        const parentId = floatingSubtreeOriginalParents.get(rootId);
+        if (parentId) {
             // 同时更新布局图
-            const parentNode = layoutNodes.get(originalParentId);
+            const parentNode = layoutNodes.get(parentId);
             const childNode = layoutNodes.get(rootId);
             if (parentNode && childNode) {
                 // 确保子节点在父节点的children列表中
                 if (!parentNode.children.includes(rootId)) {
                     // 关键修复：为了保持浮动节点在原父节点下的相对顺序，
                     // 我们查阅 originalEdges 中该父节点的所有子节点顺序
-                    const originalChildren = completeChildrenMap.get(originalParentId) || [];
+                    const originalChildren = completeChildrenMap.get(parentId) || [];
                     const rootIndex = originalChildren.indexOf(rootId);
                     
                     if (rootIndex !== -1) {
@@ -344,6 +334,7 @@ export function arrangeLayout(
                         let inserted = false;
                         for (let i = 0; i < parentNode.children.length; i++) {
                             const currentChildId = parentNode.children[i];
+                            if (!currentChildId) continue;
                             const currentChildOriginalIndex = originalChildren.indexOf(currentChildId);
                             
                             if (currentChildOriginalIndex > rootIndex) {
@@ -361,10 +352,7 @@ export function arrangeLayout(
                         parentNode.children.push(rootId);
                     }
                 }
-                const originalParentId = floatingSubtreeOriginalParents.get(rootId);
-                if (originalParentId) {
-                    layoutParentMap.set(rootId, originalParentId);
-                }
+                layoutParentMap.set(rootId, parentId);
             }
         }
     });
@@ -384,8 +372,9 @@ export function arrangeLayout(
         return nodeA.y - nodeB.y || nodeA.x - nodeB.x;
     });
 
-    debug('根节点数量:', rootNodes.length);
-    debug('浮动子树根节点数量:', floatingSubtreeRoots.size);
+    if (rootNodes.length > 0) {
+        log(`[Layout] 根: ${rootNodes.length}${floatingSubtreeRoots.size > 0 ? ' (浮动: ' + floatingSubtreeRoots.size + ')' : ''}`);
+    }
 
     // 1. 计算每个节点的子树高度（从右到左/自底向上）
     function calculateSubtreeHeight(nodeId: string): number {
@@ -546,11 +535,21 @@ export function arrangeLayout(
         // C. 收集子树所有节点
         const subtreeNodes: string[] = [];
         const stack = [rootId];
+        const visited = new Set<string>(); // 防止循环
         while (stack.length > 0) {
             const id = stack.pop()!;
+            if (visited.has(id)) continue;
+            visited.add(id);
+            
             subtreeNodes.push(id);
             const node = layoutNodes.get(id);
-            if (node) stack.push(...node.children);
+            if (node) {
+                // 逆序压栈以保持原有的子节点顺序
+                for (let i = node.children.length - 1; i >= 0; i--) {
+                    const childId = node.children[i];
+                    if (childId) stack.push(childId);
+                }
+            }
         }
 
         // D. 计算该“大行”相对于其内部 y=0 的偏移量，使其整体位于上一个“大行”之下
@@ -594,10 +593,10 @@ export function arrangeLayout(
         node.x = columnX.get(col) || 0;
     });
 
-    // 生成最终结果
+    log(`[Layout] 完成: ${layoutNodes.size} 节点`);
+
     const result = new Map<string, { x: number; y: number; width: number; height: number }>();
     layoutNodes.forEach((node, nodeId) => {
-        // 只返回请求的节点（nodes参数中的节点）
         if (nodes.has(nodeId)) {
             result.set(nodeId, {
                 x: node.x,
@@ -608,10 +607,6 @@ export function arrangeLayout(
         }
     });
 
-    debug('最终布局结果数量:', result.size);
-    debug('arrangeLayout 完成');
-
-    endTimer();
     return result;
 }
 

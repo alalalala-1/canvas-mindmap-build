@@ -1,7 +1,7 @@
 import {App, PluginSettingTab, Setting} from "obsidian";
 import CanvasMindmapBuildPlugin from "../main";
 import { CanvasMindmapBuildSettings } from "./types";
-import { updateLoggerConfig, info } from "../utils/logger";
+import { updateLoggerConfig, log } from "../utils/logger";
 
 export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
     plugin: CanvasMindmapBuildPlugin;
@@ -155,25 +155,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     this.plugin.settings.enableDebugLogging = value;
                     await this.plugin.saveSettings();
                     updateLoggerConfig(this.plugin.settings);
-                    info(`Debug logging ${value ? 'enabled' : 'disabled'}`);
+                    log(`Debug logging ${value ? 'enabled' : 'disabled'}`);
                 }));
-
-        new Setting(containerEl)
-            .setName('Log Level')
-            .setDesc('Select the verbosity level for debug logs.')
-            .addDropdown(dropdown => dropdown
-                .addOption('error', 'Error - Only errors')
-                .addOption('warn', 'Warn - Errors and warnings')
-                .addOption('info', 'Info - General information (default)')
-                .addOption('debug', 'Debug - Detailed debug information')
-                .addOption('verbose', 'Verbose - All messages including trace')
-                .setValue(this.plugin.settings.logLevel)
-                .onChange(async (value) => {
-                    this.plugin.settings.logLevel = value as CanvasMindmapBuildSettings['logLevel'];
-                    await this.plugin.saveSettings();
-                    updateLoggerConfig(this.plugin.settings);
-                    info(`Log level changed to: ${value}`);
-                }));
-
     }
 }

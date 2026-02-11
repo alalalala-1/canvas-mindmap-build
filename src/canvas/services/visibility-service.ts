@@ -1,5 +1,5 @@
 import { CollapseStateManager } from '../../state/collapse-state';
-import { debug, info } from '../../utils/logger';
+import { log } from '../../utils/logger';
 
 /**
  * 可见性服务 - 负责计算 Canvas 中哪些节点和边是可见的
@@ -22,7 +22,6 @@ export class VisibilityService {
         const visibleNodeIds = new Set<string>();
         const allNodeIds = new Set<string>();
 
-        // 1. 收集所有节点 ID
         if (nodes instanceof Map) {
             nodes.forEach((_, id) => allNodeIds.add(id));
         } else if (Array.isArray(nodes)) {
@@ -31,25 +30,22 @@ export class VisibilityService {
             });
         }
 
-        // 2. 获取所有被折叠的节点及其后代
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
         const allCollapsedNodes = new Set<string>(collapsedNodes);
 
-        // 递归添加所有后代节点到折叠集合中
         collapsedNodes.forEach(nodeId => {
             this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allCollapsedNodes);
         });
 
-        debug(`[VisibilityService] 折叠节点数量: ${collapsedNodes.length}, 总计隐藏节点数量: ${allCollapsedNodes.size}`);
-
-        // 3. 计算可见节点（所有节点 - 隐藏节点）
         allNodeIds.forEach(id => {
             if (!allCollapsedNodes.has(id)) {
                 visibleNodeIds.add(id);
             }
         });
 
-        info(`[VisibilityService] 计算完成: 可见节点 ${visibleNodeIds.size} / 总节点 ${allNodeIds.size}`);
+        if (allCollapsedNodes.size > 0) {
+            log(`[Visibility] 可见: ${visibleNodeIds.size}/${allNodeIds.size} (隐藏: ${allCollapsedNodes.size})`);
+        }
         return visibleNodeIds;
     }
 
@@ -61,7 +57,7 @@ export class VisibilityService {
      */
     isNodeVisible(nodeId: string, edges: any[]): boolean {
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
-        if (collapsedNodes.includes(nodeId)) return false;
+        if (collapsedNodes.has(nodeId)) return false;
 
         // 检查该节点是否是任何折叠节点的后代
         for (const collapsedId of collapsedNodes) {

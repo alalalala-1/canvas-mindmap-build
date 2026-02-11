@@ -3,7 +3,7 @@
  */
 
 import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './types';
-import { info, error } from '../utils/logger';
+import { log } from '../utils/logger';
 
 /**
  * 验证设置数据
@@ -63,9 +63,6 @@ export function validateSettings(data: any): Partial<CanvasMindmapBuildSettings>
     if (typeof data.enableDebugLogging === 'boolean') {
         validated.enableDebugLogging = data.enableDebugLogging;
     }
-    if (typeof data.logLevel === 'string' && ['error', 'warn', 'info', 'debug', 'verbose'].includes(data.logLevel)) {
-        validated.logLevel = data.logLevel;
-    }
 
     return validated;
 }
@@ -105,7 +102,7 @@ export function migrateSettings(
         return settings;
     }
 
-    info(`迁移设置从版本 ${version} 到 ${CURRENT_SETTINGS_VERSION}`);
+    log(`迁移设置从版本 ${version} 到 ${CURRENT_SETTINGS_VERSION}`);
 
     let migrated = { ...settings };
 

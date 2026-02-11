@@ -3,8 +3,13 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CollapseStateManager } from '../../state/collapse-state';
 import { CanvasFileService } from './canvas-file-service';
 import { DeleteConfirmationModal } from '../../ui/delete-modal';
-import { generateRandomId, getNodeIdFromEdgeEndpoint } from '../../utils/canvas-utils';
-import { error } from '../../utils/logger';
+import {
+    generateRandomId,
+    getEdgeFromNodeId,
+    getEdgeToNodeId,
+    getCurrentCanvasFilePath
+} from '../../utils/canvas-utils';
+import { log } from '../../utils/logger';
 
 /**
  * 节点删除服务
@@ -32,6 +37,7 @@ export class NodeDeletionService {
      * 执行删除操作（显示确认对话框）
      */
     async executeDeleteOperation(selectedNode: any, canvas: any): Promise<void> {
+        log(`[UI] 删除节点: ${selectedNode.id}`);
         const edges = this.getEdgesFromCanvas(canvas);
         const hasChildren = this.collapseStateManager.getChildNodes(selectedNode.id, edges).length > 0;
 
@@ -53,61 +59,58 @@ export class NodeDeletionService {
      */
     async handleSingleDelete(node: any, canvas: any): Promise<void> {
         try {
+            log(`[Delete] 单节点: ${node.id}`);
             const edges = this.getEdgesFromCanvas(canvas);
             const allNodes = Array.from(canvas.nodes.values()) as any[];
             const parentNode = this.findParentNode(node.id, edges, allNodes);
             const childNodes = this.collapseStateManager.getChildNodes(node.id, edges);
-            const canvasFilePath = canvas.file?.path;
+            const canvasFilePath = getCurrentCanvasFilePath(this.app);
 
-            if (!canvasFilePath) {
-                throw new Error('无法获取 Canvas 文件路径');
-            }
+            if (!canvasFilePath) throw new Error('无法获取路径');
 
             if (parentNode && childNodes.length > 0) {
-                // 创建新的边连接父节点到子节点
+
                 const newEdges: any[] = [];
                 for (const childId of childNodes) {
-                    const newEdge = {
+                    newEdges.push({
                         id: generateRandomId(),
                         fromNode: parentNode.id,
                         fromSide: 'right',
                         toNode: childId,
                         toSide: 'left'
-                    };
-                    newEdges.push(newEdge);
+                    });
                 }
 
                 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) => {
-                    const initialCount = data.nodes.length;
                     data.nodes = data.nodes.filter((n: any) => n.id !== node.id);
-                    data.edges = data.edges.filter((e: any) =>
-                        e.fromNode !== node.id && e.toNode !== node.id
-                    );
+                    data.edges = data.edges.filter((e: any) => {
+                        const fromId = getEdgeFromNodeId(e);
+                        const toId = getEdgeToNodeId(e);
+                        return fromId !== node.id && toId !== node.id;
+                    });
                     data.edges.push(...newEdges);
-                    return data.nodes.length !== initialCount;
+                    return true;
                 });
             } else {
                 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) => {
-                    const initialCount = data.nodes.length;
                     data.nodes = data.nodes.filter((n: any) => n.id !== node.id);
-                    data.edges = data.edges.filter((e: any) =>
-                        e.fromNode !== node.id && e.toNode !== node.id
-                    );
-                    return data.nodes.length !== initialCount;
+                    data.edges = data.edges.filter((e: any) => {
+                        const fromId = getEdgeFromNodeId(e);
+                        const toId = getEdgeToNodeId(e);
+                        return fromId !== node.id && toId !== node.id;
+                    });
+                    return true;
                 });
             }
 
             this.collapseStateManager.clearCache();
             this.refreshCollapseButtons();
+            this.reloadCanvas(canvas);
 
-            if (typeof canvas.reload === 'function') {
-                canvas.reload();
-            }
-
-            new Notice('节点删除成功！');
+            new Notice('节点已删除');
         } catch (err) {
-            error('删除节点失败:', err);
-            new Notice('删除操作失败，请重试');
+            log(`[Delete] 失败:`, err);
+            new Notice('删除失败');
         }
     }
 
@@ -116,16 +119,15 @@ export class NodeDeletionService {
      */
     async handleCascadeDelete(node: any, canvas: any): Promise<void> {
         try {
+            log(`[Delete] 级联: ${node.id}`);
             const edges = this.getEdgesFromCanvas(canvas);
+
             const nodesToDelete = new Set<string>();
             nodesToDelete.add(node.id);
-            const canvasFilePath = canvas.file?.path;
+            const canvasFilePath = getCurrentCanvasFilePath(this.app);
 
-            if (!canvasFilePath) {
-                throw new Error('无法获取 Canvas 文件路径');
-            }
+            if (!canvasFilePath) throw new Error('无法获取路径');
 
-            // 递归收集所有后代节点
             const collectDescendants = (parentId: string) => {
                 const directChildren = this.collapseStateManager.getChildNodes(parentId, edges);
                 for (const childId of directChildren) {
@@ -138,27 +140,40 @@ export class NodeDeletionService {
 
             collectDescendants(node.id);
 
+
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) => {
-                const initialCount = data.nodes.length;
                 data.nodes = data.nodes.filter((n: any) => !nodesToDelete.has(n.id));
-                data.edges = data.edges.filter((e: any) =>
-                    !nodesToDelete.has(e.fromNode) && !nodesToDelete.has(e.toNode)
-                );
-                return data.nodes.length !== initialCount;
+                data.edges = data.edges.filter((e: any) => {
+                    const fromId = getEdgeFromNodeId(e);
+                    const toId = getEdgeToNodeId(e);
+                    return !nodesToDelete.has(fromId || '') && !nodesToDelete.has(toId || '');
+                });
+                return true;
             });
 
             this.collapseStateManager.clearCache();
             this.refreshCollapseButtons();
+            this.reloadCanvas(canvas);
 
-            if (typeof canvas.reload === 'function') {
-                canvas.reload();
-            }
-
-            new Notice(`成功删除 ${nodesToDelete.size} 个节点！`);
+            new Notice(`已删除 ${nodesToDelete.size} 个节点`);
         } catch (err) {
-            error('级联删除节点失败:', err);
-            new Notice('删除节点失败，请查看控制台');
+            log(`[Delete] 级联失败:`, err);
+            new Notice('删除失败');
         }
+    }
+
+    /**
+     * 刷新 Canvas 显示
+     */
+    private reloadCanvas(canvas: any): void {
+        if (typeof canvas.reload === 'function') {
+            canvas.reload();
+        } else if (typeof canvas.requestUpdate === 'function') {
+            canvas.requestUpdate();
+        } else if (typeof canvas.requestSave === 'function') {
+            canvas.requestSave();
+        }
+        log(`[Delete] 刷新 Canvas`);
     }
 
     /**
@@ -175,10 +190,10 @@ export class NodeDeletionService {
      */
     private findParentNode(nodeId: string, edges: any[], allNodes: any[]): any | null {
         for (const edge of edges) {
-            const fromId = getNodeIdFromEdgeEndpoint(edge.from);
-            const toId = getNodeIdFromEdgeEndpoint(edge.to);
+            const fromId = getEdgeFromNodeId(edge);
+            const toId = getEdgeToNodeId(edge);
 
-            if (toId === nodeId) {
+            if (toId === nodeId && fromId) {
                 const parentNode = allNodes.find((n: any) => n.id === fromId);
                 if (parentNode) return parentNode;
             }

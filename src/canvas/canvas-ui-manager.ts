@@ -1,7 +1,7 @@
 import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
-import { debug, info, warn, error } from '../utils/logger';
+import { log } from '../utils/logger';
 
 export class CanvasUIManager {
     private app: App;
@@ -125,10 +125,6 @@ export class CanvasUIManager {
         const nodeHeight = nodeEl.clientHeight || 100;
 
         const nodeElAsHtml = nodeEl as HTMLElement;
-        const isVisible = nodeElAsHtml.offsetParent !== null;
-        const isInDocument = document.contains(nodeEl);
-        debug(`节点 ${nodeId} DOM状态: 可见=${isVisible}, 在文档中=${isInDocument}`);
-
         const computedStyle = window.getComputedStyle(nodeEl);
         if (computedStyle.position !== 'relative' && computedStyle.position !== 'absolute') {
             nodeEl.setAttribute('style', `position: relative; ${nodeEl.getAttribute('style') || ''}`);
@@ -146,8 +142,6 @@ export class CanvasUIManager {
         this.applyButtonStyle(btn, direction, nodeWidth, nodeHeight);
         nodeEl.appendChild(btn);
         nodeEl.setAttribute('data-node-id', nodeId);
-        
-        info(`为节点 ${nodeId} 添加折叠按钮，方向: ${direction}, 尺寸: ${nodeWidth}x${nodeHeight}`);
     }
 
     // =========================================================================
@@ -206,21 +200,15 @@ export class CanvasUIManager {
     // 应用浮动节点样式（红色边框）
     // =========================================================================
     applyFloatingNodeStyle(nodeId: string): void {
-        info(`[applyFloatingNodeStyle] 开始为节点 ${nodeId} 应用浮动样式`);
         const nodeEl = this.findNodeElementById(nodeId);
         if (nodeEl) {
-            info(`[applyFloatingNodeStyle] 找到节点 ${nodeId} 的DOM元素`);
             // 检查是否已经是浮动样式，避免重复应用
-            if (nodeEl.style.border === '4px solid rgb(255, 68, 68)') {
-                info(`[applyFloatingNodeStyle] 节点 ${nodeId} 已经是浮动样式，跳过`);
-                return;
-            }
+            if (nodeEl.style.border === '4px solid rgb(255, 68, 68)') return;
+            
             nodeEl.style.border = '4px solid #ff4444';
             nodeEl.style.borderRadius = '8px';
             nodeEl.classList.add('cmb-floating-node');
-            info(`[applyFloatingNodeStyle] 已为节点 ${nodeId} 应用浮动样式`);
         } else {
-            warn(`[applyFloatingNodeStyle] 未找到节点 ${nodeId} 的DOM元素，延迟重试`);
             // 如果找不到，延迟后重试（只重试一次）
             setTimeout(() => {
                 const retryNodeEl = this.findNodeElementById(nodeId);
@@ -229,10 +217,7 @@ export class CanvasUIManager {
                         retryNodeEl.style.border = '4px solid #ff4444';
                         retryNodeEl.style.borderRadius = '8px';
                         retryNodeEl.classList.add('cmb-floating-node');
-                        info(`[applyFloatingNodeStyle] 已为节点 ${nodeId} 应用浮动样式（延迟）`);
                     }
-                } else {
-                    error(`[applyFloatingNodeStyle] 延迟重试后仍未找到节点 ${nodeId} 的DOM元素`);
                 }
             }, 500);
         }

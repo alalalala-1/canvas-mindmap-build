@@ -3,7 +3,7 @@
  * 用于跟踪函数调用顺序、参数和返回值
  */
 
-import { info, debug, LogLevel } from './logger';
+import { log } from './logger';
 
 // 调用栈深度跟踪
 let callDepth = 0;
@@ -66,9 +66,8 @@ function formatResult(result: any): string {
  * @param args 参数列表
  */
 export function traceEnter(className: string, functionName: string, ...args: any[]): void {
-    const indent = getIndent();
-    info(`${indent}▶ ${className}.${functionName}(${formatArgs(args)})`);
-    callDepth++;
+    // 彻底禁用追踪日志，防止大量刷屏
+    return;
 }
 
 /**
@@ -78,13 +77,8 @@ export function traceEnter(className: string, functionName: string, ...args: any
  * @param result 返回值
  */
 export function traceExit(className: string, functionName: string, result?: any): void {
-    callDepth = Math.max(0, callDepth - 1);
-    const indent = getIndent();
-    if (result !== undefined) {
-        info(`${indent}◀ ${className}.${functionName} => ${formatResult(result)}`);
-    } else {
-        info(`${indent}◀ ${className}.${functionName}`);
-    }
+    // 彻底禁用追踪日志
+    return;
 }
 
 /**
@@ -96,7 +90,7 @@ export function traceExit(className: string, functionName: string, result?: any)
 export function traceError(className: string, functionName: string, error: any): void {
     callDepth = Math.max(0, callDepth - 1);
     const indent = getIndent();
-    info(`${indent}✖ ${className}.${functionName} => ERROR: ${error}`);
+    log(`${indent}✖ ${className}.${functionName} => ERROR: ${error}`);
 }
 
 /**
@@ -109,9 +103,9 @@ export function traceError(className: string, functionName: string, error: any):
 export function traceStep(className: string, functionName: string, step: string, data?: any): void {
     const indent = getIndent();
     if (data !== undefined) {
-        info(`${indent}  ${className}.${functionName}: ${step} | ${formatResult(data)}`);
+        log(`${indent}  ${className}.${functionName}: ${step} | ${formatResult(data)}`);
     } else {
-        info(`${indent}  ${className}.${functionName}: ${step}`);
+        log(`${indent}  ${className}.${functionName}: ${step}`);
     }
 }
 

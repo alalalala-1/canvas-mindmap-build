@@ -1,20 +1,8 @@
-import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { debug } from '../../utils/logger';
+import { log } from '../../utils/logger';
 
-/**
- * 节点位置计算器
- * 负责计算新节点的位置
- */
 export class NodePositionCalculator {
-    private settings: CanvasMindmapBuildSettings;
+    constructor(private settings: any) {}
 
-    constructor(settings: CanvasMindmapBuildSettings) {
-        this.settings = settings;
-    }
-
-    /**
-     * 计算新节点位置（在父节点右侧，与同级别节点对齐，避免重叠）
-     */
     calculatePosition(
         newNode: any,
         parentNode: any | null,
@@ -41,45 +29,52 @@ export class NodePositionCalculator {
             childNodeIds.includes(n.id)
         );
 
-        debug(`父节点 ${parentNode.id} 已有 ${childNodes.length} 个子节点`);
+        log(`[PositionCalculator] 父节点 ${parentNode.id} 已有 ${childNodes.length} 个子节点`);
 
-        // 计算 x 坐标：与同级别节点对齐
-        // 如果有已有子节点，使用它们的 x 坐标；否则基于父节点计算
-        let baseX: number;
-        if (childNodes.length > 0) {
-            // 使用已有子节点的 x 坐标（取最小值，确保对齐）
-            baseX = Math.min(...childNodes.map((child: any) => child.x));
-            debug(`使用已有子节点的 x 坐标: ${baseX}`);
-        } else {
-            // 没有子节点时，基于父节点计算
-            baseX = parentNode.x + (parentNode.width || 250) + horizontalSpacing;
-            debug(`使用基础位置 x: ${baseX}，水平间距: ${horizontalSpacing}`);
-        }
-
-        // 如果没有子节点，使用基础 y 位置
         if (childNodes.length === 0) {
-            debug(`使用基础位置: (${baseX}, ${baseY})`);
-            return { x: baseX, y: baseY };
+            return {
+                x: parentNode.x + (parentNode.width || 250) + horizontalSpacing,
+                y: baseY,
+            };
         }
 
-        // 找到最下方的子节点
-        let lowestChild = childNodes[0];
-        let maxBottom = childNodes[0].y + (childNodes[0].height || 100);
+        // 按 y 坐标排序
+        childNodes.sort((a: any, b: any) => a.y - b.y);
 
-        for (const child of childNodes) {
-            const childBottom = child.y + (child.height || 100);
-            if (childBottom > maxBottom) {
-                maxBottom = childBottom;
-                lowestChild = child;
-            }
-        }
+        // 找到中间位置
+        const midIndex = Math.floor(childNodes.length / 2);
+        const midNode = childNodes[midIndex];
 
-        // 新节点放在最下方子节点的下方
-        const newY = maxBottom + verticalSpacing;
-        debug(
-            `新节点将放在最下方子节点 ${lowestChild.id} 的下方，Y: ${newY}，垂直间距: ${verticalSpacing}`
-        );
+        // 简单的放置策略：放在最下面一个子节点的下方
+        const lastChild = childNodes[childNodes.length - 1];
+        const nextY = lastChild.y + (lastChild.height || 100) + verticalSpacing;
 
-        return { x: baseX, y: newY };
+        log(`[PositionCalculator] 计算新节点位置: parent.x=${parentNode.x}, nextY=${nextY}`);
+
+        return {
+            x: parentNode.x + (parentNode.width || 250) + horizontalSpacing,
+            y: nextY,
+        };
+    }
+
+    calculateFloatingPosition(canvasData: any): { x: number; y: number } {
+        const nodes = canvasData.nodes || [];
+        if (nodes.length === 0) return { x: 100, y: 100 };
+
+        // 找到最右侧的节点
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        nodes.forEach((node: any) => {
+            maxX = Math.max(maxX, node.x + (node.width || 250));
+            maxY = Math.max(maxY, node.y);
+        });
+
+        log(`[PositionCalculator] 计算浮动节点位置: maxX=${maxX}, maxY=${maxY}`);
+
+        return {
+            x: maxX + 100,
+            y: 100,
+        };
     }
 }

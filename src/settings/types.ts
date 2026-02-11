@@ -27,7 +27,6 @@ export interface CanvasMindmapBuildSettings {
 
     // Debug Settings
     enableDebugLogging: boolean;
-    logLevel: 'error' | 'warn' | 'info' | 'debug' | 'verbose';
 }
 
 export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
@@ -55,5 +54,4 @@ export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
 
     // Debug Settings
     enableDebugLogging: false,
-    logLevel: 'info',
 }

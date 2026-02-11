@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
 import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
 import { CollapseStateManager } from './state/collapse-state';
 import { CanvasManager } from './canvas/canvas-manager';
-import { updateLoggerConfig, info, debug, error } from './utils/logger';
+import { updateLoggerConfig, log } from './utils/logger';
 import { validateSettings, migrateSettings } from './settings/validator';
 import { CSS_VARS } from './constants';
 
@@ -22,17 +22,12 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
 
-        // 初始化日志系统配置
         updateLoggerConfig(this.settings);
-        info('插件加载中...');
+        log('[Lifecycle] 插件加载');
 
-        // 初始化折叠按钮颜色
         this.updateCollapseButtonColor();
-
-        // 初始化Canvas管理器
         this.canvasManager.initialize();
 
-        // 添加命令
         this.addCommand({
             id: 'add-to-canvas-mindmap',
             name: 'Add to Canvas Mindmap',
@@ -52,7 +47,7 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             callback: () => this.canvasManager.arrangeCanvas(),
         });
 
-        this.addCommand({
+        this.addCommand({ 
             id: 'delete-selected-edge',
             name: 'Delete Selected Edge',
             callback: () => this.canvasManager.deleteSelectedEdge(),
@@ -65,21 +60,17 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         });
 
         this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
-
-        debug('插件加载完成');
     }
 
     onunload() {
-        info('插件卸载中...');
+        log('[Lifecycle] 插件卸载');
         this.canvasManager.unload();
-        info('插件已卸载');
     }
 
     async loadSettings() {
         try {
             const data = await this.loadData();
 
-            // 验证和迁移设置
             const validatedData = validateSettings(data || {});
             let mergedSettings = { ...DEFAULT_SETTINGS, ...validatedData };
             mergedSettings = migrateSettings(mergedSettings);
@@ -87,11 +78,10 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             this.settings = mergedSettings;
             this.lastClickedNodeId = data?.lastClickedNodeId || null;
 
-            // 更新日志配置
             updateLoggerConfig(this.settings);
-            debug('设置已加载', this.settings);
+            log('[Settings] 加载成功');
         } catch (e) {
-            error('加载设置失败:', e);
+            log('[Settings] 加载失败:', e);
             this.settings = { ...DEFAULT_SETTINGS };
             new Notice('加载插件设置失败，使用默认设置');
         }
@@ -99,9 +89,8 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
     async saveSettings() {
         await this.saveData(this.settings);
-        // 更新日志配置
         updateLoggerConfig(this.settings);
-        debug('设置已保存', this.settings);
+        log('[Settings] 已保存');
     }
 
     updateCollapseButtonColor() {

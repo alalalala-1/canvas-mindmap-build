@@ -1,6 +1,6 @@
 import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { debug, error } from '../../utils/logger';
+import { log } from '../../utils/logger';
 
 /**
  * Canvas 文件操作服务
@@ -149,16 +149,13 @@ export class CanvasFileService {
      */
     async readCanvasData(filePath: string): Promise<any | null> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (!(canvasFile instanceof TFile)) {
-            error(`Canvas file not found: ${filePath}`);
-            return null;
-        }
+        if (!(canvasFile instanceof TFile)) return null;
 
         try {
             const canvasContent = await this.app.vault.read(canvasFile);
             return JSON.parse(canvasContent);
         } catch (parseError) {
-            error('Canvas文件格式错误，请检查文件内容', parseError);
+            log('[File] 解析失败:', parseError);
             return null;
         }
     }
@@ -172,39 +169,29 @@ export class CanvasFileService {
         updateCallback: (data: any) => boolean | Promise<boolean>
     ): Promise<boolean> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (!(canvasFile instanceof TFile)) {
-            error(`[CanvasFileService] 找不到 Canvas 文件: ${filePath}`);
-            return false;
-        }
+        if (!(canvasFile instanceof TFile)) return false;
 
         try {
-            // 1. 读取当前最新内容
             const content = await this.app.vault.read(canvasFile);
             const data = JSON.parse(content);
 
-            // 2. 执行更新回调
             const shouldModify = await updateCallback(data);
 
-            // 3. 如果需要修改，再次读取并合并（防止在步骤1和3之间发生的变更）
             if (shouldModify) {
                 const latestContent = await this.app.vault.read(canvasFile);
                 const latestData = JSON.parse(latestContent);
                 
-                // 将 data 中的变更应用到 latestData
-                // 注意：这里需要谨慎处理合并逻辑，通常回调函数应该直接修改传入的对象
-                // 此时 data 已经是修改后的对象，我们将 latestData 中的其他部分同步给 data 是不现实的
-                // 最好的做法是再次在 latestData 上运行回调
                 const finalShouldModify = await updateCallback(latestData);
                 
                 if (finalShouldModify) {
-                    await this.app.vault.modify(canvasFile, JSON.stringify(latestData, null, 2));
-                    debug(`[CanvasFileService] 已原子化更新文件: ${filePath}`);
+                    const output = JSON.stringify(latestData, null, 2);
+                    await this.app.vault.modify(canvasFile, output);
                     return true;
                 }
             }
             return false;
         } catch (err) {
-            error(`[CanvasFileService] 原子化修改文件失败: ${filePath}`, err);
+            log('[File] 原子修改失败:', err);
             return false;
         }
     }
@@ -215,7 +202,7 @@ export class CanvasFileService {
     async saveCanvasData(filePath: string, data: any): Promise<boolean> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
-            error(`Canvas file not found: ${filePath}`);
+            log(`[File] 未找到文件: ${filePath}`);
             return false;
         }
 
@@ -223,7 +210,7 @@ export class CanvasFileService {
             await this.app.vault.modify(canvasFile, JSON.stringify(data, null, 2));
             return true;
         } catch (err) {
-            error('保存 Canvas 数据失败', err);
+            log('[File] 保存失败:', err);
             return false;
         }
     }

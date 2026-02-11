@@ -1,4 +1,4 @@
-import { debug, trace } from '../utils/logger';
+import { log } from '../utils/logger';
 
 /**
  * 折叠状态管理器
@@ -9,12 +9,12 @@ export class CollapseStateManager {
 
     markCollapsed(nodeId: string) {
         this.collapsedNodes.set(nodeId, true);
-        debug(`标记节点为已折叠: ${nodeId}`);
+        log(`[State] 折叠: ${nodeId}`);
     }
 
     markExpanded(nodeId: string) {
         this.collapsedNodes.delete(nodeId);
-        debug(`标记节点为已展开: ${nodeId}`);
+        log(`[State] 展开: ${nodeId}`);
     }
 
     isCollapsed(nodeId: string): boolean {
@@ -36,7 +36,6 @@ export class CollapseStateManager {
             }
         }
 
-        trace(`获取节点 ${nodeId} 的子节点:`, childIds);
         return childIds;
     }
 
@@ -68,7 +67,7 @@ export class CollapseStateManager {
 
     clearCache() {
         this.nodeChildrenCache.clear();
-        trace('清除折叠状态缓存');
+        log('[State] 清除缓存');
     }
 
     getAllCollapsedNodes(): Set<string> {

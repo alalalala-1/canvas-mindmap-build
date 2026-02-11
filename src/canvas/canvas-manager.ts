@@ -8,7 +8,7 @@ import { CanvasUIManager } from './canvas-ui-manager';
 import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasFileService } from './services/canvas-file-service';
 import { EdgeDeletionService } from './services/edge-deletion-service';
-import { debug, info, warn, error } from '../utils/logger';
+import { log } from '../utils/logger';
 import {
     getCanvasView,
     getCurrentCanvasFilePath,
@@ -34,6 +34,7 @@ export class CanvasManager {
     private uiManager: CanvasUIManager;
     private floatingNodeService: FloatingNodeService;
     private edgeDeletionService: EdgeDeletionService;
+    private buttonCheckTimeoutId: number | null = null;
 
     constructor(
         plugin: Plugin,
@@ -71,14 +72,13 @@ export class CanvasManager {
         // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
         this.layoutManager.setFloatingNodeService(this.floatingNodeService);
 
-        debug('CanvasManager 实例化完成');
+        log('[Manager] 实例化');
     }
 
     // =========================================================================
     // 初始化
     // =========================================================================
     initialize() {
-        debug('初始化 Canvas 管理器');
         this.eventManager.initialize();
     }
 
@@ -109,7 +109,16 @@ export class CanvasManager {
     // 公共接口方法供事件管理器调用
     // =========================================================================
     public async checkAndAddCollapseButtons() {
-        await this.uiManager.checkAndAddCollapseButtons();
+        // 防抖：如果已有待执行的检查，取消之前的
+        if (this.buttonCheckTimeoutId !== null) {
+            clearTimeout(this.buttonCheckTimeoutId);
+        }
+        
+        // 延迟执行，避免短时间内多次调用
+        this.buttonCheckTimeoutId = window.setTimeout(async () => {
+            this.buttonCheckTimeoutId = null;
+            await this.uiManager.checkAndAddCollapseButtons();
+        }, 50); // 50ms 防抖延迟
     }
 
     public async toggleNodeCollapse(nodeId: string) {
@@ -127,9 +136,8 @@ export class CanvasManager {
     }
 
     public async scheduleButtonCheck() {
-        setTimeout(() => {
-            this.checkAndAddCollapseButtons();
-        }, 100);
+        // 现在 checkAndAddCollapseButtons 已有防抖机制，直接调用即可
+        await this.checkAndAddCollapseButtons();
     }
 
     public async checkAndClearFloatingStateForNewEdges() {
@@ -149,7 +157,6 @@ export class CanvasManager {
     public startEdgeChangeDetectionForFloatingNodes(canvas: any) {
         // 边变化检测已经在 FloatingNodeService.initialize 中启动
         // 这里不需要重复启动
-        info('[CanvasManager] 边变化检测已在 FloatingNodeService 中启动，跳过');
     }
 
     // =========================================================================

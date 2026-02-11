@@ -1,4 +1,4 @@
-import { info, warn, error, debug } from '../../utils/logger';
+import { log } from '../../utils/logger';
 
 /**
  * 浮动节点视觉样式管理器
@@ -17,33 +17,34 @@ export class FloatingNodeStyleManager {
      */
     applyFloatingStyle(nodeId: string): boolean {
         try {
-            info(`[FloatingNodeStyleManager] 为节点 ${nodeId} 应用浮动样式`);
-
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
-                warn(`[FloatingNodeStyleManager] 未找到节点 ${nodeId} 的 DOM 元素，可能是 Obsidian 正在重绘，准备重试...`);
-                // 延迟重试
                 setTimeout(() => this.applyFloatingStyleRetry(nodeId, 1), 300);
                 setTimeout(() => this.applyFloatingStyleRetry(nodeId, 2), 1000);
                 return false;
             }
 
-            // 应用样式类
             nodeEl.classList.add(this.FLOATING_CLASS);
 
-            // 内联样式兜底，确保在主题或更高优先级规则下仍可见
             nodeEl.style.setProperty('border', '4px solid #ff4444', 'important');
             nodeEl.style.setProperty('border-radius', '8px', 'important');
             nodeEl.style.setProperty('box-shadow', '0 0 15px rgba(255, 68, 68, 0.4)', 'important');
             nodeEl.style.setProperty('outline', '0px solid transparent', 'important');
 
+            log(`[Style] 应用红框: ${nodeId}`);
+
             // 强制重绘
             void nodeEl.offsetHeight;
-
-            info(`[FloatingNodeStyleManager] 已为节点 ${nodeId} 应用浮动样式类`);
+            
+            // 额外的一步：确保子元素不会覆盖边框
+            const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
+            if (contentEl) {
+                contentEl.style.setProperty('border-radius', '4px', 'important');
+            }
+            
             return true;
         } catch (err) {
-            error('[FloatingNodeStyleManager] 应用浮动样式失败:', err);
+            log('[Style] 失败:', err);
             return false;
         }
     }
@@ -54,12 +55,11 @@ export class FloatingNodeStyleManager {
     private applyFloatingStyleRetry(nodeId: string, retryNum: number): void {
         const nodeEl = this.findNodeElement(nodeId);
         if (nodeEl) {
-            if (!nodeEl.classList.contains(this.FLOATING_CLASS)) {
-                nodeEl.classList.add(this.FLOATING_CLASS);
-                info(`[FloatingNodeStyleManager] 已为节点 ${nodeId} 应用浮动样式类（重试 #${retryNum}）`);
-            }
+            log(`[Style] 应用红框 (重试 #${retryNum}): ${nodeId}`);
+            this.applyFloatingStyle(nodeId);
         } else {
-            debug(`[FloatingNodeStyleManager] 重试 #${retryNum} 仍未找到节点 ${nodeId}`);
+            // 降低找不到节点的日志级别或频率，避免日志爆炸
+            // log(`[Style] 找不到节点元素 (重试 #${retryNum}): ${nodeId}`);
         }
     }
 
@@ -74,26 +74,52 @@ export class FloatingNodeStyleManager {
         try {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
-                warn(`[FloatingNodeStyleManager] 未找到节点 ${nodeId} 的 DOM 元素，无法清除浮动样式`);
+                // 如果找不到元素，仅在重试时记录，减少初次尝试失败的日志噪音
+                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 1), 300);
                 return false;
             }
 
-            // 清除样式类
-            nodeEl.classList.remove(this.FLOATING_CLASS);
+            if (nodeEl.classList.contains(this.FLOATING_CLASS)) {
+                nodeEl.classList.remove(this.FLOATING_CLASS);
+                
+                nodeEl.style.removeProperty('border');
+                nodeEl.style.removeProperty('border-radius');
+                nodeEl.style.removeProperty('box-shadow');
+                nodeEl.style.removeProperty('outline');
+                
+                const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
+                if (contentEl) {
+                    contentEl.style.removeProperty('border-radius');
+                }
 
-            // 移除内联样式兜底
-            nodeEl.style.removeProperty('border');
-            nodeEl.style.removeProperty('border-radius');
-            nodeEl.style.removeProperty('box-shadow');
-            nodeEl.style.removeProperty('outline');
-
-            // 强制重绘
-            void nodeEl.offsetHeight;
-
+                log(`[Style] 清除红框: ${nodeId}`);
+                // 强制重绘
+                void nodeEl.offsetHeight;
+            } else {
+                // 如果没有类名，但也可能存在内联样式残留，尝试清除
+                if (nodeEl.style.getPropertyValue('border').includes('#ff4444')) {
+                    nodeEl.style.removeProperty('border');
+                    nodeEl.style.removeProperty('border-radius');
+                    nodeEl.style.removeProperty('box-shadow');
+                    nodeEl.style.removeProperty('outline');
+                    log(`[Style] 强制清除残留内联样式: ${nodeId}`);
+                }
+            }
             return true;
         } catch (err) {
-            error('[FloatingNodeStyleManager] 清除浮动样式失败:', err);
+            log('[Style] 清除失败:', err);
             return false;
+        }
+    }
+
+    /**
+     * 延迟重试清除样式
+     */
+    private clearFloatingStyleRetry(nodeId: string, retryNum: number): void {
+        const nodeEl = this.findNodeElement(nodeId);
+        if (nodeEl) {
+            log(`[Style] 清除红框 (重试 #${retryNum}): ${nodeId}`);
+            this.clearFloatingStyle(nodeId);
         }
     }
 
@@ -105,7 +131,6 @@ export class FloatingNodeStyleManager {
      * 应用所有浮动节点的样式
      */
     applyAllFloatingStyles(nodeIds: string[]): void {
-        info(`[FloatingNodeStyleManager] 为 ${nodeIds.length} 个节点应用浮动样式`);
         for (const nodeId of nodeIds) {
             this.applyFloatingStyle(nodeId);
         }
@@ -115,7 +140,6 @@ export class FloatingNodeStyleManager {
      * 清除所有浮动节点的样式
      */
     clearAllFloatingStyles(nodeIds: string[]): void {
-        info(`[FloatingNodeStyleManager] 清除 ${nodeIds.length} 个节点的浮动样式`);
         for (const nodeId of nodeIds) {
             this.clearFloatingStyle(nodeId);
         }

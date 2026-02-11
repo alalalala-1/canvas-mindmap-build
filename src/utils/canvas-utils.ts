@@ -1,5 +1,5 @@
 import { App, ItemView, TFile } from 'obsidian';
-import { debug, error } from './logger';
+import { log } from './logger';
 
 /**
  * Canvas 工具函数集合
@@ -101,28 +101,30 @@ export function getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
 }
 
 /**
- * 生成随机 ID (8位 36进制字符串)
- */
-export function generateRandomId(): string {
-    return Math.random().toString(36).substring(2, 10);
-}
-
-/**
  * 获取边的源节点 ID
+ * 兼容 fileData.edges (fromNode) 和 canvas.edges (from)
  */
 export function getEdgeFromNodeId(edge: any): string | null {
     if (!edge) return null;
-    // 尝试多种格式
-    return getNodeIdFromEdgeEndpoint(edge.from) || edge.fromNode || null;
+    if (edge.fromNode) return edge.fromNode;
+    return getNodeIdFromEdgeEndpoint(edge.from);
 }
 
 /**
  * 获取边的目标节点 ID
+ * 兼容 fileData.edges (toNode) 和 canvas.edges (to)
  */
 export function getEdgeToNodeId(edge: any): string | null {
     if (!edge) return null;
-    // 尝试多种格式
-    return getNodeIdFromEdgeEndpoint(edge.to) || edge.toNode || null;
+    if (edge.toNode) return edge.toNode;
+    return getNodeIdFromEdgeEndpoint(edge.to);
+}
+
+/**
+ * 生成随机 ID (8位 36进制字符串)
+ */
+export function generateRandomId(): string {
+    return Math.random().toString(36).substring(2, 10);
 }
 
 // ============================================================================
@@ -137,7 +139,7 @@ export async function readCanvasData(app: App, filePath: string): Promise<any | 
     try {
         const canvasFile = app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
-            error(`Canvas 文件不存在: ${filePath}`);
+            log(`[Utils] 文件不存在: ${filePath}`);
             return null;
         }
 
@@ -146,7 +148,7 @@ export async function readCanvasData(app: App, filePath: string): Promise<any | 
         try {
             canvasData = JSON.parse(canvasContent);
         } catch (parseError) {
-            error(`Canvas 文件格式错误: ${filePath}`, parseError);
+            log(`[Utils] 解析失败: ${filePath}`);
             return null;
         }
 
@@ -157,7 +159,7 @@ export async function readCanvasData(app: App, filePath: string): Promise<any | 
 
         return canvasData;
     } catch (err) {
-        error(`读取 Canvas 文件失败: ${filePath}`, err);
+        log(`[Utils] 读取失败: ${filePath}`, err);
         return null;
     }
 }
@@ -169,14 +171,14 @@ export async function writeCanvasData(app: App, filePath: string, data: any): Pr
     try {
         const canvasFile = app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
-            error(`Canvas 文件不存在: ${filePath}`);
+            log(`[Utils] 文件不存在: ${filePath}`);
             return false;
         }
 
         await app.vault.modify(canvasFile, JSON.stringify(data, null, 2));
         return true;
     } catch (err) {
-        error(`写入 Canvas 文件失败: ${filePath}`, err);
+        log(`[Utils] 写入失败: ${filePath}`, err);
         return false;
     }
 }

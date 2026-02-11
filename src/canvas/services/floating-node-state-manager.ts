@@ -1,5 +1,5 @@
 import { App, TFile } from 'obsidian';
-import { info, warn, error, debug } from '../../utils/logger';
+import { log } from '../../utils/logger';
 import { CanvasFileService } from './canvas-file-service';
 
 /**
@@ -21,8 +21,15 @@ export class FloatingNodeStateManager {
     /**
      * 初始化缓存
      */
-    async initializeCache(canvasFilePath: string): Promise<void> {
-        if (this.isInitialized.get(canvasFilePath)) return;
+    async initializeCache(canvasFilePath: string, force: boolean = false): Promise<void> {
+        if (!force && this.isInitialized.get(canvasFilePath)) return;
+        
+        if (force) {
+            log(`[FloatingState] 强制刷新缓存: ${canvasFilePath}`);
+            this.isInitialized.delete(canvasFilePath);
+            this.floatingNodesCache.delete(canvasFilePath);
+        }
+        
         await this.getAllFloatingNodes(canvasFilePath);
         this.isInitialized.set(canvasFilePath, true);
     }
@@ -32,62 +39,49 @@ export class FloatingNodeStateManager {
     // =========================================================================
 
     /**
-     * 标记节点为浮动状态（支持子树批量标记）
+     * 标记节点为浮动状态
      * 同时更新内存和文件
+     * 注意：只标记根节点，子树节点有入边，不应被标记为浮动
      */
     async markNodeAsFloating(
         nodeId: string,
         originalParentId: string,
         canvasFilePath: string,
-        subtreeIds: string[] = []
+        _subtreeIds: string[] = []
     ): Promise<boolean> {
         try {
-            const allNodeIds = [nodeId, ...subtreeIds];
-            info(`[FloatingNodeStateManager] 标记节点 ${nodeId} 及其子树 [${subtreeIds.join(',')}] 为浮动状态`);
-
-            // 1. 更新内存缓存
             const timestamp = Date.now();
-            for (const id of allNodeIds) {
-                const floatingData = {
-                    isFloating: true,
-                    originalParent: originalParentId,
-                    floatingTimestamp: timestamp,
-                    isSubtreeNode: id !== nodeId // 标记是否是子树节点（非根部浮动节点）
-                };
-                this.updateMemoryCache(canvasFilePath, id, floatingData);
-            }
+            const floatingData = {
+                isFloating: true,
+                originalParent: originalParentId,
+                floatingTimestamp: timestamp
+            };
+            this.updateMemoryCache(canvasFilePath, nodeId, floatingData);
 
-            // 2. 原子化修改文件
             return await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 let modified = false;
 
-                // 在 metadata 中标记
                 if (!canvasData.metadata) canvasData.metadata = {};
                 if (!canvasData.metadata.floatingNodes) canvasData.metadata.floatingNodes = {};
                 
-                for (const id of allNodeIds) {
-                    const existingMeta = canvasData.metadata.floatingNodes[id];
-                    if (!existingMeta || existingMeta.originalParent !== originalParentId) {
-                        canvasData.metadata.floatingNodes[id] = {
-                            isFloating: true,
-                            originalParent: originalParentId,
-                            isSubtreeNode: id !== nodeId
-                        };
-                        modified = true;
-                    }
+                const existingMeta = canvasData.metadata.floatingNodes[nodeId];
+                if (!existingMeta || existingMeta.originalParent !== originalParentId) {
+                    canvasData.metadata.floatingNodes[nodeId] = {
+                        isFloating: true,
+                        originalParent: originalParentId
+                    };
+                    modified = true;
+                }
 
-                    // 在节点本身的 data 属性中标记
-                    if (canvasData.nodes) {
-                        const nodeData = canvasData.nodes.find((n: any) => n.id === id);
-                        if (nodeData) {
-                            if (!nodeData.data) nodeData.data = {};
-                            if (nodeData.data.isFloating !== true || nodeData.data.originalParent !== originalParentId) {
-                                nodeData.data.isFloating = true;
-                                nodeData.data.originalParent = originalParentId;
-                                nodeData.data.floatingTimestamp = timestamp;
-                                nodeData.data.isSubtreeNode = id !== nodeId;
-                                modified = true;
-                            }
+                if (canvasData.nodes) {
+                    const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
+                    if (nodeData) {
+                        if (!nodeData.data) nodeData.data = {};
+                        if (nodeData.data.isFloating !== true || nodeData.data.originalParent !== originalParentId) {
+                            nodeData.data.isFloating = true;
+                            nodeData.data.originalParent = originalParentId;
+                            nodeData.data.floatingTimestamp = timestamp;
+                            modified = true;
                         }
                     }
                 }
@@ -95,7 +89,7 @@ export class FloatingNodeStateManager {
                 return modified;
             });
         } catch (err) {
-            error('[FloatingNodeStateManager] 标记浮动节点失败:', err);
+            log('[FloatingState] 标记失败', err);
             return false;
         }
     }
@@ -106,43 +100,60 @@ export class FloatingNodeStateManager {
      */
     async clearNodeFloatingState(
         nodeId: string,
-        canvasFilePath: string
+        canvasFilePath: string,
+        clearSubtree: boolean = false
     ): Promise<boolean> {
         try {
-            info(`[FloatingNodeStateManager] 准备清除节点 ${nodeId} 的浮动状态`);
+            const nodesToClear = [nodeId];
+            if (clearSubtree) {
+                // 如果需要清除子树，我们需要先找到所有相关的浮动节点
+                const canvasCache = this.floatingNodesCache.get(canvasFilePath);
+                if (canvasCache) {
+                    for (const [id, data] of canvasCache.entries()) {
+                        if (data.originalParent === nodeId) {
+                            nodesToClear.push(id);
+                        }
+                    }
+                }
+            }
 
             // 1. 更新内存缓存
-            this.updateMemoryCache(canvasFilePath, nodeId, null);
+            for (const id of nodesToClear) {
+                this.updateMemoryCache(canvasFilePath, id, null);
+            }
 
             // 2. 原子化修改文件
             return await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 let modified = false;
 
-                // 1. 清除 metadata 中的标记
-                if (canvasData.metadata?.floatingNodes?.[nodeId]) {
-                    delete canvasData.metadata.floatingNodes[nodeId];
-                    if (Object.keys(canvasData.metadata.floatingNodes).length === 0) {
-                        delete canvasData.metadata.floatingNodes;
-                    }
-                    modified = true;
-                }
-
-                // 2. 清除节点 data 属性中的标记
-                if (canvasData.nodes) {
-                    const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
-                    if (nodeData?.data?.isFloating) {
-                        delete nodeData.data.isFloating;
-                        delete nodeData.data.originalParent;
-                        delete nodeData.data.floatingTimestamp;
-                        delete nodeData.data.isSubtreeNode;
+                for (const id of nodesToClear) {
+                    // 1. 清除 metadata 中的标记
+                    if (canvasData.metadata?.floatingNodes?.[id]) {
+                        delete canvasData.metadata.floatingNodes[id];
                         modified = true;
                     }
+
+                    // 2. 清除节点 data 属性中的标记
+                    if (canvasData.nodes) {
+                        const nodeData = canvasData.nodes.find((n: any) => n.id === id);
+                        if (nodeData?.data?.isFloating) {
+                            delete nodeData.data.isFloating;
+                            delete nodeData.data.originalParent;
+                            delete nodeData.data.floatingTimestamp;
+                            delete nodeData.data.isSubtreeNode;
+                            modified = true;
+                        }
+                    }
+                }
+
+                if (modified && canvasData.metadata?.floatingNodes && Object.keys(canvasData.metadata.floatingNodes).length === 0) {
+                    delete canvasData.metadata.floatingNodes;
                 }
 
                 return modified;
             });
         } catch (err) {
-            error('[FloatingNodeStateManager] 清除浮动节点状态失败:', err);
+            log('[FloatingState] 清除失败', err);
             return false;
         }
     }
@@ -215,7 +226,10 @@ export class FloatingNodeStateManager {
             this.floatingNodesCache.set(canvasFilePath, floatingNodes);
             this.isInitialized.set(canvasFilePath, true);
         } catch (err) {
-            error('[FloatingNodeStateManager] 读取浮动节点失败:', err);
+            // 只有解析 JSON 失败才记录 log，避免文件不存在等常规情况的日志爆炸
+            if (err instanceof SyntaxError) {
+                log('[FloatingNodeState] 解析 JSON 失败:', canvasFilePath);
+            }
         }
 
         return floatingNodes;
@@ -243,7 +257,14 @@ export class FloatingNodeStateManager {
     async isNodeFloating(nodeId: string, canvasFilePath: string): Promise<boolean> {
         await this.initializeCache(canvasFilePath);
         const canvasCache = this.floatingNodesCache.get(canvasFilePath);
-        return canvasCache?.get(nodeId)?.isFloating === true;
+        const data = canvasCache?.get(nodeId);
+        const isFloating = data?.isFloating === true;
+        
+        if (isFloating) {
+            log(`[FloatingState] 节点状态查询: ${nodeId} = 浮动 (原父节点: ${data?.originalParent})`);
+        }
+        
+        return isFloating;
     }
 
     /**
@@ -259,19 +280,23 @@ export class FloatingNodeStateManager {
     // 批量操作
     // =========================================================================
 
-    /**
-     * 清除所有浮动节点的状态
-     */
-    async clearAllFloatingNodes(canvasFilePath: string): Promise<void> {
+    // 清除所有浮动节点状态（仅清除内存缓存）
+    async clearAllFloatingStates(): Promise<boolean> {
         try {
-            const floatingNodes = await this.getAllFloatingNodes(canvasFilePath);
-            info(`[FloatingNodeStateManager] 清除所有 ${floatingNodes.size} 个浮动节点的状态`);
-
-            for (const nodeId of floatingNodes.keys()) {
-                await this.clearNodeFloatingState(nodeId, canvasFilePath);
+            let totalNodes = 0;
+            for (const canvasCache of this.floatingNodesCache.values()) {
+                totalNodes += canvasCache.size;
             }
+
+            if (totalNodes === 0) return true;
+
+            this.floatingNodesCache.clear();
+            this.isInitialized.clear();
+
+            return true;
         } catch (err) {
-            error('[FloatingNodeStateManager] 清除所有浮动节点失败:', err);
+            log('[FloatingNodeState] 清除所有浮动节点异常:', err);
+            return false;
         }
     }
 
@@ -287,24 +312,28 @@ export class FloatingNodeStateManager {
 
         try {
             const floatingNodes = await this.getAllFloatingNodes(canvasFilePath);
+            if (floatingNodes.size > 0) {
+                log(`[FloatingState] 开始验证 ${floatingNodes.size} 个浮动节点...`);
+            }
 
             for (const [nodeId, data] of floatingNodes) {
                 // 检查是否有边连接到该节点
-                const hasIncomingEdge = edges.some((edge: any) => {
+                const incomingEdges = edges.filter((edge: any) => {
                     const toId = edge?.to?.node?.id || edge?.toNode ||
-                                (typeof edge.to === 'string' ? edge.to : null);
+                                (typeof edge.to === 'string' ? edge.to : 
+                                 typeof edge.to?.id === 'string' ? edge.to.id : null);
                     return toId === nodeId;
                 });
 
                 // 如果有入边，说明不是浮动节点，清除状态
-                if (hasIncomingEdge) {
-                    info(`[FloatingNodeStateManager] 节点 ${nodeId} 有入边，清除浮动状态`);
+                if (incomingEdges.length > 0) {
+                    log(`[FloatingState] 发现节点 ${nodeId} 有 ${incomingEdges.length} 条入边，清除浮动状态`);
                     await this.clearNodeFloatingState(nodeId, canvasFilePath);
                     clearedNodes.push(nodeId);
                 }
             }
         } catch (err) {
-            error('[FloatingNodeStateManager] 验证浮动节点失败:', err);
+            log('[FloatingState] 验证浮动节点失败:', err);
         }
 
         return clearedNodes;
