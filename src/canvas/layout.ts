@@ -203,12 +203,12 @@ export function arrangeLayout(
             nodeHeight = settings.formulaNodeHeight || 80;
             formulaNodeCount++;
         } else {
-            // 如果节点已有高度且不是默认值，保留它；否则重新估算
             const currentWidth = nodeData.width || settings.textNodeWidth;
-            if (nodeData.height && nodeData.height > 60) {
-                nodeHeight = nodeData.height;
+            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings);
+            if (nodeData.height && nodeData.height > 0) {
+                nodeHeight = Math.max(nodeData.height, estimatedHeight);
             } else {
-                nodeHeight = estimateTextNodeHeight(nodeText, currentWidth, settings);
+                nodeHeight = estimatedHeight;
             }
         }
 
@@ -502,8 +502,16 @@ export function arrangeLayout(
             currentY += (range.maxY - range.minY) + settings.verticalSpacing;
         }
 
-        // 父节点在子节点中心对齐
-        const childrenCenterY = (childrenMinY + childrenMaxY) / 2;
+        let sumCenters = 0;
+        let centerCount = 0;
+        for (const range of childRanges) {
+            const childNode = layoutNodes.get(range.id);
+            if (childNode) {
+                sumCenters += childNode.y + childNode.height / 2;
+                centerCount++;
+            }
+        }
+        const childrenCenterY = centerCount > 0 ? sumCenters / centerCount : (childrenMinY + childrenMaxY) / 2;
         node.y = childrenCenterY - (node.height / 2);
 
         // 返回该子树的总范围
@@ -513,7 +521,7 @@ export function arrangeLayout(
         return { 
             minY: totalMinY, 
             maxY: totalMaxY, 
-            centerY: childrenCenterY 
+            centerY: node.y + node.height / 2
         };
     }
 
@@ -521,8 +529,7 @@ export function arrangeLayout(
     let currentGlobalBottomY = -settings.verticalSpacing;
 
     // 为每个根节点（即每个"大行"）执行布局
-    rootNodes.forEach((rootId, index) => {
-        log(`[Layout] 处理根节点 ${index + 1}/${rootNodes.length}: ${rootId}`);
+    rootNodes.forEach((rootId) => {
         
         // A. 计算深度和列
         calculateMaxDepth(rootId);
@@ -563,12 +570,10 @@ export function arrangeLayout(
             subtreeMaxY = Math.max(subtreeMaxY, node.y + node.height);
         }
         
-        const subtreeHeight = subtreeMaxY - subtreeMinY;
-        log(`[Layout] 根节点 ${rootId}: 子树高度=${subtreeHeight.toFixed(1)}, minY=${subtreeMinY.toFixed(1)}, maxY=${subtreeMaxY.toFixed(1)}`);
-
-        // 全局偏移量 = 当前全局底部 + 间隔 - 子树最高点
-        const globalOffsetY = (currentGlobalBottomY + settings.verticalSpacing) - subtreeMinY;
-        log(`[Layout] 根节点 ${rootId}: 全局偏移量=${globalOffsetY.toFixed(1)}, 当前底部=${currentGlobalBottomY.toFixed(1)}`);
+        // 紧凑布局修复：根节点之间的间距也应该是动态的
+        // 如果 currentGlobalBottomY 是初始值，则 globalOffsetY 只取决于 subtreeMinY
+        const verticalSpacing = currentGlobalBottomY === -settings.verticalSpacing ? 0 : settings.verticalSpacing;
+        const globalOffsetY = (currentGlobalBottomY + verticalSpacing) - subtreeMinY;
 
         // E. 应用偏移量并更新全局底部位置
         let maxSubtreeBottom = -Infinity;
@@ -580,7 +585,6 @@ export function arrangeLayout(
 
         // 更新全局底部，确保下一个"大行"完全在当前大行之下
         currentGlobalBottomY = maxSubtreeBottom;
-        log(`[Layout] 根节点 ${rootId}: 新底部=${currentGlobalBottomY.toFixed(1)}`);
     });
 
     // 4. 计算层级X坐标 (从左到右)

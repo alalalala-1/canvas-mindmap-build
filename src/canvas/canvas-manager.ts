@@ -73,6 +73,7 @@ export class CanvasManager {
 
         // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
         this.layoutManager.setFloatingNodeService(this.floatingNodeService);
+        this.layoutManager.setCanvasManager(this);
 
         log('[Manager] 实例化');
     }
@@ -99,8 +100,8 @@ export class CanvasManager {
         await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
     }
 
-    public async adjustAllTextNodeHeights(): Promise<void> {
-        await this.nodeManager.adjustAllTextNodeHeights();
+    public async adjustAllTextNodeHeights(): Promise<number> {
+        return await this.nodeManager.adjustAllTextNodeHeights();
     }
 
     async deleteSelectedEdge() {

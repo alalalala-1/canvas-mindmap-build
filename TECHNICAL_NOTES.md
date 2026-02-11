@@ -165,7 +165,8 @@
 - **流程**:
   - 先构建 `nodeDomMap`
   - 遍历所有文本节点计算高度
-  - 对变化节点原子写入并计数提示
+  - 对变化节点原子写入并返回调整数量
+  - 同步内存节点高度与 DOM 渲染
 
 #### 3.6 新建节点自动调整
 - **时机**: 节点创建后延迟 `300ms`
@@ -235,6 +236,8 @@ delete canvasData.metadata.collapseState[nodeId]; // 展开
 3. **计算子树高度**: 递归计算每个节点的子树总高度
 4. **应用绝对位置**: 递归设置每个节点的 x、y 坐标
 5. **计算层级 X**: 根据层级计算每层的 X 坐标
+6. **布局后高度校正**: 调用 `adjustAllTextNodeHeights`，若返回值大于 0 则二次布局（不再触发高度调整）
+7. **位置写回**: arrange 只写回 x、y，避免覆盖真实高度导致中心偏移
 
 #### 5.2 子树高度计算
 ```typescript
@@ -399,7 +402,7 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) 
 ### 日志系统
 - **单一出口**: `log(...)` 统一输出格式
 - **条件输出**: 根据 `settings.enableDebugLogging` 控制
-- **关键日志**: `logCritical(...)` 不受设置开关影响
+- **输出规范**: 关键日志保持单行，避免大数组与多行内容
 
 ### 常用调试代码
 ```typescript

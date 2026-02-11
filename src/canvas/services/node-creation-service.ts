@@ -290,10 +290,16 @@ export class NodeCreationService {
             // 检查折叠按钮（已有防抖机制）
             await this.canvasManager.checkAndAddCollapseButtons();
 
-            // 延迟调整新节点高度
+            // 立即调整新节点高度（多重触发以应对 DOM 渲染延迟）
+            this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+            
             setTimeout(() => {
                 this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
-            }, 300); 
+            }, 300);
+
+            setTimeout(() => {
+                this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+            }, 800);
         }
     }
 

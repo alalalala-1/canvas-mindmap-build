@@ -129,25 +129,37 @@ export class CanvasNodeManager {
                             return true;
                         } else {
                             log(`[Node] 高度未变化，跳过更新`);
+                            // 即使高度没变，也要记录 newHeightValue 以便触发同步
+                            newHeightValue = node.height;
+                            return false;
                         }
                     }
                 }
                 return false;
             });
 
-            if (newHeightValue !== null) {
+            // 无论原子修改是否返回 true（即数据是否真的变了），我们都尝试同步内存状态
+            // 这对于新创建的节点非常重要，因为它们可能已经有正确的高度但在 DOM 中没渲染对
+            const currentHeight = newHeightValue;
+            if (currentHeight !== null) {
                 const canvasView = getCanvasView(this.app);
                 const canvas = canvasView ? (canvasView as any).canvas : null;
                 if (canvas?.nodes) {
                     const nodeData = canvas.nodes.get(nodeId);
                     if (nodeData) {
-                        log(`[Node] 同步更新内存节点高度: ${newHeightValue}`);
-                        nodeData.height = newHeightValue;
+                        log(`[Node] 同步更新内存节点高度: ${currentHeight}`);
+                        nodeData.height = currentHeight;
                         if (nodeData.nodeEl) {
-                            nodeData.nodeEl.style.height = `${newHeightValue}px`;
+                            nodeData.nodeEl.style.height = `${currentHeight}px`;
                         }
                         if (typeof nodeData.render === 'function') {
                             nodeData.render();
+                        }
+                        // 如果是刚创建的节点，可能需要再次调用以确保 DOM 稳定后的最终调整
+                        if (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0) {
+                            setTimeout(() => {
+                                this.adjustNodeHeightAfterRender(nodeId);
+                            }, 500);
                         }
                         if (typeof canvas.requestSave === 'function') {
                             canvas.requestSave();
@@ -163,12 +175,15 @@ export class CanvasNodeManager {
     /**
      * 调整所有文本节点的高度
      */
-    async adjustAllTextNodeHeights(): Promise<void> {
+    async adjustAllTextNodeHeights(): Promise<number> {
         try {
             const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
-            if (!canvasFilePath) return;
+            if (!canvasFilePath) {
+                log(`[Node] 批量调整跳过: 找不到当前 Canvas 路径`);
+                return 0;
+            }
 
-            log(`[Node] 批量调整高度: ${canvasFilePath}`);
+            log(`[Node] 开始批量调整高度: ${canvasFilePath}`);
             
             let adjustedCount = 0;
 
@@ -180,12 +195,12 @@ export class CanvasNodeManager {
 
                 const canvasView = getCanvasView(this.app);
                 const canvas = canvasView ? (canvasView as any).canvas : null;
-                const nodeDomMap = new Map<string, Element>();
+                const nodeDomMap = new Map<string, any>();
                 
                 if (canvas?.nodes) {
                     for (const [id, nodeData] of canvas.nodes) {
                         if (nodeData?.nodeEl) {
-                            nodeDomMap.set(id, nodeData.nodeEl);
+                            nodeDomMap.set(id, nodeData);
                         }
                     }
                 }
@@ -202,15 +217,33 @@ export class CanvasNodeManager {
                                 newHeight = this.settings.formulaNodeHeight || 80;
                                 node.width = this.settings.formulaNodeWidth || 400;
                             } else {
-                                const nodeEl = nodeDomMap.get(node.id);
+                                const nodeData = nodeDomMap.get(node.id);
+                                const nodeEl = nodeData?.nodeEl;
                                 const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
                                 newHeight = Math.min(calculatedHeight, maxHeight);
+                                
+                                
                             }
 
+                            // 更新文件数据
                             if (node.height !== newHeight) {
                                 node.height = newHeight;
                                 adjustedCount++;
                                 changed = true;
+                            }
+
+                            // 强制同步内存和渲染高度（即使文件数据没变，也要确保内存和 DOM 一致）
+                            const nodeData = nodeDomMap.get(node.id);
+                            if (nodeData) {
+                                if (nodeData.height !== newHeight) {
+                                    nodeData.height = newHeight;
+                                    if (nodeData.nodeEl) {
+                                        nodeData.nodeEl.style.height = `${newHeight}px`;
+                                    }
+                                    if (typeof nodeData.render === 'function') {
+                                        nodeData.render();
+                                    }
+                                }
                             }
                         }
                     }
@@ -218,12 +251,25 @@ export class CanvasNodeManager {
                 return changed;
             });
 
+            const canvasView = getCanvasView(this.app);
+            if (canvasView) {
+                const canvas = (canvasView as any).canvas;
+                if (canvas) {
+                    if (typeof canvas.requestSave === 'function') canvas.requestSave();
+                    if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
+                }
+            }
+
             if (adjustedCount > 0) {
                 new Notice(`已调整 ${adjustedCount} 个节点高度`);
                 log(`[Node] 批量调整完成: ${adjustedCount}`);
+            } else {
+                log(`[Node] 批量调整完成: 无需更新节点高度`);
             }
+            return adjustedCount;
         } catch (err) {
             log(`[Node] 批量调整失败:`, err);
+            return 0;
         }
     }
 
@@ -369,20 +415,17 @@ export class CanvasNodeManager {
     // ==================== 高度计算逻辑 ====================
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element): number {
-        log(`[Node] calculateTextNodeHeight: content长度=${content?.length || 0}, nodeEl=${nodeEl ? 'exists' : 'null'}`);
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const nodeWidth = this.settings.textNodeWidth || 400;
 
         if (nodeEl) {
             const measuredHeight = this.measureActualContentHeight(nodeEl, content);
-            log(`[Node] measureActualContentHeight 返回: ${measuredHeight}`);
             if (measuredHeight > 0) {
                 return Math.min(measuredHeight, maxHeight);
             }
         }
 
         const computedHeight = this.calculateTextNodeHeightComputed(content, nodeWidth);
-        log(`[Node] calculateTextNodeHeightComputed 返回: ${computedHeight}`);
         return computedHeight;
     }
 

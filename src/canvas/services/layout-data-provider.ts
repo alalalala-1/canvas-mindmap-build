@@ -73,19 +73,66 @@ export class LayoutDataProvider {
         }
 
         const visibleNodes = new Map<string, any>();
+        let domHeightAppliedCount = 0;
+        let domHeightMissingElCount = 0;
+        let domHeightHiddenCount = 0;
+        let domHeightZeroCount = 0;
+        const domHeightDiffSamples: Array<{ id: string; domHeight: number; dataHeight: number }> = [];
+        const heightSamples: Array<{ id: string; height: number }> = [];
         allNodes.forEach((node: any, id: string) => {
             if (visibleNodeIds.has(id)) {
                 const fileNode = fileNodes.get(id);
                 const nodeText = fileNode?.text || node.text;
 
                 const mergedNode = {
-                    ...node,
                     ...(fileNode || {}),
+                    ...node,
                     text: nodeText
                 };
+
+                const nodeEl = node?.nodeEl as HTMLElement | undefined;
+                if (nodeEl && nodeEl instanceof HTMLElement) {
+                    const display = window.getComputedStyle(nodeEl).display;
+                    if (display !== 'none') {
+                        const rectHeight = nodeEl.getBoundingClientRect().height;
+                        const domHeight = rectHeight > 0 ? rectHeight : nodeEl.clientHeight;
+                        if (domHeight && domHeight > 0) {
+                            const dataHeight = typeof mergedNode.height === 'number' ? mergedNode.height : 0;
+                            if (!dataHeight || domHeight > dataHeight + 4) {
+                                mergedNode.height = domHeight;
+                                domHeightAppliedCount++;
+                                if (domHeightDiffSamples.length < 5) {
+                                    domHeightDiffSamples.push({ id, domHeight, dataHeight });
+                                }
+                            }
+                        } else {
+                            domHeightZeroCount++;
+                        }
+                    } else {
+                        domHeightHiddenCount++;
+                    }
+                } else {
+                    domHeightMissingElCount++;
+                }
+
                 visibleNodes.set(id, mergedNode);
+                const finalHeight = typeof mergedNode.height === 'number' ? mergedNode.height : 0;
+                if (heightSamples.length < 20) {
+                    heightSamples.push({ id, height: finalHeight });
+                }
             }
         });
+
+        const visibleCount = visibleNodes.size;
+        if (visibleCount > 0) {
+            const heights = Array.from(visibleNodes.values()).map(n => (typeof n.height === 'number' ? n.height : 0));
+            const heightSum = heights.reduce((a, b) => a + b, 0);
+            const heightMin = Math.min(...heights);
+            const heightMax = Math.max(...heights);
+            const zeroHeightCount = heights.filter(h => h <= 0).length;
+            const avgHeight = heightSum / heights.length;
+            log(`[LayoutData] 高度统计 count=${visibleCount}, min=${heightMin.toFixed(1)}, max=${heightMax.toFixed(1)}, avg=${avgHeight.toFixed(1)}, zero=${zeroHeightCount}, dom覆盖=${domHeightAppliedCount}, 无元素=${domHeightMissingElCount}, 隐藏=${domHeightHiddenCount}, 0高=${domHeightZeroCount}`);
+        }
 
         return {
             visibleNodes,

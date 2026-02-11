@@ -22,6 +22,7 @@ export class LayoutManager {
     private visibilityService: VisibilityService;
     private layoutDataProvider: LayoutDataProvider;
     private floatingNodeService: FloatingNodeService | null = null;
+    private canvasManager: any | null = null;
 
     constructor(
         plugin: Plugin,
@@ -39,6 +40,13 @@ export class LayoutManager {
         this.canvasFileService = canvasFileService;
         this.visibilityService = visibilityService;
         this.layoutDataProvider = layoutDataProvider;
+    }
+
+    /**
+     * 设置 CanvasManager 实例
+     */
+    setCanvasManager(manager: any): void {
+        this.canvasManager = manager;
     }
 
     /**
@@ -60,11 +68,11 @@ export class LayoutManager {
 
         this.arrangeTimeoutId = window.setTimeout(async () => {
             this.arrangeTimeoutId = null;
-            await this.performArrange();
+            await this.performArrange(false);
         }, 100);
     }
 
-    private async performArrange() {
+    private async performArrange(skipAdjust: boolean = false) {
         const activeView = this.app.workspace.activeLeaf?.view;
 
         if (!activeView || activeView.getViewType() !== 'canvas') {
@@ -124,12 +132,9 @@ export class LayoutManager {
                 for (const node of data.nodes) {
                     const newPos = result.get(node.id);
                     if (newPos) {
-                        if (node.x !== newPos.x || node.y !== newPos.y || 
-                            node.width !== newPos.width || node.height !== newPos.height) {
+                        if (node.x !== newPos.x || node.y !== newPos.y) {
                             node.x = newPos.x;
                             node.y = newPos.y;
-                            node.width = newPos.width;
-                            node.height = newPos.height;
                             changed = true;
                         }
                     }
@@ -166,8 +171,6 @@ export class LayoutManager {
                             ...currentData,
                             x: newPosition.x,
                             y: newPosition.y,
-                            width: newPosition.width,
-                            height: newPosition.height,
                         });
                         updatedCount++;
                     }
@@ -175,6 +178,38 @@ export class LayoutManager {
 
                 if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
                 if (typeof canvas.requestSave === 'function') canvas.requestSave();
+            }
+
+            if (!skipAdjust) {
+                let adjustLogged = false;
+                let postAdjustScheduled = false;
+                const triggerAdjust = async () => {
+                    if (!this.canvasManager) {
+                        if (!adjustLogged) {
+                            log(`[Layout] 调整高度失败: 未找到管理器`);
+                            adjustLogged = true;
+                        }
+                        return;
+                    }
+                    if (!adjustLogged) {
+                        log(`[Layout] 调整高度触发`);
+                        adjustLogged = true;
+                    }
+                    await new Promise<void>((resolve) => {
+                        requestAnimationFrame(() => resolve());
+                    });
+                    const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
+                    if (adjustedCount > 0 && !postAdjustScheduled) {
+                        postAdjustScheduled = true;
+                        setTimeout(() => {
+                            void this.performArrange(true);
+                        }, 0);
+                    }
+                };
+
+                void triggerAdjust();
+                setTimeout(() => void triggerAdjust(), 300);
+                setTimeout(() => void triggerAdjust(), 800);
             }
 
             await this.cleanupStaleFloatingNodes(canvas, allNodes);
@@ -259,7 +294,7 @@ export class LayoutManager {
                 if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
             }
 
-            // 使用 LayoutDataProvider 获取布局数据
+            // 获取布局数据
             const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
             if (!layoutData) {
                 log(`[Layout] Toggle: 无法获取布局数据`);
@@ -297,28 +332,36 @@ export class LayoutManager {
 
             if (!newLayout || newLayout.size === 0) return;
 
+            // 计算偏移量，保持当前操作节点的位置不变，避免整个画布跳动
+            const anchorNode = nodes.get(nodeId);
+            const anchorLayout = newLayout.get(nodeId);
+            const anchorOffsetX = anchorNode && anchorLayout ? anchorNode.x - anchorLayout.x : 0;
+            const anchorOffsetY = anchorNode && anchorLayout ? anchorNode.y - anchorLayout.y : 0;
+
             let updatedCount = 0;
             for (const [targetNodeId, newPosition] of newLayout.entries()) {
+                // 不再限制在 subtreeIds 内，而是全局更新所有可见节点，防止重叠
                 const node = nodes.get(targetNodeId);
                 if (node) {
-                    const targetX = isNaN(newPosition.x) ? 0 : newPosition.x;
-                    const targetY = isNaN(newPosition.y) ? 0 : newPosition.y;
+                    const targetX = isNaN(newPosition.x) ? 0 : newPosition.x + anchorOffsetX;
+                    const targetY = isNaN(newPosition.y) ? 0 : newPosition.y + anchorOffsetY;
 
-                    // 保持节点原有高度，只更新位置
-                    if (typeof node.setData === 'function') {
-                        const currentData = node.getData ? node.getData() : {};
-                        node.setData({
-                            ...currentData,
-                            x: targetX,
-                            y: targetY,
-                            // 不覆盖宽度和高度，保持原有值
-                        });
-                        updatedCount++;
-                    } else if (typeof node.x === 'number') {
-                        node.x = targetX;
-                        node.y = targetY;
-                        if (typeof node.update === 'function') node.update();
-                        updatedCount++;
+                    // 只有当位置发生显著变化时才更新，减少对 Canvas 的操作
+                    if (Math.abs(node.x - targetX) > 0.5 || Math.abs(node.y - targetY) > 0.5) {
+                        if (typeof node.setData === 'function') {
+                            const currentData = node.getData ? node.getData() : {};
+                            node.setData({
+                                ...currentData,
+                                x: targetX,
+                                y: targetY,
+                            });
+                            updatedCount++;
+                        } else if (typeof node.x === 'number') {
+                            node.x = targetX;
+                            node.y = targetY;
+                            if (typeof node.update === 'function') node.update();
+                            updatedCount++;
+                        }
                     }
                 }
             }

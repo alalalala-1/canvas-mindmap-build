@@ -31,20 +31,21 @@ export class VisibilityService {
         }
 
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
-        const allCollapsedNodes = new Set<string>(collapsedNodes);
+        const allHiddenNodeIds = new Set<string>();
 
         collapsedNodes.forEach(nodeId => {
-            this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allCollapsedNodes);
+            // 只有后代节点被隐藏，折叠节点本身是可见的
+            this.collapseStateManager.addAllDescendantsToSet(nodeId, edges, allHiddenNodeIds);
         });
 
         allNodeIds.forEach(id => {
-            if (!allCollapsedNodes.has(id)) {
+            if (!allHiddenNodeIds.has(id)) {
                 visibleNodeIds.add(id);
             }
         });
 
-        if (allCollapsedNodes.size > 0) {
-            log(`[Visibility] 可见: ${visibleNodeIds.size}/${allNodeIds.size} (隐藏: ${allCollapsedNodes.size})`);
+        if (allHiddenNodeIds.size > 0) {
+            log(`[Visibility] 可见: ${visibleNodeIds.size}/${allNodeIds.size} (隐藏: ${allHiddenNodeIds.size})`);
         }
         return visibleNodeIds;
     }
@@ -57,10 +58,11 @@ export class VisibilityService {
      */
     isNodeVisible(nodeId: string, edges: any[]): boolean {
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
-        if (collapsedNodes.has(nodeId)) return false;
-
+        
         // 检查该节点是否是任何折叠节点的后代
         for (const collapsedId of collapsedNodes) {
+            if (collapsedId === nodeId) continue; // 折叠节点本身可见
+            
             const descendants = new Set<string>();
             this.collapseStateManager.addAllDescendantsToSet(collapsedId, edges, descendants);
             if (descendants.has(nodeId)) return false;
