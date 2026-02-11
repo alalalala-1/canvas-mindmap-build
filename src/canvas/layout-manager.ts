@@ -259,15 +259,22 @@ export class LayoutManager {
                 if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
             }
 
-            // 计算可见节点
-            const visibleNodeIds = new Set<string>();
-            nodes.forEach((node: any, id: string) => {
-                const nodeEl = node.nodeEl as HTMLElement;
-                if (!nodeEl || nodeEl.style.display !== 'none') visibleNodeIds.add(id);
-            });
+            // 使用 LayoutDataProvider 获取布局数据
+            const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
+            if (!layoutData) {
+                log(`[Layout] Toggle: 无法获取布局数据`);
+                return;
+            }
 
-            log(`[Layout] Toggle: 可见节点=${visibleNodeIds.size}, 隐藏节点=${allHiddenNodeIds.size}`);
+            const { visibleNodes, edges: visibleEdges, canvasData: finalCanvasData } = layoutData;
+            log(`[Layout] Toggle: 可见节点=${visibleNodes.size}, 可见边=${visibleEdges.length}`);
 
+            // 如果可见节点太少，不需要布局
+            if (visibleNodes.size <= 1) {
+                log(`[Layout] Toggle: 可见节点太少，跳过布局`);
+                return;
+            }
+            
             const layoutSettings: CanvasArrangerSettings = {
                 horizontalSpacing: this.settings.horizontalSpacing,
                 verticalSpacing: this.settings.verticalSpacing,
@@ -279,27 +286,14 @@ export class LayoutManager {
                 formulaNodeHeight: this.settings.formulaNodeHeight,
             };
 
-            const visibleNodes = new Map<string, any>();
-            nodes.forEach((node: any, id: string) => {
-                if (visibleNodeIds.has(id)) visibleNodes.set(id, node);
-            });
-
-            // 过滤边：只保留两个端点都可见的边
-            const visibleEdges = edges.filter((edge: any) => {
-                const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
-                const toId = getNodeIdFromEdgeEndpoint(edge?.to);
-                return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
-            });
-            
-            log(`[Layout] Toggle: 可见边=${visibleEdges.length}`);
-            
-            // 如果可见节点太少，不需要布局
-            if (visibleNodes.size <= 1) {
-                log(`[Layout] Toggle: 可见节点太少，跳过布局`);
-                return;
-            }
-            
-            const newLayout = originalArrangeLayout(visibleNodes, visibleEdges, layoutSettings, undefined, undefined, canvasData);
+            const newLayout = originalArrangeLayout(
+                visibleNodes, 
+                visibleEdges, 
+                layoutSettings, 
+                layoutData.originalEdges, 
+                layoutData.allNodes, 
+                finalCanvasData || canvasData
+            );
 
             if (!newLayout || newLayout.size === 0) return;
 
