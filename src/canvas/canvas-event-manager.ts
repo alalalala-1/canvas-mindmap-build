@@ -472,41 +472,7 @@ export class CanvasEventManager {
         return null;
     }
 
-    private checkNodeHasIncomingEdge(nodeId: string, canvas: any): boolean {
-        if (!canvas?.edges) return false;
-        
-        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
-                     Array.isArray(canvas.edges) ? canvas.edges : [];
-        
-        for (const edge of edges) {
-            const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
-            if (toNodeId === nodeId) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-
-    private checkNodeHasOutgoingEdge(nodeId: string, canvas: any): boolean {
-        if (!canvas?.edges) return false;
-        
-        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
-                     Array.isArray(canvas.edges) ? canvas.edges : [];
-        
-        for (const edge of edges) {
-            const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-            if (fromNodeId === nodeId) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-
-    private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
-        return getNodeIdFromEdgeEndpoint(endpoint);
-    }
+    // 已迁移到 canvas-utils.ts，直接使用 getEdgeToNodeId / getEdgeFromNodeId
 
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);

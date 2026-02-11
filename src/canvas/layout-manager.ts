@@ -5,6 +5,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
+import { getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
@@ -233,8 +234,8 @@ export class LayoutManager {
                 }
                 
                 for (const edge of edges) {
-                    const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-                    const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                    const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
+                    const toId = getNodeIdFromEdgeEndpoint(edge?.to);
                     if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
                         if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = 'none';
                         if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = 'none';
@@ -249,8 +250,8 @@ export class LayoutManager {
                 }
                 
                 for (const edge of edges) {
-                    const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-                    const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                    const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
+                    const toId = getNodeIdFromEdgeEndpoint(edge?.to);
                     if ((fromId && allChildNodeIds.has(fromId)) || (toId && allChildNodeIds.has(toId))) {
                         if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = '';
                         if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = '';
