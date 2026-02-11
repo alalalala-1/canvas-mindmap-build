@@ -151,7 +151,7 @@ function estimateTextNodeHeight(content: string, width: number, settings: Canvas
 }
 
 /**
- * 计算画布节点的自动布局 - 支持浮动子树和“大行”布局
+ * 计算画布节点的自动布局 - 支持浮动子树和"大行"布局
  * @param nodes 可见节点Map（用于布局计算）
  * @param edges 当前边数组（用于布局计算）
  * @param settings 布局设置
@@ -187,15 +187,12 @@ export function arrangeLayout(
     floatingNodes = validFloatingNodes;
     originalParents = validOriginalParents;
 
-
-
-    // 构建布局图
+    // 构建布局图 - 只使用可见节点 (nodes参数)
     const layoutNodes = new Map<string, LayoutNode>();
-    const nodesForInit = allNodes || nodes;
 
-    // 初始化所有节点
+    // 初始化可见节点
     let formulaNodeCount = 0;
-    nodesForInit.forEach((nodeData, nodeId) => {
+    nodes.forEach((nodeData, nodeId) => {
         // 检测是否是公式节点（内容以 $$ 开头和结尾，后面可能有 fromLink 注释）
         const nodeText = nodeData.text || '';
         const isFormula = nodeText && /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(nodeText.trim());
@@ -520,10 +517,10 @@ export function arrangeLayout(
         };
     }
 
-    // 跟踪整个画布当前的全局最大 Y 底部位置（用于实现严格的“大行”块状布局）
+    // 跟踪整个画布当前的全局最大 Y 底部位置（用于实现严格的"大行"块状布局）
     let currentGlobalBottomY = -settings.verticalSpacing;
 
-    // 为每个根节点（即每个“大行”）执行布局
+    // 为每个根节点（即每个"大行"）执行布局
     rootNodes.forEach(rootId => {
         // A. 计算深度和列
         calculateMaxDepth(rootId);
@@ -552,8 +549,8 @@ export function arrangeLayout(
             }
         }
 
-        // D. 计算该“大行”相对于其内部 y=0 的偏移量，使其整体位于上一个“大行”之下
-        // 用户要求：以整个“大行”中向下凸起最多的占位作为基准
+        // D. 计算该"大行"相对于其内部 y=0 的偏移量，使其整体位于上一个"大行"之下
+        // 用户要求：以整个"大行"中向下凸起最多的占位作为基准
         
         // 先找到子树在相对坐标系下的最高点（最小 Y）
         let subtreeMinY = Infinity;
@@ -573,7 +570,7 @@ export function arrangeLayout(
             maxSubtreeBottom = Math.max(maxSubtreeBottom, node.y + node.height);
         }
 
-        // 更新全局底部，确保下一个“大行”完全在当前大行之下
+        // 更新全局底部，确保下一个"大行"完全在当前大行之下
         currentGlobalBottomY = maxSubtreeBottom;
     });
 
@@ -609,4 +606,3 @@ export function arrangeLayout(
 
     return result;
 }
-
