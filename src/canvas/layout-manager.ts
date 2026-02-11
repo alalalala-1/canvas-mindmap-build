@@ -300,14 +300,14 @@ export class LayoutManager {
                     const targetX = isNaN(newPosition.x) ? 0 : newPosition.x;
                     const targetY = isNaN(newPosition.y) ? 0 : newPosition.y;
 
+                    // 保持节点原有高度，只更新位置
                     if (typeof node.setData === 'function') {
                         const currentData = node.getData ? node.getData() : {};
                         node.setData({
                             ...currentData,
                             x: targetX,
                             y: targetY,
-                            width: newPosition.width,
-                            height: newPosition.height,
+                            // 不覆盖宽度和高度，保持原有值
                         });
                         updatedCount++;
                     } else if (typeof node.x === 'number') {
