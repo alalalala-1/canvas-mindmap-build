@@ -124,14 +124,14 @@ export class EdgeDeletionService {
                 if (!canvasData.edges) return false;
                 
                 const originalEdgeCount = canvasData.edges.length;
-                canvasData.edges = canvasData.edges.filter((e: any) => {
-                    const fromId = e.from?.node?.id || e.fromNode;
-                    const toId = e.to?.node?.id || e.toNode;
+                canvasData.edges = canvasData.edges.filter((e) => {
+                    const fromId = typeof e.from === 'string' ? e.from : (e.from?.node?.id || e.fromNode);
+                    const toId = typeof e.to === 'string' ? e.to : (e.to?.node?.id || e.toNode);
                     return !(fromId === parentNodeId && toId === childNodeId);
                 });
                 
-                hasOtherIncomingEdges = canvasData.edges.some((e: any) => {
-                    const toId = e.to?.node?.id || e.toNode;
+                hasOtherIncomingEdges = canvasData.edges.some((e) => {
+                    const toId = typeof e.to === 'string' ? e.to : (e.to?.node?.id || e.toNode);
                     return toId === childNodeId;
                 });
                 

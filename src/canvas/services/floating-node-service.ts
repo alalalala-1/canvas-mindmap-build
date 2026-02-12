@@ -5,7 +5,7 @@ import { EdgeChangeDetector, NewEdgeCallback } from './edge-change-detector';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { CanvasLike, CanvasEdgeLike, ICanvasManager } from '../types';
+import { CanvasLike, CanvasEdgeLike, CanvasNodeLike, ICanvasManager } from '../types';
 
 export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
@@ -27,7 +27,7 @@ export class FloatingNodeService {
         this.canvasManager = canvasManager;
     }
 
-    private getNodeFromCanvas(nodeId: string): any | null {
+    private getNodeFromCanvas(nodeId: string): CanvasNodeLike | null {
         if (!this.canvas?.nodes) return null;
         
         if (this.canvas.nodes instanceof Map) {
@@ -35,7 +35,7 @@ export class FloatingNodeService {
         }
         
         if (typeof this.canvas.nodes === 'object') {
-            return (this.canvas.nodes as Record<string, any>)[nodeId] || null;
+            return (this.canvas.nodes as Record<string, CanvasNodeLike>)[nodeId] || null;
         }
         
         return null;
@@ -279,21 +279,15 @@ export class FloatingNodeService {
         return persistSuccess;
     }
 
-    /**
-     * 清理节点相关的浮动标记（用于节点被彻底删除时）
-     */
-    async clearFloatingMarks(node: any): Promise<void> {
+    async clearFloatingMarks(node: CanvasNodeLike): Promise<void> {
         if (!node?.id || !this.currentCanvasFilePath) return;
         
         const nodeId = node.id;
         
-        // 1. 清除视觉样式
         this.styleManager.clearFloatingStyle(nodeId);
         
-        // 2. 更新内存缓存
         this.stateManager.updateMemoryCache(this.currentCanvasFilePath, nodeId, null);
         
-        // 3. 彻底从状态文件中移除记录
         await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath);
     }
 
@@ -575,11 +569,7 @@ export class FloatingNodeService {
     // 验证
     // =========================================================================
 
-    /**
-     * 验证浮动节点状态
-     * 如果浮动节点有入边，清除其状态
-     */
-    async validateFloatingNodes(edges: any[]): Promise<string[]> {
+    async validateFloatingNodes(edges: CanvasEdgeLike[]): Promise<string[]> {
         if (!this.currentCanvasFilePath) return [];
 
         const clearedNodes = await this.stateManager.validateFloatingNodes(
@@ -587,7 +577,6 @@ export class FloatingNodeService {
             edges
         );
 
-        // 清除视觉样式
         for (const nodeId of clearedNodes) {
             this.styleManager.clearFloatingStyle(nodeId);
         }

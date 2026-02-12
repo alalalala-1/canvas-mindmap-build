@@ -170,9 +170,9 @@ export class NodeDeletionService {
         log(`[Delete] 刷新 Canvas`);
     }
 
-    private getEdgesFromCanvas(canvas: CanvasLike): any[] {
+    private getEdgesFromCanvas(canvas: CanvasLike): CanvasEdgeLike[] {
         const canvasAny = canvas as any;
-        if (canvasAny.fileData?.edges) return canvasAny.fileData.edges;
+        if (canvasAny.fileData?.edges) return canvasAny.fileData.edges as CanvasEdgeLike[];
         if (canvas.edges) {
             return canvas.edges instanceof Map 
                 ? Array.from(canvas.edges.values()) 
@@ -194,10 +194,10 @@ export class NodeDeletionService {
         return [];
     }
 
-    private findParentNode(nodeId: string, edges: any[], allNodes: CanvasNodeLike[]): CanvasNodeLike | null {
+    private findParentNode(nodeId: string, edges: CanvasEdgeLike[], allNodes: CanvasNodeLike[]): CanvasNodeLike | null {
         for (const edge of edges) {
-            const fromId = getEdgeFromNodeId(edge);
-            const toId = getEdgeToNodeId(edge);
+            const fromId = getEdgeFromNodeId(edge as any);
+            const toId = getEdgeToNodeId(edge as any);
 
             if (toId === nodeId && fromId) {
                 const parentNode = allNodes.find(n => n.id === fromId);

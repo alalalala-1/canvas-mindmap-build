@@ -1,5 +1,5 @@
 import { log } from '../../utils/logger';
-import { CanvasLike } from '../types';
+import { CanvasLike, CanvasNodeLike } from '../types';
 
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
@@ -154,7 +154,7 @@ export class FloatingNodeStyleManager {
                     return el as HTMLElement;
                 }
                 
-                let nodes: any[];
+                let nodes: CanvasNodeLike[];
                 if (this.canvas.nodes instanceof Map) {
                     nodes = Array.from(this.canvas.nodes.values());
                 } else {

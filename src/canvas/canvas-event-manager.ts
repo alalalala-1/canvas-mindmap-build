@@ -211,8 +211,8 @@ export class CanvasEventManager {
 
     private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
         const canvasAny = canvas as any;
-        let edges: any[] = [];
-        if (canvasAny.fileData?.edges) edges = canvasAny.fileData.edges;
+        let edges: CanvasEdgeLike[] = [];
+        if (canvasAny.fileData?.edges) edges = canvasAny.fileData.edges as CanvasEdgeLike[];
         if (canvas.edges) {
             edges = canvas.edges instanceof Map 
                 ? Array.from(canvas.edges.values()) 

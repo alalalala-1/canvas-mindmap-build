@@ -1,7 +1,7 @@
 import { App, TFile } from 'obsidian';
 import { log } from '../../utils/logger';
 import { CanvasFileService } from './canvas-file-service';
-import { FloatingNodeRecord, FloatingNodesMetadata } from '../types';
+import { FloatingNodeRecord, FloatingNodesMetadata, CanvasEdgeLike } from '../types';
 
 export class FloatingNodeStateManager {
     private app: App;
@@ -140,7 +140,7 @@ export class FloatingNodeStateManager {
 
                     // 2. 清除节点 data 属性中的标记
                     if (canvasData.nodes) {
-                        const nodeData = canvasData.nodes.find((n: any) => n.id === id);
+                        const nodeData = canvasData.nodes.find(n => n.id === id);
                         if (nodeData?.data?.isFloating) {
                             delete nodeData.data.isFloating;
                             delete nodeData.data.originalParent;
@@ -163,10 +163,7 @@ export class FloatingNodeStateManager {
         }
     }
 
-    /**
-     * 辅助方法：更新内存缓存
-     */
-    public updateMemoryCache(canvasFilePath: string, nodeId: string, data: any | null): void {
+    public updateMemoryCache(canvasFilePath: string, nodeId: string, data: FloatingNodeRecord | null): void {
         let canvasCache = this.floatingNodesCache.get(canvasFilePath);
         if (!canvasCache) {
             canvasCache = new Map();
@@ -180,16 +177,7 @@ export class FloatingNodeStateManager {
         }
     }
 
-    // =========================================================================
-    // 状态读取
-    // =========================================================================
-
-    /**
-     * 获取所有浮动节点
-     * 优先从缓存读取
-     */
-    async getAllFloatingNodes(canvasFilePath: string): Promise<Map<string, any>> {
-        // 如果已经有缓存且已初始化，直接返回
+    async getAllFloatingNodes(canvasFilePath: string): Promise<Map<string, FloatingNodeRecord>> {
         if (this.isInitialized.get(canvasFilePath) && this.floatingNodesCache.has(canvasFilePath)) {
             return this.floatingNodesCache.get(canvasFilePath)!;
         }
@@ -331,13 +319,9 @@ export class FloatingNodeStateManager {
         }
     }
 
-    /**
-     * 验证浮动节点状态（检查是否真的有入边）
-     * 如果浮动节点有入边，说明它已经不是浮动节点，清除其状态
-     */
     async validateFloatingNodes(
         canvasFilePath: string,
-        edges: any[]
+        edges: CanvasEdgeLike[]
     ): Promise<string[]> {
         const clearedNodes: string[] = [];
 
@@ -348,15 +332,13 @@ export class FloatingNodeStateManager {
             }
 
             for (const [nodeId, data] of floatingNodes) {
-                // 检查是否有边连接到该节点
-                const incomingEdges = edges.filter((edge: any) => {
-                    const toId = edge?.to?.node?.id || edge?.toNode ||
-                                (typeof edge.to === 'string' ? edge.to : 
-                                 typeof edge.to?.id === 'string' ? edge.to.id : null);
+                const incomingEdges = edges.filter((edge) => {
+                    const toId = typeof edge.to === 'string' 
+                        ? edge.to 
+                        : edge.to?.node?.id || edge.toNode;
                     return toId === nodeId;
                 });
 
-                // 如果有入边，说明不是浮动节点，清除状态
                 if (incomingEdges.length > 0) {
                     log(`[FloatingState] 发现节点 ${nodeId} 有 ${incomingEdges.length} 条入边，清除浮动状态`);
                     await this.clearNodeFloatingState(nodeId, canvasFilePath);
