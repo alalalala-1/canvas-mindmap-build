@@ -1,4 +1,4 @@
-import { App, Modal, Setting, TextAreaComponent } from 'obsidian';
+import { App, Modal, Setting } from 'obsidian';
 
 /**
  * 节点文本编辑模态框
@@ -25,8 +25,7 @@ export class EditTextModal extends Modal {
                 text.onChange((value) => {
                     this.result = value;
                 });
-                text.inputEl.style.width = '100%';
-                text.inputEl.style.height = '200px';
+                text.inputEl.addClass('canvas-mindmap-edit-textarea');
             });
 
         new Setting(contentEl)

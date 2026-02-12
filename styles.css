@@ -9,14 +9,13 @@
     outline: none !important;
     background-color: var(--cmb-collapse-button-color, #e74c3c) !important;
     /* 正方形，宽度固定 */
-    width: 20px !important;
-    min-width: 20px !important;
-    max-width: 20px !important;
-    height: 20px !important;
-    min-height: 20px !important;
-    max-height: 20px !important;
-    /* 右侧两个角为圆角 */
-    border-radius: 0 3px 3px 0 !important;
+    width: var(--cmb-collapse-btn-width, 20px) !important;
+    min-width: var(--cmb-collapse-btn-width, 20px) !important;
+    max-width: var(--cmb-collapse-btn-width, 20px) !important;
+    height: var(--cmb-collapse-btn-height, 20px) !important;
+    min-height: var(--cmb-collapse-btn-height, 20px) !important;
+    max-height: var(--cmb-collapse-btn-height, 20px) !important;
+    border-radius: 0 !important;
     padding: 0 !important;
     margin: 0 !important;
 
@@ -88,7 +87,7 @@
 .canvas-node .cmb-collapse-button {
     position: absolute !important;
     /* 按钮左侧与节点右侧重叠 */
-    right: -20px !important;
+    right: var(--cmb-collapse-btn-right, -20px) !important;
     top: 0 !important;
     left: auto !important;
     transform: none !important;
@@ -97,14 +96,13 @@
 /* 平板设备优化 (13.3寸，支持笔和手指触摸) */
 @media (min-width: 1024px) and (pointer: coarse) {
     .cmb-collapse-button {
-        width: 24px !important;
-        min-width: 24px !important;
-        max-width: 24px !important;
-        height: 24px !important;
-        min-height: 24px !important;
-        max-height: 24px !important;
-        /* 右侧两个角为圆角 */
-        border-radius: 0 3px 3px 0 !important;
+        width: var(--cmb-collapse-btn-width, 24px) !important;
+        min-width: var(--cmb-collapse-btn-width, 24px) !important;
+        max-width: var(--cmb-collapse-btn-width, 24px) !important;
+        height: var(--cmb-collapse-btn-height, 24px) !important;
+        min-height: var(--cmb-collapse-btn-height, 24px) !important;
+        max-height: var(--cmb-collapse-btn-height, 24px) !important;
+        border-radius: 0 !important;
         /* 保持按钮紧贴节点边框 */
         padding: 0 !important;
         margin: 0 !important;
@@ -112,7 +110,7 @@
 
     .canvas-node .cmb-collapse-button {
         /* 精确定位，按钮左侧与节点右侧重叠 */
-        right: -24px !important;
+        right: var(--cmb-collapse-btn-right, -24px) !important;
         top: 0 !important;
         left: auto !important;
         transform: none !important;
@@ -194,6 +192,10 @@
     box-shadow: 0 0 20px rgba(255, 68, 68, 0.7) !important;
 }
 
+.cmb-floating-node .canvas-node-content {
+    border-radius: 4px !important;
+}
+
 /* ============================================================================
    文本节点内容区域滚动样式
    当节点高度达到最大值时，内容可滚动
@@ -240,4 +242,100 @@
     .canvas-node .canvas-node-content::-webkit-scrollbar-thumb:hover {
         background-color: rgba(255, 255, 255, 0.5) !important;
     }
+}
+
+.canvas-mindmap-edit-textarea {
+    width: 100% !important;
+    height: 200px !important;
+}
+
+.canvas-mindmap-delete-modal,
+.canvas-mindmap-delete-edge-modal,
+.canvas-mindmap-delete-modal .modal,
+.canvas-mindmap-delete-edge-modal .modal {
+    border: 3px solid #e74c3c !important;
+    border-radius: 15px !important;
+}
+
+.canvas-mindmap-delete-modal .modal-title,
+.canvas-mindmap-delete-edge-modal .modal-title {
+    font-size: 12px !important;
+    font-weight: bold !important;
+}
+
+.canvas-mindmap-delete-modal--simple,
+.canvas-mindmap-delete-modal--simple .modal {
+    max-width: 340px !important;
+}
+
+.canvas-mindmap-delete-modal--simple .modal-content {
+    max-width: 320px !important;
+}
+
+.canvas-mindmap-delete-modal--cascade,
+.canvas-mindmap-delete-modal--cascade .modal {
+    max-width: 470px !important;
+}
+
+.canvas-mindmap-delete-modal--cascade .modal-content {
+    max-width: 450px !important;
+}
+
+.canvas-mindmap-delete-edge-modal--simple,
+.canvas-mindmap-delete-edge-modal--simple .modal {
+    max-width: 340px !important;
+}
+
+.canvas-mindmap-delete-edge-modal--simple .modal-content {
+    max-width: 320px !important;
+}
+
+.canvas-mindmap-delete-description,
+.canvas-mindmap-delete-edge-description {
+    margin-bottom: 15px !important;
+    text-align: center !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+}
+
+.canvas-mindmap-delete-info {
+    font-size: 12px !important;
+    color: #666 !important;
+    margin-bottom: 15px !important;
+    white-space: pre-line !important;
+}
+
+.canvas-mindmap-delete-actions,
+.canvas-mindmap-delete-edge-actions {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-around !important;
+    gap: 10px !important;
+    margin-top: 20px !important;
+}
+
+.canvas-mindmap-delete-btn,
+.canvas-mindmap-delete-edge-btn {
+    border: 3px solid #e74c3c !important;
+    border-radius: 15px !important;
+    padding: 8px 16px !important;
+    font-size: 12px !important;
+    font-weight: bold !important;
+    color: #e74c3c !important;
+    background-color: white !important;
+    cursor: pointer !important;
+    min-width: 70px !important;
+    transition: all 0.2s ease !important;
+}
+
+.canvas-mindmap-delete-btn:hover,
+.canvas-mindmap-delete-edge-btn:hover {
+    background-color: #e74c3c !important;
+    color: white !important;
+}
+
+.canvas-mindmap-delete-btn:active,
+.canvas-mindmap-delete-edge-btn:active {
+    background-color: #c0392b !important;
+    color: white !important;
 }

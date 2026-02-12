@@ -133,10 +133,6 @@ export class CanvasUIManager {
     // =========================================================================
     private async addCollapseButton(nodeEl: Element, nodeId: string, edges: any[]) {
         const direction = this.collapseStateManager.getNodeDirection(nodeId, edges);
-        const nodeWidth = nodeEl.clientWidth || 300;
-        const nodeHeight = nodeEl.clientHeight || 100;
-
-        const nodeElAsHtml = nodeEl as HTMLElement;
         const computedStyle = window.getComputedStyle(nodeEl);
         if (computedStyle.position !== 'relative' && computedStyle.position !== 'absolute') {
             nodeEl.setAttribute('style', `position: relative; ${nodeEl.getAttribute('style') || ''}`);
@@ -151,7 +147,7 @@ export class CanvasUIManager {
         const isCollapsed = this.collapseStateManager.isCollapsed(nodeId);
         btn.classList.add(isCollapsed ? 'collapsed' : 'expanded');
 
-        this.applyButtonStyle(btn, direction, nodeWidth, nodeHeight);
+        this.applyButtonStyle(btn);
         nodeEl.appendChild(btn);
         nodeEl.setAttribute('data-node-id', nodeId);
     }
@@ -159,41 +155,14 @@ export class CanvasUIManager {
     // =========================================================================
     // 应用按钮样式
     // =========================================================================
-    private applyButtonStyle(btn: HTMLElement, direction: string, nodeWidth: number, nodeHeight: number) {
+    private applyButtonStyle(btn: HTMLElement) {
         // 检测是否是触控设备，使用不同的按钮尺寸
         const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
         const btnWidth = isTouchDevice ? 24 : 20;
-        // 按钮高度比节点高度高30%
-        const btnHeight = Math.round(nodeHeight * 1.3);
-
-        btn.style.position = 'absolute';
-        btn.style.zIndex = '100';
-        btn.style.cursor = 'pointer';
-        btn.style.border = 'none';
-        btn.style.outline = 'none';
-        btn.style.backgroundColor = '#D4A574';
-        // 竖条按钮，宽度固定，高度为节点的130%
-        btn.style.width = `${btnWidth}px`;
-        btn.style.height = `${btnHeight}px`;
-        btn.style.minWidth = `${btnWidth}px`;
-        btn.style.minHeight = `${btnHeight}px`;
-        btn.style.borderRadius = '6px';
-        btn.style.padding = '0';
-        btn.style.margin = '0';
-        btn.style.display = 'flex';
-        btn.style.alignItems = 'center';
-        btn.style.justifyContent = 'center';
-        btn.style.fontSize = '12px';
-        btn.style.color = 'white';
-        btn.style.fontWeight = 'bold';
-        btn.style.boxShadow = '0 2px 4px rgba(0,0,0,0.3)';
-        btn.style.pointerEvents = 'auto';
-        // 按钮为正方形，左侧与节点右侧重叠，顶部对齐
-        // right = -按钮宽度，这样按钮左侧就与节点右侧重叠
-        btn.style.right = `-${btnWidth}px`;
-        btn.style.top = '0px';
-        btn.style.left = 'auto';
-        btn.style.transform = 'none';
+        btn.setAttribute(
+            'style',
+            `--cmb-collapse-btn-width: ${btnWidth}px; --cmb-collapse-btn-height: ${btnWidth}px; --cmb-collapse-btn-right: -${btnWidth}px;`
+        );
     }
 
     // =========================================================================
@@ -215,19 +184,15 @@ export class CanvasUIManager {
         const nodeEl = this.findNodeElementById(nodeId);
         if (nodeEl) {
             // 检查是否已经是浮动样式，避免重复应用
-            if (nodeEl.style.border === '4px solid rgb(255, 68, 68)') return;
-            
-            nodeEl.style.border = '4px solid #ff4444';
-            nodeEl.style.borderRadius = '8px';
+            if (nodeEl.classList.contains('cmb-floating-node')) return;
+
             nodeEl.classList.add('cmb-floating-node');
         } else {
             // 如果找不到，延迟后重试（只重试一次）
             setTimeout(() => {
                 const retryNodeEl = this.findNodeElementById(nodeId);
                 if (retryNodeEl) {
-                    if (retryNodeEl.style.border !== '4px solid rgb(255, 68, 68)') {
-                        retryNodeEl.style.border = '4px solid #ff4444';
-                        retryNodeEl.style.borderRadius = '8px';
+                    if (!retryNodeEl.classList.contains('cmb-floating-node')) {
                         retryNodeEl.classList.add('cmb-floating-node');
                     }
                 }
@@ -241,8 +206,6 @@ export class CanvasUIManager {
     clearFloatingNodeStyle(nodeId: string): void {
         const nodeEl = this.findNodeElementById(nodeId);
         if (nodeEl) {
-            nodeEl.style.border = '';
-            nodeEl.style.borderRadius = '';
             nodeEl.classList.remove('cmb-floating-node');
         }
     }

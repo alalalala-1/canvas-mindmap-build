@@ -35,22 +35,11 @@ export class FloatingNodeStyleManager {
 
             nodeEl.classList.add(this.FLOATING_CLASS);
 
-            nodeEl.style.setProperty('border', '4px solid #ff4444', 'important');
-            nodeEl.style.setProperty('border-radius', '8px', 'important');
-            nodeEl.style.setProperty('box-shadow', '0 0 15px rgba(255, 68, 68, 0.4)', 'important');
-            nodeEl.style.setProperty('outline', '0px solid transparent', 'important');
-
             log(`[Style] 成功应用红框: ${nodeId}`);
 
             // 强制重绘
             void nodeEl.offsetHeight;
-            
-            // 额外的一步：确保子元素不会覆盖边框
-            const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
-            if (contentEl) {
-                contentEl.style.setProperty('border-radius', '4px', 'important');
-            }
-            
+
             return true;
         } catch (err) {
             log('[Style] 失败:', err);
@@ -93,29 +82,9 @@ export class FloatingNodeStyleManager {
             log(`[Style] 清除红框: ${nodeId}, hasClass=${nodeEl.classList.contains(this.FLOATING_CLASS)}`);
             if (nodeEl.classList.contains(this.FLOATING_CLASS)) {
                 nodeEl.classList.remove(this.FLOATING_CLASS);
-                
-                nodeEl.style.removeProperty('border');
-                nodeEl.style.removeProperty('border-radius');
-                nodeEl.style.removeProperty('box-shadow');
-                nodeEl.style.removeProperty('outline');
-                
-                const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
-                if (contentEl) {
-                    contentEl.style.removeProperty('border-radius');
-                }
 
                 // 强制重绘
                 void nodeEl.offsetHeight;
-            } else {
-                // 即使没有类名，也检查并清除可能的内联样式
-                const border = nodeEl.style.getPropertyValue('border');
-                if (border && border.includes('#ff4444')) {
-                    log(`[Style] 强制清除残留内联样式: ${nodeId}`);
-                    nodeEl.style.removeProperty('border');
-                    nodeEl.style.removeProperty('border-radius');
-                    nodeEl.style.removeProperty('box-shadow');
-                    nodeEl.style.removeProperty('outline');
-                }
             }
             return true;
         } catch (err) {
