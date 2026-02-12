@@ -4,25 +4,34 @@ import { CanvasLike, CanvasNodeLike } from '../types';
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
     private canvas: CanvasLike | null = null;
+    private pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
     setCanvas(canvas: CanvasLike): void {
         this.canvas = canvas;
     }
 
-    // =========================================================================
-    // 样式应用
-    // =========================================================================
+    cleanup(): void {
+        for (const timeoutId of this.pendingTimeouts) {
+            clearTimeout(timeoutId);
+        }
+        this.pendingTimeouts.clear();
+    }
 
-    /**
-     * 应用浮动节点样式（红框）
-     */
+    private scheduleRetry(callback: () => void, delay: number): void {
+        const timeoutId = setTimeout(() => {
+            this.pendingTimeouts.delete(timeoutId);
+            callback();
+        }, delay);
+        this.pendingTimeouts.add(timeoutId);
+    }
+
     applyFloatingStyle(nodeId: string): boolean {
         try {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 找不到节点元素: ${nodeId}，将延迟重试`);
-                setTimeout(() => this.applyFloatingStyleRetry(nodeId, 1), 300);
-                setTimeout(() => this.applyFloatingStyleRetry(nodeId, 2), 1000);
+                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 1), 300);
+                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 2), 1000);
                 return false;
             }
 
@@ -30,7 +39,6 @@ export class FloatingNodeStyleManager {
 
             log(`[Style] 成功应用红框: ${nodeId}`);
 
-            // 强制重绘
             void nodeEl.offsetHeight;
 
             return true;
@@ -40,35 +48,22 @@ export class FloatingNodeStyleManager {
         }
     }
 
-    /**
-     * 延迟重试应用样式
-     */
     private applyFloatingStyleRetry(nodeId: string, retryNum: number): void {
         const nodeEl = this.findNodeElement(nodeId);
         if (nodeEl) {
             log(`[Style] 应用红框 (重试 #${retryNum}): ${nodeId}`);
             this.applyFloatingStyle(nodeId);
-        } else {
-            // 降低找不到节点的日志级别或频率，避免日志爆炸
-            // log(`[Style] 找不到节点元素 (重试 #${retryNum}): ${nodeId}`);
         }
     }
 
-    // =========================================================================
-    // 样式清除
-    // =========================================================================
-
-    /**
-     * 清除浮动节点样式
-     */
     clearFloatingStyle(nodeId: string): boolean {
         try {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 1), 300);
-                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 2), 600);
-                setTimeout(() => this.clearFloatingStyleRetry(nodeId, 3), 1000);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 1), 300);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 2), 600);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 3), 1000);
                 return false;
             }
 
@@ -76,7 +71,6 @@ export class FloatingNodeStyleManager {
             if (nodeEl.classList.contains(this.FLOATING_CLASS)) {
                 nodeEl.classList.remove(this.FLOATING_CLASS);
 
-                // 强制重绘
                 void nodeEl.offsetHeight;
             }
             return true;
@@ -86,9 +80,6 @@ export class FloatingNodeStyleManager {
         }
     }
 
-    /**
-     * 延迟重试清除样式
-     */
     private clearFloatingStyleRetry(nodeId: string, retryNum: number): void {
         const nodeEl = this.findNodeElement(nodeId);
         if (nodeEl) {

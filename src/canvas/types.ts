@@ -149,24 +149,3 @@ export type CanvasLike = {
     requestUpdate?: () => void;
     requestSave?: () => void;
 };
-
-/**
- * 结果类型，用于错误处理
- */
-export type Result<T, E = Error> =
-    | { success: true; data: T }
-    | { success: false; error: E };
-
-/**
- * 创建成功结果
- */
-export function ok<T>(data: T): Result<T, never> {
-    return { success: true, data };
-}
-
-/**
- * 创建失败结果
- */
-export function err<E = Error>(error: E): Result<never, E> {
-    return { success: false, error };
-}

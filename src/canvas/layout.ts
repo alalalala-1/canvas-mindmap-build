@@ -1,5 +1,6 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint } from './types';
+import { CONSTANTS } from '../constants';
 
 interface LayoutNode {
     id: string;
@@ -15,6 +16,20 @@ interface LayoutNode {
 interface LayoutEdge {
     fromNode: string;
     toNode: string;
+}
+
+interface LayoutContext {
+    layoutNodes: Map<string, LayoutNode>;
+    layoutParentMap: Map<string, string>;
+    completeParentMap: Map<string, string>;
+    completeChildrenMap: Map<string, string[]>;
+    floatingSubtreeRoots: Set<string>;
+    floatingSubtreeOriginalParents: Map<string, string>;
+    rootNodes: string[];
+    nodeColumn: Map<string, number>;
+    columnWidths: Map<number, number>;
+    nodeMaxDepth: Map<string, number>;
+    maxOverallDepth: number;
 }
 
 export interface CanvasArrangerSettings {
@@ -103,8 +118,8 @@ function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[
 function estimateTextNodeHeight(content: string, width: number, settings: CanvasArrangerSettings): number {
     const maxHeight = settings.textNodeMaxHeight || 800;
     const contentWidth = width - 40;
-    const fontSize = 14;
-    const lineHeight = 26;
+    const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
+    const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
     
     const chineseCharRegex = /[\u4e00-\u9fa5]/;
     let totalLines = 0;
@@ -134,53 +149,23 @@ function estimateTextNodeHeight(content: string, width: number, settings: Canvas
         totalLines += Math.max(1, linesNeeded);
     }
 
-    const safetyPadding = 44;
-    const calculatedHeight = Math.ceil(totalLines * lineHeight + safetyPadding);
-    return Math.max(60, Math.min(calculatedHeight, maxHeight));
+    const calculatedHeight = Math.ceil(totalLines * lineHeight + CONSTANTS.TYPOGRAPHY.SAFETY_PADDING);
+    return Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
 }
 
-export function arrangeLayout(
+function initializeLayoutNodes(
     nodes: Map<string, CanvasNodeLike>,
-    edges: CanvasEdgeLike[],
-    settings: CanvasArrangerSettings,
-    originalEdges?: CanvasEdgeLike[],
-    allNodes?: Map<string, CanvasNodeLike>,
-    canvasData?: CanvasDataLike
-): Map<string, { x: number; y: number; width: number; height: number }> {
-    log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
-
-    // 获取浮动节点信息
-    let { floatingNodes, originalParents } = getFloatingNodesInfo(canvasData);
-
-    // 过滤掉不存在的浮动节点（只保留当前nodes中存在的节点）
-    const validFloatingNodes = new Set<string>();
-    const validOriginalParents = new Map<string, string>();
-    nodes.forEach((_, nodeId) => {
-        if (floatingNodes.has(nodeId)) {
-            validFloatingNodes.add(nodeId);
-            if (originalParents.has(nodeId)) {
-                validOriginalParents.set(nodeId, originalParents.get(nodeId)!);
-            }
-        }
-    });
-    floatingNodes = validFloatingNodes;
-    originalParents = validOriginalParents;
-
-    // 构建布局图 - 只使用可见节点 (nodes参数)
+    settings: CanvasArrangerSettings
+): Map<string, LayoutNode> {
     const layoutNodes = new Map<string, LayoutNode>();
-
-    // 初始化可见节点
-    let formulaNodeCount = 0;
+    
     nodes.forEach((nodeData, nodeId) => {
-        // 检测是否是公式节点（内容以 $$ 开头和结尾，后面可能有 fromLink 注释）
         const nodeText = nodeData.text || '';
         const isFormula = nodeText && /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(nodeText.trim());
 
-        // 根据节点类型确定高度
         let nodeHeight: number;
         if (isFormula) {
             nodeHeight = settings.formulaNodeHeight || 80;
-            formulaNodeCount++;
         } else {
             const currentWidth = nodeData.width || settings.textNodeWidth;
             const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings);
@@ -201,10 +186,17 @@ export function arrangeLayout(
             _subtreeHeight: 0
         });
     });
+    
+    return layoutNodes;
+}
 
-    // 构建当前边的父子关系（用于布局计算）
+function buildLayoutParentMap(
+    edges: CanvasEdgeLike[],
+    layoutNodes: Map<string, LayoutNode>
+): Map<string, string> {
+    const layoutParentMap = new Map<string, string>();
     const processedEdges = new Set<string>();
-    const layoutParentMap = new Map<string, string>(); // childId -> parentId
+    
     for (const edge of edges) {
         const fromId = getNodeIdFromEndpoint(edge.from);
         const toId = getNodeIdFromEndpoint(edge.to);
@@ -223,27 +215,26 @@ export function arrangeLayout(
             layoutParentMap.set(toId, fromId);
         }
     }
+    
+    return layoutParentMap;
+}
 
-    // 构建完整的父子关系（包括已删除的边，用于确定浮动子树的原父节点）
-    const completeParentMap = new Map<string, string>(); // childId -> parentId
-    const completeChildrenMap = new Map<string, string[]>(); // parentId -> childIds[]
-
-    // 使用原始边数据构建完整的父子关系（包括已删除的边）
-    const edgesForCompleteMap = originalEdges && originalEdges.length > 0 ? originalEdges : edges;
-    for (const edge of edgesForCompleteMap) {
+function buildCompleteParentMap(
+    edges: CanvasEdgeLike[],
+    nodesToCheck: Map<string, LayoutNode | CanvasNodeLike>
+): { completeParentMap: Map<string, string>, completeChildrenMap: Map<string, string[]> } {
+    const completeParentMap = new Map<string, string>();
+    const completeChildrenMap = new Map<string, string[]>();
+    
+    for (const edge of edges) {
         let fromId = getNodeIdFromEndpoint(edge.from);
         let toId = getNodeIdFromEndpoint(edge.to);
 
-        if (!fromId && edge.fromNode) {
-            fromId = edge.fromNode;
-        }
-        if (!toId && edge.toNode) {
-            toId = edge.toNode;
-        }
+        if (!fromId && edge.fromNode) fromId = edge.fromNode;
+        if (!toId && edge.toNode) toId = edge.toNode;
 
         if (!fromId || !toId) continue;
 
-        const nodesToCheck = allNodes || layoutNodes;
         if (nodesToCheck.has(fromId) && nodesToCheck.has(toId)) {
             completeParentMap.set(toId, fromId);
             
@@ -253,16 +244,22 @@ export function arrangeLayout(
             completeChildrenMap.get(fromId)!.push(toId);
         }
     }
+    
+    return { completeParentMap, completeChildrenMap };
+}
 
-    // 识别浮动子树及其原父节点
+function identifyFloatingSubtrees(
+    floatingNodes: Set<string>,
+    originalParents: Map<string, string>,
+    completeParentMap: Map<string, string>,
+    completeChildrenMap: Map<string, string[]>
+): { floatingSubtreeRoots: Set<string>, floatingSubtreeOriginalParents: Map<string, string> } {
     const floatingSubtreeRoots = new Set<string>();
     const allFloatingSubtreeNodes = new Set<string>();
-    const floatingSubtreeOriginalParents = new Map<string, string>(); // 浮动子树根节点 -> 原父节点
+    const floatingSubtreeOriginalParents = new Map<string, string>();
 
-    // 找出所有浮动子树的根节点（浮动节点且没有浮动的父节点）
     floatingNodes.forEach(nodeId => {
         if (!allFloatingSubtreeNodes.has(nodeId)) {
-            // 检查是否有浮动的父节点
             let hasFloatingParent = false;
             let currentParent = completeParentMap.get(nodeId);
             while (currentParent) {
@@ -275,38 +272,38 @@ export function arrangeLayout(
             
             if (!hasFloatingParent) {
                 floatingSubtreeRoots.add(nodeId);
-                // 收集整个浮动子树
                 collectFloatingSubtree(nodeId, completeChildrenMap, allFloatingSubtreeNodes);
-                // 直接使用存储的原父节点信息
                 const originalParent = originalParents.get(nodeId);
                 if (originalParent) {
                     floatingSubtreeOriginalParents.set(nodeId, originalParent);
-                }
-                // 如果没有存储的原父节点信息（兼容旧数据），尝试从完整边数据中推断
-                else if (completeParentMap.has(nodeId)) {
+                } else if (completeParentMap.has(nodeId)) {
                     floatingSubtreeOriginalParents.set(nodeId, completeParentMap.get(nodeId)!);
                 }
             }
         }
     });
+    
+    return { floatingSubtreeRoots, floatingSubtreeOriginalParents };
+}
 
-    // 创建虚拟边：为浮动子树添加虚拟连接到原父节点
+function connectFloatingSubtrees(
+    floatingSubtreeRoots: Set<string>,
+    floatingSubtreeOriginalParents: Map<string, string>,
+    layoutNodes: Map<string, LayoutNode>,
+    layoutParentMap: Map<string, string>,
+    completeChildrenMap: Map<string, string[]>
+): void {
     floatingSubtreeRoots.forEach(rootId => {
         const parentId = floatingSubtreeOriginalParents.get(rootId);
         if (parentId) {
-            // 同时更新布局图
             const parentNode = layoutNodes.get(parentId);
             const childNode = layoutNodes.get(rootId);
             if (parentNode && childNode) {
-                // 确保子节点在父节点的children列表中
                 if (!parentNode.children.includes(rootId)) {
-                    // 关键修复：为了保持浮动节点在原父节点下的相对顺序，
-                    // 我们查阅 originalEdges 中该父节点的所有子节点顺序
                     const originalChildren = completeChildrenMap.get(parentId) || [];
                     const rootIndex = originalChildren.indexOf(rootId);
                     
                     if (rootIndex !== -1) {
-                        // 寻找已经在 children 中的其他原始兄弟节点
                         let inserted = false;
                         for (let i = 0; i < parentNode.children.length; i++) {
                             const currentChildId = parentNode.children[i];
@@ -314,7 +311,6 @@ export function arrangeLayout(
                             const currentChildOriginalIndex = originalChildren.indexOf(currentChildId);
                             
                             if (currentChildOriginalIndex > rootIndex) {
-                                // 插入到第一个原始序号比它大的节点之前
                                 parentNode.children.splice(i, 0, rootId);
                                 inserted = true;
                                 break;
@@ -332,8 +328,12 @@ export function arrangeLayout(
             }
         }
     });
+}
 
-    // 找到真正的根节点（没有父节点的节点）
+function findRootNodes(
+    layoutNodes: Map<string, LayoutNode>,
+    layoutParentMap: Map<string, string>
+): string[] {
     const rootNodes: string[] = [];
     layoutNodes.forEach((_, id) => {
         if (!layoutParentMap.has(id)) {
@@ -341,206 +341,261 @@ export function arrangeLayout(
         }
     });
 
-    // 对根节点进行排序，以便布局时的一致性
     rootNodes.sort((a, b) => {
         const nodeA = layoutNodes.get(a)!;
         const nodeB = layoutNodes.get(b)!;
         return nodeA.y - nodeB.y || nodeA.x - nodeB.x;
     });
+    
+    return rootNodes;
+}
+
+function calculateSubtreeHeight(
+    nodeId: string,
+    layoutNodes: Map<string, LayoutNode>,
+    settings: CanvasArrangerSettings
+): number {
+    const node = layoutNodes.get(nodeId);
+    if (!node) return 0;
+
+    if (node.children.length === 0) {
+        node._subtreeHeight = node.height;
+        return node.height;
+    }
+
+    let childrenTotalHeight = 0;
+    for (const childId of node.children) {
+        childrenTotalHeight += calculateSubtreeHeight(childId, layoutNodes, settings);
+    }
+    childrenTotalHeight += Math.max(0, node.children.length - 1) * settings.verticalSpacing;
+
+    node._subtreeHeight = Math.max(node.height, childrenTotalHeight);
+    return node._subtreeHeight;
+}
+
+function calculateMaxDepth(
+    nodeId: string,
+    layoutNodes: Map<string, LayoutNode>,
+    nodeMaxDepth: Map<string, number>
+): number {
+    const node = layoutNodes.get(nodeId);
+    if (!node || node.children.length === 0) {
+        nodeMaxDepth.set(nodeId, 0);
+        return 0;
+    }
+    
+    let maxChildDepth = -1;
+    for (const childId of node.children) {
+        maxChildDepth = Math.max(maxChildDepth, calculateMaxDepth(childId, layoutNodes, nodeMaxDepth));
+    }
+    const depth = maxChildDepth + 1;
+    nodeMaxDepth.set(nodeId, depth);
+    return depth;
+}
+
+function calculateColumns(
+    nodeId: string,
+    parentColumn: number,
+    layoutNodes: Map<string, LayoutNode>,
+    nodeColumn: Map<string, number>,
+    columnWidths: Map<number, number>,
+    nodeMaxDepth: Map<string, number>,
+    maxOverallDepth: number,
+    settings: CanvasArrangerSettings
+): void {
+    const node = layoutNodes.get(nodeId);
+    if (!node) return;
+
+    let column: number;
+    if (parentColumn === -1) {
+        column = maxOverallDepth - (nodeMaxDepth.get(nodeId) || 0);
+    } else {
+        column = parentColumn + 1;
+    }
+
+    nodeColumn.set(nodeId, column);
+    
+    const currentWidth = columnWidths.get(column) || 0;
+    columnWidths.set(column, Math.max(currentWidth, node.width));
+
+    for (const childId of node.children) {
+        calculateColumns(childId, column, layoutNodes, nodeColumn, columnWidths, nodeMaxDepth, maxOverallDepth, settings);
+    }
+}
+
+function calculatePositionsRightToLeft(
+    nodeId: string,
+    layoutNodes: Map<string, LayoutNode>,
+    settings: CanvasArrangerSettings
+): { minY: number, maxY: number, centerY: number } {
+    const node = layoutNodes.get(nodeId);
+    if (!node) return { minY: 0, maxY: 0, centerY: 0 };
+
+    if (node.children.length === 0) {
+        node.y = 0;
+        return { minY: 0, maxY: node.height, centerY: node.height / 2 };
+    }
+
+    let childrenMinY = Infinity;
+    let childrenMaxY = -Infinity;
+    let currentY = 0;
+
+    const childRanges: { id: string, minY: number, maxY: number, centerY: number }[] = [];
+
+    for (const childId of node.children) {
+        const range = calculatePositionsRightToLeft(childId, layoutNodes, settings);
+        childRanges.push({ id: childId, ...range });
+    }
+
+    currentY = 0;
+    for (let i = 0; i < childRanges.length; i++) {
+        const range = childRanges[i];
+        if (!range) continue;
+        
+        const childNodeId = range.id;
+        
+        const offset = currentY - range.minY;
+        const subtreeStack = [childNodeId];
+        while (subtreeStack.length > 0) {
+            const sid = subtreeStack.pop()!;
+            const snode = layoutNodes.get(sid)!;
+            snode.y += offset;
+            subtreeStack.push(...snode.children);
+        }
+
+        childrenMinY = Math.min(childrenMinY, currentY);
+        childrenMaxY = Math.max(childrenMaxY, currentY + (range.maxY - range.minY));
+        
+        currentY += (range.maxY - range.minY) + settings.verticalSpacing;
+    }
+
+    let sumCenters = 0;
+    let centerCount = 0;
+    for (const range of childRanges) {
+        const childNode = layoutNodes.get(range.id);
+        if (childNode) {
+            sumCenters += childNode.y + childNode.height / 2;
+            centerCount++;
+        }
+    }
+    const childrenCenterY = centerCount > 0 ? sumCenters / centerCount : (childrenMinY + childrenMaxY) / 2;
+    node.y = childrenCenterY - (node.height / 2);
+
+    const totalMinY = Math.min(node.y, childrenMinY);
+    const totalMaxY = Math.max(node.y + node.height, childrenMaxY);
+    
+    return { 
+        minY: totalMinY, 
+        maxY: totalMaxY, 
+        centerY: node.y + node.height / 2
+    };
+}
+
+function collectSubtreeNodes(
+    rootId: string,
+    layoutNodes: Map<string, LayoutNode>
+): string[] {
+    const subtreeNodes: string[] = [];
+    const stack = [rootId];
+    const visited = new Set<string>();
+    
+    while (stack.length > 0) {
+        const id = stack.pop()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        
+        subtreeNodes.push(id);
+        const node = layoutNodes.get(id);
+        if (node) {
+            for (let i = node.children.length - 1; i >= 0; i--) {
+                const childId = node.children[i];
+                if (childId) stack.push(childId);
+            }
+        }
+    }
+    
+    return subtreeNodes;
+}
+
+function calculateColumnX(
+    columnWidths: Map<number, number>,
+    settings: CanvasArrangerSettings
+): Map<number, number> {
+    const columnX = new Map<number, number>();
+    let currentX = 0;
+    const sortedColumns = Array.from(columnWidths.keys()).sort((a, b) => a - b);
+    
+    for (const col of sortedColumns) {
+        columnX.set(col, currentX);
+        const width = columnWidths.get(col) || settings.textNodeWidth;
+        currentX += width + settings.horizontalSpacing;
+    }
+    
+    return columnX;
+}
+
+export function arrangeLayout(
+    nodes: Map<string, CanvasNodeLike>,
+    edges: CanvasEdgeLike[],
+    settings: CanvasArrangerSettings,
+    originalEdges?: CanvasEdgeLike[],
+    allNodes?: Map<string, CanvasNodeLike>,
+    canvasData?: CanvasDataLike
+): Map<string, { x: number; y: number; width: number; height: number }> {
+    log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
+
+    let { floatingNodes, originalParents } = getFloatingNodesInfo(canvasData);
+
+    const validFloatingNodes = new Set<string>();
+    const validOriginalParents = new Map<string, string>();
+    nodes.forEach((_, nodeId) => {
+        if (floatingNodes.has(nodeId)) {
+            validFloatingNodes.add(nodeId);
+            if (originalParents.has(nodeId)) {
+                validOriginalParents.set(nodeId, originalParents.get(nodeId)!);
+            }
+        }
+    });
+    floatingNodes = validFloatingNodes;
+    originalParents = validOriginalParents;
+
+    const layoutNodes = initializeLayoutNodes(nodes, settings);
+    const layoutParentMap = buildLayoutParentMap(edges, layoutNodes);
+
+    const edgesForCompleteMap = originalEdges && originalEdges.length > 0 ? originalEdges : edges;
+    const nodesToCheck = allNodes || layoutNodes;
+    const { completeParentMap, completeChildrenMap } = buildCompleteParentMap(edgesForCompleteMap, nodesToCheck as Map<string, LayoutNode | CanvasNodeLike>);
+
+    const { floatingSubtreeRoots, floatingSubtreeOriginalParents } = identifyFloatingSubtrees(
+        floatingNodes, originalParents, completeParentMap, completeChildrenMap
+    );
+
+    connectFloatingSubtrees(floatingSubtreeRoots, floatingSubtreeOriginalParents, layoutNodes, layoutParentMap, completeChildrenMap);
+
+    const rootNodes = findRootNodes(layoutNodes, layoutParentMap);
 
     if (rootNodes.length > 0) {
         log(`[Layout] 根: ${rootNodes.length}${floatingSubtreeRoots.size > 0 ? ' (浮动: ' + floatingSubtreeRoots.size + ')' : ''}`);
     }
 
-    // 1. 计算每个节点的子树高度（从右到左/自底向上）
-    function calculateSubtreeHeight(nodeId: string): number {
-        const node = layoutNodes.get(nodeId);
-        if (!node) return 0;
-
-        if (node.children.length === 0) {
-            node._subtreeHeight = node.height;
-            return node.height;
-        }
-
-        let childrenTotalHeight = 0;
-        for (const childId of node.children) {
-            childrenTotalHeight += calculateSubtreeHeight(childId);
-        }
-        childrenTotalHeight += Math.max(0, node.children.length - 1) * settings.verticalSpacing;
-
-        node._subtreeHeight = Math.max(node.height, childrenTotalHeight);
-        return node._subtreeHeight;
-    }
-
-    // 2. 计算节点在层级中的深度 (用于从右到左对齐)
-    const nodeLevel = new Map<string, number>();
-    const nodeMaxDepth = new Map<string, number>(); // 节点到最远叶子节点的距离
-
-    function calculateMaxDepth(nodeId: string): number {
-        const node = layoutNodes.get(nodeId);
-        if (!node || node.children.length === 0) {
-            nodeMaxDepth.set(nodeId, 0);
-            return 0;
-        }
-        
-        let maxChildDepth = -1;
-        for (const childId of node.children) {
-            maxChildDepth = Math.max(maxChildDepth, calculateMaxDepth(childId));
-        }
-        const depth = maxChildDepth + 1;
-        nodeMaxDepth.set(nodeId, depth);
-        return depth;
-    }
-
-    // 辅助函数：计算每个节点所在的列（从最深叶子节点向左推导）
     const nodeColumn = new Map<string, number>();
     const columnWidths = new Map<number, number>();
+    const nodeMaxDepth = new Map<string, number>();
 
-    // 获取所有节点的最大深度，用于对齐
     let maxOverallDepth = 0;
-    rootNodes.forEach(rootId => {
-        maxOverallDepth = Math.max(maxOverallDepth, calculateMaxDepth(rootId));
-    });
-
-    function calculateColumns(nodeId: string, parentColumn: number) {
-        const node = layoutNodes.get(nodeId);
-        if (!node) return;
-
-        // 如果是根节点，初始列由其最大深度决定
-        // 这样可以保证所有叶子节点尽量靠右对齐
-        let column: number;
-        if (parentColumn === -1) {
-            // 根节点的列 = 总最大深度 - 该根节点子树的最大深度
-            column = maxOverallDepth - (nodeMaxDepth.get(nodeId) || 0);
-        } else {
-            column = parentColumn + 1;
-        }
-
-        nodeColumn.set(nodeId, column);
-        
-        // 更新列宽
-        const currentWidth = columnWidths.get(column) || 0;
-        columnWidths.set(column, Math.max(currentWidth, node.width));
-
-        for (const childId of node.children) {
-            calculateColumns(childId, column);
-        }
+    for (const rootId of rootNodes) {
+        maxOverallDepth = Math.max(maxOverallDepth, calculateMaxDepth(rootId, layoutNodes, nodeMaxDepth));
     }
 
-    // 3. 计算节点位置 (从右向左居中对齐)
-    /**
-     * 从右向左计算节点位置
-     * 逻辑：
-     * 1. 叶子节点位置固定（在最后一列）
-     * 2. 父节点位置 = 其所有子节点 Y 坐标的中心
-     * 3. 如果父节点有多个子节点，子节点之间保持垂直间距
-     */
-    function calculatePositionsRightToLeft(nodeId: string): { minY: number, maxY: number, centerY: number } {
-        const node = layoutNodes.get(nodeId);
-        if (!node) return { minY: 0, maxY: 0, centerY: 0 };
-
-        if (node.children.length === 0) {
-            // 叶子节点：返回其自身的高度范围，初始 Y 设为 0（后续会加上偏移）
-            node.y = 0;
-            return { minY: 0, maxY: node.height, centerY: node.height / 2 };
-        }
-
-        // 有子节点的节点：先计算所有子节点的位置
-        let childrenMinY = Infinity;
-        let childrenMaxY = -Infinity;
-        let currentY = 0;
-
-        const childRanges: { id: string, minY: number, maxY: number, centerY: number }[] = [];
-
-        for (const childId of node.children) {
-            const range = calculatePositionsRightToLeft(childId);
-            childRanges.push({ id: childId, ...range });
-        }
-
-        // 垂直排列子节点
-        currentY = 0;
-        for (let i = 0; i < childRanges.length; i++) {
-            const range = childRanges[i];
-            if (!range) continue;
-            
-            const childNodeId = range.id;
-            
-            // 移动子树（包括其所有后代）
-            const offset = currentY - range.minY;
-            const subtreeStack = [childNodeId];
-            while (subtreeStack.length > 0) {
-                const sid = subtreeStack.pop()!;
-                const snode = layoutNodes.get(sid)!;
-                snode.y += offset;
-                subtreeStack.push(...snode.children);
-            }
-
-            childrenMinY = Math.min(childrenMinY, currentY);
-            childrenMaxY = Math.max(childrenMaxY, currentY + (range.maxY - range.minY));
-            
-            currentY += (range.maxY - range.minY) + settings.verticalSpacing;
-        }
-
-        let sumCenters = 0;
-        let centerCount = 0;
-        for (const range of childRanges) {
-            const childNode = layoutNodes.get(range.id);
-            if (childNode) {
-                sumCenters += childNode.y + childNode.height / 2;
-                centerCount++;
-            }
-        }
-        const childrenCenterY = centerCount > 0 ? sumCenters / centerCount : (childrenMinY + childrenMaxY) / 2;
-        node.y = childrenCenterY - (node.height / 2);
-
-        // 返回该子树的总范围
-        const totalMinY = Math.min(node.y, childrenMinY);
-        const totalMaxY = Math.max(node.y + node.height, childrenMaxY);
-        
-        return { 
-            minY: totalMinY, 
-            maxY: totalMaxY, 
-            centerY: node.y + node.height / 2
-        };
-    }
-
-    // 跟踪整个画布当前的全局最大 Y 底部位置（用于实现严格的"大行"块状布局）
     let currentGlobalBottomY = -settings.verticalSpacing;
 
-    // 为每个根节点（即每个"大行"）执行布局
-    rootNodes.forEach((rootId) => {
+    for (const rootId of rootNodes) {
+        calculateColumns(rootId, -1, layoutNodes, nodeColumn, columnWidths, nodeMaxDepth, maxOverallDepth, settings);
         
-        // A. 计算深度和列
-        calculateMaxDepth(rootId);
-        calculateColumns(rootId, -1);
-        
-        // B. 从右向左计算该子树的内部相对位置（以根节点 y=0 为起始参考）
-        const subtreeRange = calculatePositionsRightToLeft(rootId);
+        calculatePositionsRightToLeft(rootId, layoutNodes, settings);
 
-        // C. 收集子树所有节点
-        const subtreeNodes: string[] = [];
-        const stack = [rootId];
-        const visited = new Set<string>(); // 防止循环
-        while (stack.length > 0) {
-            const id = stack.pop()!;
-            if (visited.has(id)) continue;
-            visited.add(id);
-            
-            subtreeNodes.push(id);
-            const node = layoutNodes.get(id);
-            if (node) {
-                // 逆序压栈以保持原有的子节点顺序
-                for (let i = node.children.length - 1; i >= 0; i--) {
-                    const childId = node.children[i];
-                    if (childId) stack.push(childId);
-                }
-            }
-        }
+        const subtreeNodes = collectSubtreeNodes(rootId, layoutNodes);
 
-        // D. 计算该"大行"相对于其内部 y=0 的偏移量，使其整体位于上一个"大行"之下
-        // 用户要求：以整个"大行"中向下凸起最多的占位作为基准
-        
-        // 先找到子树在相对坐标系下的最高点（最小 Y）
         let subtreeMinY = Infinity;
         let subtreeMaxY = -Infinity;
         for (const id of subtreeNodes) {
@@ -549,12 +604,9 @@ export function arrangeLayout(
             subtreeMaxY = Math.max(subtreeMaxY, node.y + node.height);
         }
         
-        // 紧凑布局修复：根节点之间的间距也应该是动态的
-        // 如果 currentGlobalBottomY 是初始值，则 globalOffsetY 只取决于 subtreeMinY
         const verticalSpacing = currentGlobalBottomY === -settings.verticalSpacing ? 0 : settings.verticalSpacing;
         const globalOffsetY = (currentGlobalBottomY + verticalSpacing) - subtreeMinY;
 
-        // E. 应用偏移量并更新全局底部位置
         let maxSubtreeBottom = -Infinity;
         for (const id of subtreeNodes) {
             const node = layoutNodes.get(id)!;
@@ -562,21 +614,11 @@ export function arrangeLayout(
             maxSubtreeBottom = Math.max(maxSubtreeBottom, node.y + node.height);
         }
 
-        // 更新全局底部，确保下一个"大行"完全在当前大行之下
         currentGlobalBottomY = maxSubtreeBottom;
-    });
-
-    // 4. 计算层级X坐标 (从左到右)
-    const columnX = new Map<number, number>();
-    let currentX = 0;
-    const sortedColumns = Array.from(columnWidths.keys()).sort((a, b) => a - b);
-    for (const col of sortedColumns) {
-        columnX.set(col, currentX);
-        const width = columnWidths.get(col) || settings.textNodeWidth;
-        currentX += width + settings.horizontalSpacing;
     }
 
-    // 更新所有节点的X坐标
+    const columnX = calculateColumnX(columnWidths, settings);
+
     layoutNodes.forEach((node, nodeId) => {
         const col = nodeColumn.get(nodeId) || 0;
         node.x = columnX.get(col) || 0;
