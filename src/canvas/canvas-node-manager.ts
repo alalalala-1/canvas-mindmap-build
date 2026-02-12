@@ -11,7 +11,7 @@ import {
     getCurrentCanvasFilePath,
     estimateTextNodeHeight
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager, CanvasViewLike } from './types';
 
 export class CanvasNodeManager {
     private app: App;
@@ -91,7 +91,7 @@ export class CanvasNodeManager {
                             log(`[Node] 公式节点, newHeight=${newHeight}`);
                         } else {
                             const canvasView = getCanvasView(this.app);
-                            const canvas = canvasView ? (canvasView as any).canvas as CanvasLike : null;
+                            const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
                             let nodeEl: Element | undefined;
                             if (canvas?.nodes && canvas.nodes instanceof Map) {
                                 const nodeData = canvas.nodes.get(nodeId);
@@ -123,7 +123,7 @@ export class CanvasNodeManager {
             const currentHeight = newHeightValue;
             if (currentHeight !== null) {
                 const canvasView = getCanvasView(this.app);
-                const canvas = canvasView ? (canvasView as any).canvas as CanvasLike : null;
+                const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
                 if (canvas?.nodes && canvas.nodes instanceof Map) {
                     const nodeData = canvas.nodes.get(nodeId);
                     if (nodeData) {
@@ -132,8 +132,9 @@ export class CanvasNodeManager {
                         if (nodeData.nodeEl) {
                             nodeData.nodeEl.style.height = `${currentHeight}px`;
                         }
-                        if (typeof (nodeData as any).render === 'function') {
-                            (nodeData as any).render();
+                        const nodeWithRender = nodeData as CanvasNodeLike & { render?: () => void };
+                        if (typeof nodeWithRender.render === 'function') {
+                            nodeWithRender.render();
                         }
                         if (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0) {
                             setTimeout(() => {
@@ -170,7 +171,7 @@ export class CanvasNodeManager {
                 let changed = false;
 
                 const canvasView = getCanvasView(this.app);
-                const canvas = canvasView ? (canvasView as any).canvas as CanvasLike : null;
+                const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
                 const nodeDomMap = new Map<string, CanvasNodeLike>();
                 
                 if (canvas?.nodes && canvas.nodes instanceof Map) {
@@ -212,8 +213,9 @@ export class CanvasNodeManager {
                                     if (memNodeData.nodeEl) {
                                         memNodeData.nodeEl.style.height = `${newHeight}px`;
                                     }
-                                    if (typeof (memNodeData as any).render === 'function') {
-                                        (memNodeData as any).render();
+                                    const nodeWithRender = memNodeData as CanvasNodeLike & { render?: () => void };
+                                    if (typeof nodeWithRender.render === 'function') {
+                                        nodeWithRender.render();
                                     }
                                 }
                             }
@@ -225,7 +227,7 @@ export class CanvasNodeManager {
 
             const canvasView = getCanvasView(this.app);
             if (canvasView) {
-                const canvas = (canvasView as any).canvas as CanvasLike;
+                const canvas = (canvasView as CanvasViewLike).canvas;
                 if (canvas) {
                     if (typeof canvas.requestSave === 'function') canvas.requestSave();
                     if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
@@ -277,8 +279,8 @@ export class CanvasNodeManager {
                             return false;
                         });
 
-                        if (typeof (canvas as any).reload === 'function') {
-                            (canvas as any).reload();
+                        if (typeof (canvas as CanvasLike & { reload?: () => void }).reload === 'function') {
+                            (canvas as CanvasLike & { reload?: () => void }).reload!();
                         }
 
                         this.refreshNodeAndButtons();
@@ -303,7 +305,7 @@ export class CanvasNodeManager {
         const canvasView = getCanvasView(this.app);
         if (!canvasView) return;
 
-        const canvas = (canvasView as any).canvas as CanvasLike;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas?.nodes || !(canvas.nodes instanceof Map)) return;
         
         const node = canvas.nodes.get(nodeId);
@@ -312,8 +314,9 @@ export class CanvasNodeManager {
 
         if (node.height !== newHeight) {
             node.height = newHeight;
-            if (typeof (node as any).render === 'function') {
-                (node as any).render();
+            const nodeWithRender = node as CanvasNodeLike & { render?: () => void };
+            if (typeof nodeWithRender.render === 'function') {
+                nodeWithRender.render();
             }
             if (typeof canvas.requestSave === 'function') {
                 canvas.requestSave();

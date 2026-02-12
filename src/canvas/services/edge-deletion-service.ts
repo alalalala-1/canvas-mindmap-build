@@ -4,7 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
 import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId } from '../../utils/canvas-utils';
-import { CanvasLike, CanvasEdgeLike, ICanvasManager } from '../types';
+import { CanvasLike, CanvasEdgeLike, ICanvasManager, CanvasViewLike } from '../types';
 
 export class EdgeDeletionService {
     private app: App;
@@ -40,7 +40,7 @@ export class EdgeDeletionService {
             return;
         }
 
-        const canvas = (canvasView as any).canvas as CanvasLike;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) {
             new Notice('Canvas 未初始化');
             return;
@@ -57,14 +57,12 @@ export class EdgeDeletionService {
     }
 
     private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-        const canvasAny = canvas as any;
-        
-        if (canvasAny.selectedEdge) {
-            return canvasAny.selectedEdge;
+        if (canvas.selectedEdge) {
+            return canvas.selectedEdge;
         }
         
-        if (canvasAny.selectedEdges && canvasAny.selectedEdges.length > 0) {
-            return canvasAny.selectedEdges[0];
+        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
+            return canvas.selectedEdges[0] || null;
         }
         
         if (canvas.edges) {
@@ -75,8 +73,8 @@ export class EdgeDeletionService {
                     : [];
                     
             for (const edge of edgesArray) {
-                const isFocused = (edge as any)?.lineGroupEl?.classList?.contains('is-focused');
-                const isSelected = (edge as any)?.lineGroupEl?.classList?.contains('is-selected');
+                const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
+                const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
                 
                 if (isFocused || isSelected) {
                     return edge;
@@ -94,7 +92,7 @@ export class EdgeDeletionService {
             
             log(`[EdgeDelete] 边: ${parentNodeId} -> ${childNodeId}`);
 
-            const canvasFilePath = (canvas as any).file?.path || getCurrentCanvasFilePath(this.app);
+            const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
             if (!canvasFilePath) return;
 
             let hasOtherIncomingEdges = false;
@@ -116,19 +114,18 @@ export class EdgeDeletionService {
                 return canvasData.edges.length !== originalEdgeCount;
             });
 
-            const canvasAny = canvas as any;
             if (canvas.edges && edge?.id) {
                 const edgeId = edge.id;
                 if (canvas.edges instanceof Map && canvas.edges.has(edgeId)) {
                     canvas.edges.delete(edgeId);
                 }
-                if (canvasAny.selectedEdge === edge) {
-                    canvasAny.selectedEdge = null;
+                if (canvas.selectedEdge === edge) {
+                    (canvas as { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = null;
                 }
-                if (canvasAny.selectedEdges) {
-                    const index = canvasAny.selectedEdges.indexOf(edge);
+                if (canvas.selectedEdges) {
+                    const index = canvas.selectedEdges.indexOf(edge);
                     if (index > -1) {
-                        canvasAny.selectedEdges.splice(index, 1);
+                        canvas.selectedEdges.splice(index, 1);
                     }
                 }
             }
@@ -184,9 +181,9 @@ export class EdgeDeletionService {
     }
 
     private reloadCanvas(canvas: CanvasLike): void {
-        const canvasAny = canvas as any;
-        if (typeof canvasAny.reload === 'function') {
-            canvasAny.reload();
+        const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
+        if (typeof canvasWithReload.reload === 'function') {
+            canvasWithReload.reload();
         } else if (typeof canvas.requestUpdate === 'function') {
             canvas.requestUpdate();
         } else if (canvas.requestSave) {

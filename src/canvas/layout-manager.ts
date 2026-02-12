@@ -3,6 +3,7 @@ import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
+import { CONSTANTS } from '../constants';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
 import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas } from '../utils/canvas-utils';
@@ -80,7 +81,7 @@ export class LayoutManager {
         this.arrangeTimeoutId = window.setTimeout(async () => {
             this.arrangeTimeoutId = null;
             await this.performArrange(false);
-        }, 100);
+        }, CONSTANTS.TIMING.ARRANGE_DEBOUNCE);
     }
 
     private async performArrange(skipAdjust: boolean = false) {
@@ -217,8 +218,8 @@ export class LayoutManager {
                 };
 
                 void triggerAdjust();
-                setTimeout(() => void triggerAdjust(), 300);
-                setTimeout(() => void triggerAdjust(), 800);
+                setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
+                setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL);
             }
 
             await this.cleanupStaleFloatingNodes(canvas, allNodes);

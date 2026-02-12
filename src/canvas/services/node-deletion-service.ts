@@ -3,6 +3,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CollapseStateManager } from '../../state/collapse-state';
 import { CanvasFileService, UpdateCallback } from './canvas-file-service';
 import { DeleteConfirmationModal } from '../../ui/delete-modal';
+import { CONSTANTS } from '../../constants';
 import {
     generateRandomId,
     getEdgeFromNodeId,
@@ -105,7 +106,7 @@ export class NodeDeletionService {
 
             this.collapseStateManager.clearCache();
             this.reloadCanvas(canvas);
-            setTimeout(() => this.refreshCollapseButtons(), 200);
+            setTimeout(() => this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
 
             new Notice('节点已删除');
         } catch (err) {
@@ -151,7 +152,7 @@ export class NodeDeletionService {
 
             this.collapseStateManager.clearCache();
             this.reloadCanvas(canvas);
-            setTimeout(() => this.refreshCollapseButtons(), 200);
+            setTimeout(() => this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
 
             new Notice(`已删除 ${nodesToDelete.size} 个节点`);
         } catch (err) {

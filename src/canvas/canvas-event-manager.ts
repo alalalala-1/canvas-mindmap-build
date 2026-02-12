@@ -6,6 +6,7 @@ import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
 import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasManager } from './canvas-manager';
 import { log } from '../utils/logger';
+import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
     getCurrentCanvasFilePath,
@@ -84,7 +85,7 @@ export class CanvasEventManager {
                         // Canvas打开时立即检查并添加所有必要的DOM属性和按钮
                         setTimeout(() => {
                             this.canvasManager.checkAndAddCollapseButtons();
-                        }, 500);
+                        }, CONSTANTS.TIMING.RENDER_DELAY);
                     }
                 }
             })
@@ -258,7 +259,7 @@ export class CanvasEventManager {
                 if (this.clickDebounceMap.get(nodeId) === currentTime) {
                     this.clickDebounceMap.delete(nodeId);
                 }
-            }, 500);
+            }, CONSTANTS.TIMING.RETRY_DELAY);
         }
     }
 
@@ -329,7 +330,7 @@ export class CanvasEventManager {
             setTimeout(() => {
                 view.editor?.setSelection(fromLink!.from, fromLink!.to);
                 view.editor?.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
-            }, 100);
+            }, CONSTANTS.TIMING.SCROLL_DELAY);
         } catch (err) {
             log(`[Event] UI: 跳转失败: ${err}`);
         }
@@ -406,7 +407,7 @@ export class CanvasEventManager {
                     log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
                     setTimeout(() => {
                         this.canvasManager.adjustNodeHeightAfterRender(nodeId);
-                    }, 100);
+                    }, CONSTANTS.TIMING.SCROLL_DELAY);
                 } else {
                     log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
                 }
@@ -454,7 +455,7 @@ export class CanvasEventManager {
         if (!canvasWrapper) {
             this.mutationObserverRetryCount++;
             if (this.mutationObserverRetryCount <= this.MAX_MUTATION_OBSERVER_RETRIES) {
-                setTimeout(() => this.setupMutationObserver(), 100);
+                setTimeout(() => this.setupMutationObserver(), CONSTANTS.TIMING.SCROLL_DELAY);
             } else {
                 this.isObserverSetup = true;
             }
