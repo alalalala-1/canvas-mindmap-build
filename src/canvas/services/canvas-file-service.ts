@@ -1,6 +1,7 @@
 import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { log } from '../../utils/logger';
+import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
 
 /**
  * Canvas 文件操作服务
@@ -79,45 +80,10 @@ export class CanvasFileService {
      * 尝试多种方法获取路径
      */
     getCurrentCanvasFilePath(): string | undefined {
-        // 方法1: 从 activeLeaf 获取
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view?.getViewType() === 'canvas') {
-            const canvas = (activeLeaf.view as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeLeaf.view as any).file?.path) {
-                return (activeLeaf.view as any).file.path;
-            }
-        }
+        const currentPath = getCurrentCanvasFilePath(this.app);
+        if (currentPath) return currentPath;
 
-        // 方法2: 从 getActiveViewOfType 获取
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (activeView?.getViewType() === 'canvas') {
-            const canvas = (activeView as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
-            }
-            if ((activeView as any).file?.path) {
-                return (activeView as any).file.path;
-            }
-        }
-
-        // 方法3: 从所有 leaves 中查找 canvas
-        const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of canvasLeaves) {
-            if (leaf.view?.getViewType() === 'canvas') {
-                const canvas = (leaf.view as any).canvas;
-                if (canvas?.file?.path) {
-                    return canvas.file.path;
-                }
-                if ((leaf.view as any).file?.path) {
-                    return (leaf.view as any).file.path;
-                }
-            }
-        }
-
-        // 方法4: 从设置中获取
+        // 方法2: 从设置中获取
         if (this.settings.canvasFilePath) {
             return this.settings.canvasFilePath;
         }

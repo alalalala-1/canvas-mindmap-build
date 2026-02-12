@@ -1,7 +1,8 @@
-import { App, ItemView } from 'obsidian';
+import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
+import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
 
 type FloatingNodeMetadata = {
     isFloating?: boolean;
@@ -100,7 +101,7 @@ export class LayoutDataProvider {
         let fileNodes = new Map<string, CanvasNodeLike>();
         let floatingNodes = new Set<string>();
         let canvasData: CanvasDataLike | null = null;
-        const canvasFilePath = canvasLike.file?.path || this.getActiveViewFilePath();
+        const canvasFilePath = canvasLike.file?.path || getCurrentCanvasFilePath(this.app);
 
         if (canvasFilePath) {
             try {
@@ -285,16 +286,6 @@ export class LayoutDataProvider {
             return canvas.edges;
         }
         return [];
-    }
-
-    private getActiveViewFilePath(): string | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        const activeView = activeLeaf?.view;
-        if (activeView instanceof ItemView && this.isRecord(activeView)) {
-            const file = (activeView as unknown as { file?: { path?: string } }).file;
-            if (file?.path) return file.path;
-        }
-        return null;
     }
 
     private isRecord(value: unknown): value is Record<string, unknown> {
