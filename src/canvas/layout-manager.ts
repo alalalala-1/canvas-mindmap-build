@@ -126,7 +126,7 @@ export class LayoutManager {
                 layoutSettings,
                 originalEdges,
                 allNodes,
-                canvasData
+                canvasData || undefined
             );
 
             if (!canvasFilePath) throw new Error('找不到路径');

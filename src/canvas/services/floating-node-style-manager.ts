@@ -1,18 +1,11 @@
 import { log } from '../../utils/logger';
+import { CanvasLike } from '../types';
 
-/**
- * 浮动节点视觉样式管理器
- * 负责浮动节点的视觉呈现（红框样式）
- * 单一职责：视觉样式，不涉及状态管理
- */
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
-    private canvas: any = null;
+    private canvas: CanvasLike | null = null;
 
-    /**
-     * 设置当前 Canvas 对象（用于 DOM 元素查找）
-     */
-    setCanvas(canvas: any): void {
+    setCanvas(canvas: CanvasLike): void {
         this.canvas = canvas;
     }
 
@@ -134,21 +127,25 @@ export class FloatingNodeStyleManager {
      * 查找节点的 DOM 元素
      */
     private findNodeElement(nodeId: string): HTMLElement | null {
-        // 方法1: 使用 data-node-id 属性选择器
         const nodeEl = document.querySelector(`.canvas-node[data-node-id="${nodeId}"]`) as HTMLElement;
         if (nodeEl) {
             return nodeEl;
         }
 
-        // 方法2: 通过 canvas 对象查找（如果已设置）
         if (this.canvas?.nodes) {
-            const node = this.canvas.nodes.get(nodeId);
-            if (node?.nodeEl) {
-                return node.nodeEl as HTMLElement;
+            if (this.canvas.nodes instanceof Map) {
+                const node = this.canvas.nodes.get(nodeId);
+                if (node?.nodeEl) {
+                    return node.nodeEl;
+                }
+            } else if (typeof this.canvas.nodes === 'object') {
+                const node = (this.canvas.nodes as Record<string, any>)[nodeId];
+                if (node?.nodeEl) {
+                    return node.nodeEl;
+                }
             }
         }
 
-        // 方法3: 遍历所有 canvas-node 元素，通过 canvas 对象匹配
         if (this.canvas?.nodes) {
             const allNodeEls = document.querySelectorAll('.canvas-node');
             for (const el of Array.from(allNodeEls)) {
@@ -156,8 +153,14 @@ export class FloatingNodeStyleManager {
                 if (dataNodeId === nodeId) {
                     return el as HTMLElement;
                 }
-                // 尝试通过 canvas.nodes 匹配
-                const nodes = Array.from(this.canvas.nodes.values()) as any[];
+                
+                let nodes: any[];
+                if (this.canvas.nodes instanceof Map) {
+                    nodes = Array.from(this.canvas.nodes.values());
+                } else {
+                    nodes = Object.values(this.canvas.nodes);
+                }
+                
                 for (const node of nodes) {
                     if (node.nodeEl === el || (node.nodeEl && el.contains(node.nodeEl))) {
                         if (node.id === nodeId) {

@@ -1,4 +1,5 @@
 import { log } from '../utils/logger';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint } from './types';
 
 interface LayoutNode {
     id: string;
@@ -8,7 +9,7 @@ interface LayoutNode {
     height: number;
     children: string[];
     _subtreeHeight: number;
-    originalParent?: string; // 记录原父节点
+    originalParent?: string;
 }
 
 interface LayoutEdge {
@@ -38,38 +39,27 @@ export const DEFAULT_ARRANGER_SETTINGS: CanvasArrangerSettings = {
     formulaNodeHeight: 80,
 };
 
-/**
- * 从边端点中提取节点ID
- */
-function getNodeIdFromEndpoint(endpoint: any): string | null {
+function getNodeIdFromEndpoint(endpoint: EdgeEndpoint | undefined | null): string | null {
     if (!endpoint) return null;
     if (typeof endpoint === 'string') return endpoint;
     if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
     if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
-    if (endpoint.node && endpoint.node.id && typeof endpoint.node.id === 'string') return endpoint.node.id;
     return null;
 }
 
-/**
- * 获取浮动节点集合和原父节点映射
- * 从 metadata 和节点 data 属性中读取
- */
-function getFloatingNodesInfo(canvasData: any): {
+function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
     floatingNodes: Set<string>,
     originalParents: Map<string, string>
 } {
     const floatingNodes = new Set<string>();
     const originalParents = new Map<string, string>();
 
-    // 1. 从 metadata 读取（向后兼容）
     if (canvasData?.metadata?.floatingNodes) {
         for (const [nodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
-            // 兼容旧格式（boolean）和新格式（object）
             if (typeof info === 'boolean' && info === true) {
                 floatingNodes.add(nodeId);
-                // 旧格式没有原父节点信息，需要从边数据中推断
             } else if (typeof info === 'object' && info !== null) {
-                const nodeInfo = info as any;
+                const nodeInfo = info as FloatingNodeRecord;
                 if (nodeInfo.isFloating) {
                     floatingNodes.add(nodeId);
                     if (nodeInfo.originalParent) {
@@ -80,10 +70,9 @@ function getFloatingNodesInfo(canvasData: any): {
         }
     }
 
-    // 2. 从节点本身的 data 属性读取（主要方式）
     if (canvasData?.nodes && Array.isArray(canvasData.nodes)) {
         for (const node of canvasData.nodes) {
-            if (node.data?.isFloating) {
+            if (node.data?.isFloating && node.id) {
                 floatingNodes.add(node.id);
                 if (node.data.originalParent) {
                     originalParents.set(node.id, node.data.originalParent);
@@ -150,23 +139,13 @@ function estimateTextNodeHeight(content: string, width: number, settings: Canvas
     return Math.max(60, Math.min(calculatedHeight, maxHeight));
 }
 
-/**
- * 计算画布节点的自动布局 - 支持浮动子树和"大行"布局
- * @param nodes 可见节点Map（用于布局计算）
- * @param edges 当前边数组（用于布局计算）
- * @param settings 布局设置
- * @param originalEdges 原始边数组（包含已删除的边）
- * @param allNodes 所有节点Map（用于完整布局）
- * @param canvasData Canvas文件数据（用于获取浮动节点信息）
- * @returns 新的节点位置Map
- */
 export function arrangeLayout(
-    nodes: Map<string, any>,
-    edges: any[],
+    nodes: Map<string, CanvasNodeLike>,
+    edges: CanvasEdgeLike[],
     settings: CanvasArrangerSettings,
-    originalEdges?: any[],
-    allNodes?: Map<string, any>,
-    canvasData?: any
+    originalEdges?: CanvasEdgeLike[],
+    allNodes?: Map<string, CanvasNodeLike>,
+    canvasData?: CanvasDataLike
 ): Map<string, { x: number; y: number; width: number; height: number }> {
     log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
 

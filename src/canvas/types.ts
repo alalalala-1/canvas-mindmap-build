@@ -78,6 +78,7 @@ export type CanvasNodeLike = {
 };
 
 export type EdgeEndpoint = {
+    nodeId?: string;
     node?: { id?: string };
     side?: string;
     end?: unknown;
