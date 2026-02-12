@@ -11,7 +11,7 @@ import {
     getCurrentCanvasFilePath,
     getNodeIdFromEdgeEndpoint
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, CanvasEventType, MarkdownViewLike } from './types';
 
 type FromLinkInfo = {
     file: string;
@@ -105,7 +105,8 @@ export class CanvasEventManager {
                 event.stopImmediatePropagation();
                 
                 setTimeout(async () => {
-                    const canvas = (canvasView as any).canvas;
+                    const canvas = (canvasView as CanvasViewLike).canvas;
+                    if (!canvas) return;
                     
                     // 先检查是否选中了边
                     const selectedEdge = this.getSelectedEdge(canvas);
@@ -174,18 +175,17 @@ export class CanvasEventManager {
     }
 
     private getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | null {
-        const canvasAny = canvas as any;
         if (!canvas?.nodes) return null;
         
-        if (canvasAny.selection && canvasAny.selection.size > 0) {
-            const firstSelected = canvasAny.selection.values().next().value;
+        if (canvas.selection && canvas.selection.size > 0) {
+            const firstSelected = canvas.selection.values().next().value;
             if (firstSelected && (firstSelected.nodeEl || firstSelected.type)) {
                 return firstSelected;
             }
         }
         
-        if (canvasAny.selectedNodes && canvasAny.selectedNodes.length > 0) {
-            return canvasAny.selectedNodes[0];
+        if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
+            return canvas.selectedNodes[0] || null;
         }
         
         const allNodes = canvas.nodes instanceof Map 
@@ -195,10 +195,9 @@ export class CanvasEventManager {
                 : [];
                 
         for (const node of allNodes) {
-            const nodeAny = node as any;
-            if (nodeAny.nodeEl) {
-                const hasFocused = nodeAny.nodeEl.classList.contains('is-focused');
-                const hasSelected = nodeAny.nodeEl.classList.contains('is-selected');
+            if (node.nodeEl) {
+                const hasFocused = node.nodeEl.classList.contains('is-focused');
+                const hasSelected = node.nodeEl.classList.contains('is-selected');
                 if (hasFocused || hasSelected) {
                     return node;
                 }
@@ -209,9 +208,8 @@ export class CanvasEventManager {
     }
 
     private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
-        const canvasAny = canvas as any;
         let edges: CanvasEdgeLike[] = [];
-        if (canvasAny.fileData?.edges) edges = canvasAny.fileData.edges as CanvasEdgeLike[];
+        if (canvas.fileData?.edges) edges = canvas.fileData.edges as CanvasEdgeLike[];
         if (canvas.edges) {
             edges = canvas.edges instanceof Map 
                 ? Array.from(canvas.edges.values()) 
@@ -274,7 +272,7 @@ export class CanvasEventManager {
         }
         if (!nodeEl) return;
 
-        const canvas = (canvasView as any).canvas as CanvasLike;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas?.nodes) return;
         
         const nodes = canvas.nodes instanceof Map 
@@ -282,7 +280,7 @@ export class CanvasEventManager {
             : Array.isArray(canvas.nodes) 
                 ? canvas.nodes 
                 : [];
-        const clickedNode = nodes.find(node => (node as any).nodeEl === nodeEl);
+        const clickedNode = nodes.find(node => node.nodeEl === nodeEl);
         if (!clickedNode) return;
 
         let fromLink: FromLinkInfo | null = null;
@@ -298,9 +296,9 @@ export class CanvasEventManager {
             }
         }
         
-        if (!fromLink && (clickedNode as any).color?.startsWith('fromLink:')) {
+        if (!fromLink && clickedNode.color?.startsWith('fromLink:')) {
             try {
-                const fromLinkJson = (clickedNode as any).color.substring('fromLink:'.length);
+                const fromLinkJson = clickedNode.color.substring('fromLink:'.length);
                 fromLink = JSON.parse(fromLinkJson) as FromLinkInfo;
             } catch (e) {
                 log(`[Event] fromLink (color) 解析失败: ${e}`);
@@ -318,7 +316,7 @@ export class CanvasEventManager {
             }
 
             let mdLeaf = this.app.workspace.getLeavesOfType('markdown').find(
-                leaf => (leaf.view as any).file?.path === fromLink!.file
+                leaf => (leaf.view as MarkdownViewLike).file?.path === fromLink!.file
             );
             if (!mdLeaf) {
                 mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
@@ -327,10 +325,10 @@ export class CanvasEventManager {
                 this.app.workspace.setActiveLeaf(mdLeaf, true, true);
             }
 
-            const view = mdLeaf.view as any;
+            const view = mdLeaf.view as MarkdownViewLike;
             setTimeout(() => {
-                view.editor.setSelection(fromLink!.from, fromLink!.to);
-                view.editor.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
+                view.editor?.setSelection(fromLink!.from, fromLink!.to);
+                view.editor?.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
             }, 100);
         } catch (err) {
             log(`[Event] UI: 跳转失败: ${err}`);
@@ -341,7 +339,7 @@ export class CanvasEventManager {
     // Canvas 事件监听（使用 Obsidian 官方事件系统）
     // =========================================================================
     async setupCanvasEventListeners(canvasView: ItemView) {
-        const canvas = (canvasView as any).canvas as CanvasLike;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
         
         if (!canvas) {
@@ -349,7 +347,7 @@ export class CanvasEventManager {
             return;
         }
 
-        const canvasFilePath = (canvas as any).file?.path || (canvasView as any).file?.path;
+        const canvasFilePath = canvas.file?.path || (canvasView as CanvasViewLike).file?.path;
         log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
         
         if (canvasFilePath) {
@@ -365,10 +363,10 @@ export class CanvasEventManager {
 
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:edge-create' as any, async (edge: any) => {
+            this.app.workspace.on('canvas:edge-create' as any, async (edge: unknown) => {
                 const typedEdge = edge as CanvasEdgeLike;
-                const fromId = (edge as any).from?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
-                const toId = (edge as any).to?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
+                const fromId = (typedEdge.from as { node?: { id?: string } })?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
+                const toId = (typedEdge.to as { node?: { id?: string } })?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
                 log(`[Event] Canvas:EdgeCreate: ${typedEdge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -384,10 +382,10 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:edge-delete' as any, (edge: any) => {
+            this.app.workspace.on('canvas:edge-delete' as any, (edge: unknown) => {
                 const typedEdge = edge as CanvasEdgeLike;
-                const fromId = (edge as any).from?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
-                const toId = (edge as any).to?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
+                const fromId = (typedEdge.from as { node?: { id?: string } })?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
+                const toId = (typedEdge.to as { node?: { id?: string } })?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
                 log(`[Event] Canvas:EdgeDelete: ${typedEdge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -396,7 +394,7 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-create' as any, async (node: any) => {
+            this.app.workspace.on('canvas:node-create' as any, async (node: unknown) => {
                 const typedNode = node as CanvasNodeLike;
                 const nodeId = typedNode?.id;
                 log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(nodeId || node)}`);
@@ -416,7 +414,7 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-delete' as any, (node: any) => {
+            this.app.workspace.on('canvas:node-delete' as any, (node: unknown) => {
                 const typedNode = node as CanvasNodeLike;
                 log(`[Event] Canvas:NodeDelete: ${typedNode.id}`);
                 this.floatingNodeService.clearFloatingMarks(typedNode);
@@ -425,7 +423,7 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-move' as any, (node: any) => {
+            this.app.workspace.on('canvas:node-move' as any, (node: unknown) => {
                 this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );
@@ -489,11 +487,10 @@ export class CanvasEventManager {
     // 辅助方法
     // =========================================================================
     private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-        const canvasAny = canvas as any;
-        if (canvasAny.selectedEdge) return canvasAny.selectedEdge;
+        if (canvas.selectedEdge) return canvas.selectedEdge;
         
-        if (canvasAny.selectedEdges && canvasAny.selectedEdges.length > 0) {
-            return canvasAny.selectedEdges[0];
+        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
+            return canvas.selectedEdges[0] || null;
         }
         
         if (canvas.edges) {
@@ -503,8 +500,8 @@ export class CanvasEventManager {
                     ? canvas.edges 
                     : [];
             for (const edge of edgesArray) {
-                const isFocused = (edge as any)?.lineGroupEl?.classList?.contains('is-focused');
-                const isSelected = (edge as any)?.lineGroupEl?.classList?.contains('is-selected');
+                const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
+                const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
                 
                 if (isFocused || isSelected) {
                     return edge;

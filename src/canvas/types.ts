@@ -86,6 +86,7 @@ export type CanvasNodeLike = {
     moveAndResize?: (rect: { x: number; y: number; width: number; height: number }) => void;
     prevX?: number;
     prevY?: number;
+    color?: string;
 };
 
 export type EdgeEndpoint = {
@@ -109,6 +110,7 @@ export type CanvasEdgeLike = {
     label?: string;
     lineGroupEl?: HTMLElement;
     lineEndGroupEl?: HTMLElement;
+    bezier?: { from: { x: number; y: number }; to: { x: number; y: number } };
 };
 
 export type CanvasDataLike = {
@@ -148,4 +150,33 @@ export type CanvasLike = {
     file?: { path?: string };
     requestUpdate?: () => void;
     requestSave?: () => void;
+    selection?: Set<CanvasNodeLike>;
+    selectedNodes?: CanvasNodeLike[];
+    selectedEdge?: CanvasEdgeLike;
+    selectedEdges?: CanvasEdgeLike[];
 };
+
+export type CanvasViewLike = {
+    canvas?: CanvasLike;
+    file?: { path?: string };
+    getViewType?: () => string;
+};
+
+export type MarkdownViewLike = {
+    file?: { path?: string };
+    editor?: {
+        setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => void;
+        scrollIntoView: (range: { from: { line: number; ch: number }; to: { line: number; ch: number } }, center?: boolean) => void;
+    };
+};
+
+export type CanvasEventMap = {
+    'canvas:edge-create': CanvasEdgeLike;
+    'canvas:edge-delete': CanvasEdgeLike;
+    'canvas:node-create': CanvasNodeLike;
+    'canvas:node-delete': CanvasNodeLike;
+    'canvas:node-move': CanvasNodeLike;
+    'canvas:change': void;
+};
+
+export type CanvasEventType = keyof CanvasEventMap;
