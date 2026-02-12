@@ -2,7 +2,7 @@ import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
-import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
+import { getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint } from '../../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
@@ -10,11 +10,6 @@ import {
     CanvasNodeLike,
     FloatingNodeMetadata
 } from '../types';
-
-type EdgeEndpointLike = {
-    nodeId?: string;
-    node?: { id?: string };
-};
 
 export interface LayoutData {
     visibleNodes: Map<string, CanvasNodeLike>;
@@ -58,8 +53,8 @@ export class LayoutDataProvider {
 
         // 过滤可见边：只保留两个端点都可见的边
         const visibleEdges = edges.filter((edge) => {
-            const fromId = this.getNodeIdFromEdgeEndpoint(edge.from);
-            const toId = this.getNodeIdFromEdgeEndpoint(edge.to);
+            const fromId = getNodeIdFromEdgeEndpoint(edge.from);
+            const toId = getNodeIdFromEdgeEndpoint(edge.to);
             return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
         });
 
@@ -160,22 +155,6 @@ export class LayoutDataProvider {
         };
     }
 
-    /**
-     * 从边的端点获取节点 ID
-     */
-    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (!this.isRecord(endpoint)) return null;
-        const endpointLike = endpoint as EdgeEndpointLike;
-        if (typeof endpointLike.nodeId === 'string') return endpointLike.nodeId;
-        if (this.isRecord(endpointLike.node) && typeof endpointLike.node.id === 'string') return endpointLike.node.id;
-        return null;
-    }
-
-    /**
-     * 获取并验证浮动节点，同时清理 canvasData 中的无效标记
-     */
     private getValidatedFloatingNodes(
         canvasData: CanvasDataLike,
         memoryNodes: Map<string, CanvasNodeLike>,
@@ -234,7 +213,7 @@ export class LayoutDataProvider {
     }
 
     private getEdgeToNodeId(edge: CanvasEdgeLike): string | null {
-        const nodeId = this.getNodeIdFromEdgeEndpoint(edge.to);
+        const nodeId = getNodeIdFromEdgeEndpoint(edge.to);
         if (nodeId) return nodeId;
         return typeof edge.toNode === 'string' ? edge.toNode : null;
     }

@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
-import { getCanvasView, getCurrentCanvasFilePath } from '../../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId } from '../../utils/canvas-utils';
 import { CanvasLike, CanvasEdgeLike, ICanvasManager } from '../types';
 
 export class EdgeDeletionService {
@@ -87,32 +87,10 @@ export class EdgeDeletionService {
         return null;
     }
 
-    private getEdgeFromId(edge: CanvasEdgeLike): string | null {
-        if (typeof edge?.from === 'string') {
-            return edge.from;
-        } else if (edge?.from?.node?.id) {
-            return edge.from.node.id;
-        } else if (edge?.fromNode) {
-            return edge.fromNode;
-        }
-        return null;
-    }
-
-    private getEdgeToId(edge: CanvasEdgeLike): string | null {
-        if (typeof edge?.to === 'string') {
-            return edge.to;
-        } else if (edge?.to?.node?.id) {
-            return edge.to.node.id;
-        } else if (edge?.toNode) {
-            return edge.toNode;
-        }
-        return null;
-    }
-
     private async deleteEdge(edge: CanvasEdgeLike, canvas: CanvasLike): Promise<void> {
         try {
-            const parentNodeId = this.getEdgeFromId(edge);
-            const childNodeId = this.getEdgeToId(edge);
+            const parentNodeId = getEdgeFromNodeId(edge);
+            const childNodeId = getEdgeToNodeId(edge);
             
             log(`[EdgeDelete] 边: ${parentNodeId} -> ${childNodeId}`);
 
@@ -168,8 +146,8 @@ export class EdgeDeletionService {
                             : [];
                     
                     for (const e of edgesArray) {
-                        const f = this.getEdgeFromId(e);
-                        const t = this.getEdgeToId(e);
+                        const f = getEdgeFromNodeId(e);
+                        const t = getEdgeToNodeId(e);
                         if (f && t) {
                             if (!childrenMap.has(f)) childrenMap.set(f, []);
                             childrenMap.get(f)!.push(t);

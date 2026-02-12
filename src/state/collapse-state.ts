@@ -1,8 +1,6 @@
 import { log } from '../utils/logger';
+import { getEdgeFromNodeId, getEdgeToNodeId } from '../utils/canvas-utils';
 
-/**
- * 折叠状态管理器
- */
 export class CollapseStateManager {
     private collapsedNodes: Map<string, boolean> = new Map();
     private nodeChildrenCache: Map<string, string[]> = new Map();
@@ -27,9 +25,8 @@ export class CollapseStateManager {
         const childIds: string[] = [];
 
         for (const e of edges) {
-            // 使用与 getNodeIdFromEdgeEndpoint 相同的逻辑
-            const fromId = this.getEdgeFromId(e);
-            const toId = this.getEdgeToId(e);
+            const fromId = getEdgeFromNodeId(e as any);
+            const toId = getEdgeToNodeId(e as any);
 
             if (fromId === nodeId && toId) {
                 childIds.push(toId);
@@ -37,36 +34,6 @@ export class CollapseStateManager {
         }
 
         return childIds;
-    }
-
-    // 从边的端点获取节点 ID（与 canvas-utils.ts 中的函数保持一致）
-    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (typeof endpoint === 'object') {
-            const endpointObj = endpoint as { nodeId?: unknown; node?: { id?: unknown } };
-            if (typeof endpointObj.nodeId === 'string') return endpointObj.nodeId;
-            if (endpointObj.node && typeof endpointObj.node.id === 'string') return endpointObj.node.id;
-        }
-        return null;
-    }
-
-    private getEdgeFromId(edge: unknown): string | null {
-        if (!edge || typeof edge !== 'object') return null;
-        const edgeObj = edge as { from?: unknown; fromNode?: unknown };
-        const fromId = this.getNodeIdFromEdgeEndpoint(edgeObj.from);
-        if (fromId) return fromId;
-        if (typeof edgeObj.fromNode === 'string') return edgeObj.fromNode;
-        return null;
-    }
-
-    private getEdgeToId(edge: unknown): string | null {
-        if (!edge || typeof edge !== 'object') return null;
-        const edgeObj = edge as { to?: unknown; toNode?: unknown };
-        const toId = this.getNodeIdFromEdgeEndpoint(edgeObj.to);
-        if (toId) return toId;
-        if (typeof edgeObj.toNode === 'string') return edgeObj.toNode;
-        return null;
     }
 
     private isDirection(value: unknown): value is 'left' | 'right' | 'top' | 'bottom' {
@@ -77,7 +44,7 @@ export class CollapseStateManager {
         const outgoingEdges: unknown[] = [];
         
         for (const e of edges) {
-            const fromId = this.getEdgeFromId(e);
+            const fromId = getEdgeFromNodeId(e as any);
             if (fromId === nodeId) {
                 outgoingEdges.push(e);
             }

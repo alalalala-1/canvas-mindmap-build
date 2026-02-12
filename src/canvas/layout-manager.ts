@@ -388,21 +388,6 @@ export class LayoutManager {
         }
     }
 
-    // =========================================================================
-    // 辅助方法：从边的端点获取节点 ID
-    // =========================================================================
-    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (!this.isRecord(endpoint)) return null;
-        if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-        if (this.isRecord(endpoint.node) && typeof endpoint.node.id === 'string') return endpoint.node.id;
-        return null;
-    }
-
-    // =========================================================================
-    // 折叠/展开节点
-    // =========================================================================
     async toggleNodeCollapse(nodeId: string, canvas: CanvasLike) {
         const isCurrentlyCollapsed = this.collapseStateManager.isCollapsed(nodeId);
         
@@ -504,8 +489,8 @@ export class LayoutManager {
                 if (isFloating) {
                     let hasConnection = false;
                     for (const edge of edges) {
-                        const fromNodeId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-                        const toNodeId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+                        const fromNodeId = getNodeIdFromEdgeEndpoint(edge?.from);
+                        const toNodeId = getNodeIdFromEdgeEndpoint(edge?.to);
                         if (fromNodeId === nodeId || toNodeId === nodeId) {
                             hasConnection = true;
                             break;

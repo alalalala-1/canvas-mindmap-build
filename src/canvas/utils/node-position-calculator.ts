@@ -1,33 +1,13 @@
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../types';
+import { getEdgeFromNodeId, getEdgeToNodeId } from '../../utils/canvas-utils';
 
 export class NodePositionCalculator {
     constructor(private settings: CanvasMindmapBuildSettings) {}
 
     private getNumber(value: unknown, fallback: number): number {
         return typeof value === 'number' && !Number.isNaN(value) ? value : fallback;
-    }
-
-    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
-        if (!endpoint) return null;
-        if (typeof endpoint === 'string') return endpoint;
-        if (typeof endpoint === 'object') {
-            const endpointObj = endpoint as { nodeId?: unknown; node?: { id?: unknown } };
-            if (typeof endpointObj.nodeId === 'string') return endpointObj.nodeId;
-            if (endpointObj.node && typeof endpointObj.node.id === 'string') return endpointObj.node.id;
-        }
-        return null;
-    }
-
-    private getEdgeFromId(edge: CanvasEdgeLike): string | null {
-        if (edge.fromNode) return edge.fromNode;
-        return this.getNodeIdFromEdgeEndpoint(edge.from);
-    }
-
-    private getEdgeToId(edge: CanvasEdgeLike): string | null {
-        if (edge.toNode) return edge.toNode;
-        return this.getNodeIdFromEdgeEndpoint(edge.to);
     }
 
     private getNodes(canvasData: CanvasDataLike): CanvasNodeLike[] {
@@ -60,9 +40,9 @@ export class NodePositionCalculator {
         const edges = this.getEdges(canvasData);
         const childNodeIds = edges
             .map((edge) => {
-                const fromId = this.getEdgeFromId(edge);
+                const fromId = getEdgeFromNodeId(edge);
                 if (fromId !== parentId) return null;
-                return this.getEdgeToId(edge);
+                return getEdgeToNodeId(edge);
             })
             .filter((id): id is string => typeof id === 'string');
 
