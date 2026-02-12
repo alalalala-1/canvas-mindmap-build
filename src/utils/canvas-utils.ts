@@ -1,5 +1,39 @@
-import { App, ItemView, TFile } from 'obsidian';
+import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
+import { Canvas, CanvasEdge, CanvasNode } from '../canvas/types';
+
+type CanvasDataNode = {
+    id: string;
+    data?: Record<string, unknown>;
+    type?: string;
+};
+
+type CanvasDataEdge = {
+    id?: string;
+    fromNode?: string;
+    toNode?: string;
+    from?: unknown;
+    to?: unknown;
+};
+
+type CanvasData = {
+    nodes: CanvasDataNode[];
+    edges: CanvasDataEdge[];
+    metadata?: {
+        floatingNodes?: Record<string, boolean | { isFloating?: boolean; originalParent?: string; timestamp?: number }>;
+        collapseState?: Record<string, boolean>;
+        [key: string]: unknown;
+    };
+};
+
+type CanvasViewLike = ItemView & {
+    canvas?: { file?: { path?: string } };
+    file?: { path?: string };
+};
+
+function isCanvasView(view: View | null | undefined): view is CanvasViewLike {
+    return !!view && view.getViewType() === 'canvas' && 'contentEl' in view;
+}
 
 /**
  * Canvas 工具函数集合
@@ -15,24 +49,18 @@ import { log } from './logger';
  * 尝试多种方式获取，确保兼容性
  */
 export function getCanvasView(app: App): ItemView | null {
-    // 方法1: 从 activeLeaf 获取
-    const activeLeaf = app.workspace.activeLeaf;
-    if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-        return activeLeaf.view as ItemView;
+    // 方法1: 从 activeViewOfType 获取
+    const view = app.workspace.getActiveViewOfType(ItemView);
+    if (isCanvasView(view)) {
+        return view;
     }
 
     // 方法2: 从所有 leaves 中查找 canvas
     const leaves = app.workspace.getLeavesOfType('canvas');
     for (const leaf of leaves) {
-        if (leaf.view && (leaf.view as any).canvas) {
-            return leaf.view as ItemView;
+        if (isCanvasView(leaf.view)) {
+            return leaf.view;
         }
-    }
-
-    // 方法3: 从 activeViewOfType 获取
-    const view = app.workspace.getActiveViewOfType(ItemView);
-    if (view && view.getViewType() === 'canvas') {
-        return view;
     }
 
     return null;
@@ -43,40 +71,26 @@ export function getCanvasView(app: App): ItemView | null {
  * 尝试多种方式获取，确保兼容性
  */
 export function getCurrentCanvasFilePath(app: App): string | undefined {
-    // 方法1: 从 activeLeaf 获取
-    const activeLeaf = app.workspace.activeLeaf;
-    if (activeLeaf?.view?.getViewType() === 'canvas') {
-        const canvas = (activeLeaf.view as any).canvas;
-        if (canvas?.file?.path) {
-            return canvas.file.path;
-        }
-        if ((activeLeaf.view as any).file?.path) {
-            return (activeLeaf.view as any).file.path;
-        }
-    }
-
-    // 方法2: 从 getActiveViewOfType 获取
+    // 方法1: 从 getActiveViewOfType 获取
     const activeView = app.workspace.getActiveViewOfType(ItemView);
-    if (activeView?.getViewType() === 'canvas') {
-        const canvas = (activeView as any).canvas;
-        if (canvas?.file?.path) {
-            return canvas.file.path;
+    if (isCanvasView(activeView)) {
+        if (activeView.canvas?.file?.path) {
+            return activeView.canvas.file.path;
         }
-        if ((activeView as any).file?.path) {
-            return (activeView as any).file.path;
+        if (activeView.file?.path) {
+            return activeView.file.path;
         }
     }
 
-    // 方法3: 从所有 leaves 中查找 canvas
+    // 方法2: 从所有 leaves 中查找 canvas
     const canvasLeaves = app.workspace.getLeavesOfType('canvas');
     for (const leaf of canvasLeaves) {
-        if (leaf.view?.getViewType() === 'canvas') {
-            const canvas = (leaf.view as any).canvas;
-            if (canvas?.file?.path) {
-                return canvas.file.path;
+        if (isCanvasView(leaf.view)) {
+            if (leaf.view.canvas?.file?.path) {
+                return leaf.view.canvas.file.path;
             }
-            if ((leaf.view as any).file?.path) {
-                return (leaf.view as any).file.path;
+            if (leaf.view.file?.path) {
+                return leaf.view.file.path;
             }
         }
     }
@@ -92,11 +106,12 @@ export function getCurrentCanvasFilePath(app: App): string | undefined {
  * 从边的端点获取节点 ID
  * 支持多种数据格式
  */
-export function getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
+export function getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
     if (!endpoint) return null;
     if (typeof endpoint === 'string') return endpoint;
-    if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-    if (endpoint.node?.id) return endpoint.node.id;
+    if (typeof (endpoint as { nodeId?: unknown }).nodeId === 'string') return (endpoint as { nodeId: string }).nodeId;
+    const nodeId = (endpoint as { node?: { id?: unknown } }).node?.id;
+    if (typeof nodeId === 'string') return nodeId;
     return null;
 }
 
@@ -104,20 +119,24 @@ export function getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
  * 获取边的源节点 ID
  * 兼容 fileData.edges (fromNode) 和 canvas.edges (from)
  */
-export function getEdgeFromNodeId(edge: any): string | null {
+export function getEdgeFromNodeId(edge: CanvasDataEdge | CanvasEdge | null | undefined): string | null {
     if (!edge) return null;
-    if (edge.fromNode) return edge.fromNode;
-    return getNodeIdFromEdgeEndpoint(edge.from);
+    const fromNode = (edge as { fromNode?: string }).fromNode;
+    if (fromNode) return fromNode;
+    const from = (edge as { from?: unknown }).from;
+    return getNodeIdFromEdgeEndpoint(from);
 }
 
 /**
  * 获取边的目标节点 ID
  * 兼容 fileData.edges (toNode) 和 canvas.edges (to)
  */
-export function getEdgeToNodeId(edge: any): string | null {
+export function getEdgeToNodeId(edge: CanvasDataEdge | CanvasEdge | null | undefined): string | null {
     if (!edge) return null;
-    if (edge.toNode) return edge.toNode;
-    return getNodeIdFromEdgeEndpoint(edge.to);
+    const toNode = (edge as { toNode?: string }).toNode;
+    if (toNode) return toNode;
+    const to = (edge as { to?: unknown }).to;
+    return getNodeIdFromEdgeEndpoint(to);
 }
 
 /**
@@ -135,7 +154,7 @@ export function generateRandomId(): string {
  * 安全地读取 Canvas 文件数据
  * 包含错误处理和验证
  */
-export async function readCanvasData(app: App, filePath: string): Promise<any | null> {
+export async function readCanvasData(app: App, filePath: string): Promise<CanvasData | null> {
     try {
         const canvasFile = app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
@@ -144,10 +163,10 @@ export async function readCanvasData(app: App, filePath: string): Promise<any | 
         }
 
         const canvasContent = await app.vault.read(canvasFile);
-        let canvasData: any;
+        let canvasData: CanvasData;
         try {
-            canvasData = JSON.parse(canvasContent);
-        } catch (parseError) {
+            canvasData = JSON.parse(canvasContent) as CanvasData;
+        } catch {
             log(`[Utils] 解析失败: ${filePath}`);
             return null;
         }
@@ -167,7 +186,7 @@ export async function readCanvasData(app: App, filePath: string): Promise<any | 
 /**
  * 安全地写入 Canvas 文件数据
  */
-export async function writeCanvasData(app: App, filePath: string, data: any): Promise<boolean> {
+export async function writeCanvasData(app: App, filePath: string, data: CanvasData): Promise<boolean> {
     try {
         const canvasFile = app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
@@ -190,15 +209,15 @@ export async function writeCanvasData(app: App, filePath: string, data: any): Pr
 /**
  * 从 Canvas 数据中获取节点
  */
-export function getNodeFromCanvasData(canvasData: any, nodeId: string): any | undefined {
+export function getNodeFromCanvasData(canvasData: CanvasData, nodeId: string): CanvasDataNode | undefined {
     if (!canvasData?.nodes) return undefined;
-    return canvasData.nodes.find((n: any) => n.id === nodeId);
+    return canvasData.nodes.find((n) => n.id === nodeId);
 }
 
 /**
  * 获取节点的子节点 ID 列表
  */
-export function getChildNodeIds(canvasData: any, parentId: string): string[] {
+export function getChildNodeIds(canvasData: CanvasData, parentId: string): string[] {
     if (!canvasData?.edges) return [];
     
     const childIds: string[] = [];
@@ -215,7 +234,7 @@ export function getChildNodeIds(canvasData: any, parentId: string): string[] {
 /**
  * 获取节点的父节点 ID
  */
-export function getParentNodeId(canvasData: any, nodeId: string): string | null {
+export function getParentNodeId(canvasData: CanvasData, nodeId: string): string | null {
     if (!canvasData?.edges) return null;
     
     for (const edge of canvasData.edges) {
@@ -234,7 +253,7 @@ export function getParentNodeId(canvasData: any, nodeId: string): string | null 
 /**
  * 检查节点是否为浮动节点
  */
-export function isFloatingNode(canvasData: any, nodeId: string): boolean {
+export function isFloatingNode(canvasData: CanvasData, nodeId: string): boolean {
     if (!canvasData) return false;
     
     // 优先检查 node.data.isFloating
@@ -254,12 +273,13 @@ export function isFloatingNode(canvasData: any, nodeId: string): boolean {
 /**
  * 获取浮动节点的原父节点 ID
  */
-export function getFloatingNodeOriginalParent(canvasData: any, nodeId: string): string | null {
+export function getFloatingNodeOriginalParent(canvasData: CanvasData, nodeId: string): string | null {
     if (!canvasData) return null;
     
     // 优先检查 node.data.originalParent
     const node = getNodeFromCanvasData(canvasData, nodeId);
-    if (node?.data?.originalParent) return node.data.originalParent;
+    const originalParent = node?.data?.originalParent;
+    if (typeof originalParent === 'string' && originalParent) return originalParent;
     
     // 向后兼容：检查 metadata.floatingNodes
     const floatingInfo = canvasData.metadata?.floatingNodes?.[nodeId];
@@ -274,7 +294,7 @@ export function getFloatingNodeOriginalParent(canvasData: any, nodeId: string): 
  * 设置节点为浮动状态
  */
 export function setNodeFloatingState(
-    canvasData: any, 
+    canvasData: CanvasData, 
     nodeId: string, 
     isFloating: boolean, 
     originalParent?: string
@@ -318,7 +338,7 @@ export function setNodeFloatingState(
 /**
  * 检查节点是否已折叠
  */
-export function isNodeCollapsed(canvasData: any, nodeId: string): boolean {
+export function isNodeCollapsed(canvasData: CanvasData, nodeId: string): boolean {
     if (!canvasData?.metadata?.collapseState) return false;
     return canvasData.metadata.collapseState[nodeId] === true;
 }
@@ -326,7 +346,7 @@ export function isNodeCollapsed(canvasData: any, nodeId: string): boolean {
 /**
  * 设置节点的折叠状态
  */
-export function setNodeCollapseState(canvasData: any, nodeId: string, collapsed: boolean): void {
+export function setNodeCollapseState(canvasData: CanvasData, nodeId: string, collapsed: boolean): void {
     if (!canvasData) return;
     if (!canvasData.metadata) canvasData.metadata = {};
     if (!canvasData.metadata.collapseState) canvasData.metadata.collapseState = {};
@@ -345,7 +365,7 @@ export function setNodeCollapseState(canvasData: any, nodeId: string, collapsed:
 /**
  * 识别根节点（没有父节点的节点）
  */
-export function identifyRootNodes(canvasData: any): string[] {
+export function identifyRootNodes(canvasData: CanvasData): string[] {
     if (!canvasData?.nodes || !canvasData?.edges) return [];
     
     const childNodeIds = new Set<string>();
@@ -367,13 +387,13 @@ export function identifyRootNodes(canvasData: any): string[] {
 /**
  * 查找节点的父节点对象
  */
-export function findParentNode(nodeId: string, edges: any[], allNodes: any[]): any | null {
+export function findParentNode(nodeId: string, edges: CanvasDataEdge[], allNodes: CanvasDataNode[]): CanvasDataNode | null {
     for (const edge of edges) {
         const fromId = getEdgeFromNodeId(edge);
         const toId = getEdgeToNodeId(edge);
 
         if (toId === nodeId) {
-            const parentNode = allNodes.find((n: any) => n.id === fromId);
+            const parentNode = allNodes.find((n) => n.id === fromId);
             if (parentNode) return parentNode;
         }
     }
@@ -383,7 +403,7 @@ export function findParentNode(nodeId: string, edges: any[], allNodes: any[]): a
 /**
  * 查找节点的所有子节点 ID
  */
-export function findChildNodes(nodeId: string, edges: any[]): string[] {
+export function findChildNodes(nodeId: string, edges: CanvasDataEdge[]): string[] {
     const childIds: string[] = [];
     
     for (const edge of edges) {
@@ -402,7 +422,7 @@ export function findChildNodes(nodeId: string, edges: any[]): string[] {
  * 递归收集所有后代节点
  */
 export function collectAllDescendants(
-    canvasData: any, 
+    canvasData: CanvasData, 
     parentId: string, 
     result: Set<string> = new Set()
 ): Set<string> {
@@ -424,8 +444,8 @@ export function collectAllDescendants(
             if (typeof info === 'boolean') {
                 isFloating = info;
             } else if (typeof info === 'object' && info !== null) {
-                isFloating = (info as any).isFloating;
-                originalParent = (info as any).originalParent || '';
+                isFloating = info.isFloating === true;
+                originalParent = info.originalParent || '';
             }
             
             if (isFloating && originalParent === parentId && !result.has(nodeId)) {
@@ -445,7 +465,7 @@ export function collectAllDescendants(
 /**
  * 安全地获取 Canvas 节点的 DOM 元素
  */
-export function getNodeDomElement(canvas: any, nodeId: string): HTMLElement | null {
+export function getNodeDomElement(canvas: Canvas, nodeId: string): HTMLElement | null {
     if (!canvas?.nodes) return null;
     const nodeData = canvas.nodes.get(nodeId);
     return nodeData?.nodeEl || null;
@@ -454,7 +474,7 @@ export function getNodeDomElement(canvas: any, nodeId: string): HTMLElement | nu
 /**
  * 检查节点是否在视图中可见
  */
-export function isNodeVisible(canvas: any, nodeId: string): boolean {
+export function isNodeVisible(canvas: Canvas, nodeId: string): boolean {
     const nodeEl = getNodeDomElement(canvas, nodeId);
     if (!nodeEl) return false;
     return nodeEl.style.display !== 'none';
@@ -463,7 +483,7 @@ export function isNodeVisible(canvas: any, nodeId: string): boolean {
 /**
  * 显示/隐藏节点
  */
-export function setNodeVisibility(canvas: any, nodeId: string, visible: boolean): void {
+export function setNodeVisibility(canvas: Canvas, nodeId: string, visible: boolean): void {
     const nodeEl = getNodeDomElement(canvas, nodeId);
     if (nodeEl) {
         nodeEl.style.display = visible ? '' : 'none';
@@ -477,7 +497,7 @@ export function setNodeVisibility(canvas: any, nodeId: string, visible: boolean)
 /**
  * 创建防抖函数
  */
-export function debounce<T extends (...args: any[]) => void>(
+export function debounce<T extends (...args: unknown[]) => void>(
     fn: T,
     delay: number
 ): (...args: Parameters<T>) => void {
@@ -491,7 +511,7 @@ export function debounce<T extends (...args: any[]) => void>(
 /**
  * 创建节流函数
  */
-export function throttle<T extends (...args: any[]) => void>(
+export function throttle<T extends (...args: unknown[]) => void>(
     fn: T,
     limit: number
 ): (...args: Parameters<T>) => void {
@@ -530,13 +550,14 @@ export function isImageContent(content: string): boolean {
 /**
  * 检测节点是否为文本节点
  */
-export function isTextNode(node: any): boolean {
+export function isTextNode(node: CanvasNode | CanvasDataNode | null | undefined): boolean {
+    if (!node) return true;
     return !node.type || node.type === 'text';
 }
 
 /**
  * 检测节点是否为文件节点
  */
-export function isFileNode(node: any): boolean {
-    return node.type === 'file';
+export function isFileNode(node: CanvasNode | CanvasDataNode | null | undefined): boolean {
+    return node?.type === 'file';
 }
