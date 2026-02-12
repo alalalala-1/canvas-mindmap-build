@@ -4,11 +4,8 @@ import { CanvasFileService } from './canvas-file-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike } from '../types';
 
-/**
- * 节点创建服务
- * 负责创建新节点并添加到 Canvas
- */
 export class NodeCreationService {
     private app: App;
     private plugin: Plugin;
@@ -36,19 +33,14 @@ export class NodeCreationService {
         this.canvasManager = canvasManager;
     }
 
-    /**
-     * 添加节点到 Canvas
-     */
     async addNodeToCanvas(content: string, sourceFile: TFile | null): Promise<void> {
         if (!sourceFile) {
             new Notice('No file selected');
             return;
         }
 
-        // 优先使用设置中的 canvas 文件路径
         let canvasFilePath: string | undefined = this.settings.canvasFilePath;
 
-        // 如果设置中没有路径，再尝试获取当前打开的 canvas
         if (!canvasFilePath) {
             canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
         }
@@ -60,7 +52,6 @@ export class NodeCreationService {
 
         const newNodeId = generateRandomId();
 
-        // 使用原子操作添加节点
         const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
             if (!canvasData.nodes) canvasData.nodes = [];
             if (!canvasData.edges) canvasData.edges = [];
@@ -68,7 +59,6 @@ export class NodeCreationService {
 
             const newNode = this.createNodeData(content, sourceFile, newNodeId);
 
-            // 找到父节点并计算位置
             const parentNode = this.findParentNodeForNewNode(canvasData);
 
             if (parentNode) {
@@ -83,22 +73,20 @@ export class NodeCreationService {
             canvasData.canvasMindmapBuildHistory.push(newNodeId);
             log(`[Create] 节点已添加: ${newNodeId}`);
 
-            // 如果有父节点，添加连线
             if (parentNode) {
-                const newEdge = {
+                const newEdge: CanvasEdgeLike = {
                     id: generateRandomId(),
                     fromNode: parentNode.id,
                     toNode: newNodeId,
                     fromSide: "right",
                     toSide: "left"
                 };
-                canvasData.edges.push(newEdge);
+                canvasData.edges!.push(newEdge);
                 
-                // 关键：如果父节点被折叠了，新节点应该标记为隐藏，且由于它有了入边，它不应该是浮动节点
                 const isParentCollapsed = this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id);
                 if (isParentCollapsed) {
-                    newNode.unknownData = {
-                        ...newNode.unknownData,
+                    (newNode as any).unknownData = {
+                        ...(newNode as any).unknownData,
                         collapsedHide: true
                     };
                 }
@@ -112,20 +100,15 @@ export class NodeCreationService {
             return;
         }
 
-        // 后续处理
         await this.postNodeCreation(newNodeId);
 
         new Notice('Node added to canvas successfully!');
     }
 
-    /**
-     * 创建节点数据对象
-     */
-    private createNodeData(content: string, sourceFile: TFile, nodeId: string): any {
-        const newNode: any = { id: nodeId };
+    private createNodeData(content: string, sourceFile: TFile, nodeId: string): CanvasNodeLike {
+        const newNode: CanvasNodeLike = { id: nodeId };
         const trimmedContent = content.trim();
 
-        // 检测公式
         const isFormula = this.settings.enableFormulaDetection &&
             trimmedContent.startsWith('$$') &&
             trimmedContent.endsWith('$$') &&
@@ -137,7 +120,6 @@ export class NodeCreationService {
             newNode.width = this.settings.formulaNodeWidth || 600;
             newNode.height = this.settings.formulaNodeHeight || 200;
         } else {
-            // 检测图片
             const imageRegex = /!\[\[(.*?)\]\]|!\[.*?\]\((.*?)\)/;
             const imageMatch = content.match(imageRegex);
 
@@ -152,7 +134,6 @@ export class NodeCreationService {
                 newNode.text = content;
                 newNode.width = this.settings.textNodeWidth || 250;
                 
-                // 使用 CanvasNodeManager 计算初始高度
                 if (this.canvasManager?.nodeManager) {
                     newNode.height = this.canvasManager.nodeManager.calculateTextNodeHeight(content);
                 } else {
@@ -166,10 +147,7 @@ export class NodeCreationService {
         return newNode;
     }
 
-    /**
-     * 添加 fromLink 信息到节点
-     */
-    private addFromLink(node: any, sourceFile: TFile): void {
+    private addFromLink(node: CanvasNodeLike, sourceFile: TFile): void {
         const editor = this.app.workspace.getActiveViewOfType(ItemView)?.leaf?.view as any;
         if (editor?.editor) {
             const selection = editor.editor.listSelections()?.[0];
@@ -185,9 +163,9 @@ export class NodeCreationService {
                 try {
                     const fromLinkJson = JSON.stringify(fromLink);
                     if (node.type === 'text') {
-                        node.text += `\n<!-- fromLink:${fromLinkJson} -->`;
+                        node.text = (node.text || '') + `\n<!-- fromLink:${fromLinkJson} -->`;
                     } else {
-                        node.color = `fromLink:${fromLinkJson}`;
+                        (node as any).color = `fromLink:${fromLinkJson}`;
                     }
                 } catch (jsonError) {
                     log('[Create] 添加 fromLink 失败', jsonError);
@@ -196,34 +174,30 @@ export class NodeCreationService {
         }
     }
 
-    /**
-     * 找到父节点（当前选中的节点、最后点击的节点或根据历史/链接推断）
-     */
-    private findParentNodeForNewNode(canvasData: any): any | null {
+    private findParentNodeForNewNode(canvasData: CanvasDataLike): CanvasNodeLike | null {
         const nodes = canvasData.nodes || [];
         const edges = canvasData.edges || [];
         const history = canvasData.canvasMindmapBuildHistory || [];
         if (nodes.length === 0) return null;
 
-        // 1. 尝试使用最后点击的节点（从插件中获取）
         const lastClickedNodeId = (this.plugin as any).lastClickedNodeId;
         if (lastClickedNodeId) {
-            const clickedNode = nodes.find((n: any) => n.id === lastClickedNodeId);
+            const clickedNode = nodes.find(n => n.id === lastClickedNodeId);
             if (clickedNode) {
                 log(`[Create] 使用最后点击节点: ${lastClickedNodeId}`);
                 return clickedNode;
             }
         }
 
-        // 2. 尝试获取当前选中的节点
         const canvasView = this.getCanvasView();
         if (canvasView) {
             const canvas = (canvasView as any).canvas;
             if (canvas?.selection) {
-                const selectedNodes = Array.from(canvas.selection.values()) as any[];
-                if (selectedNodes.length > 0) {
-                    const selectedNodeId = selectedNodes[0].id;
-                    const parentNode = nodes.find((n: any) => n.id === selectedNodeId);
+                const selectedNodes = Array.from(canvas.selection.values()) as CanvasNodeLike[];
+                const firstSelected = selectedNodes[0];
+                if (firstSelected?.id) {
+                    const selectedNodeId = firstSelected.id;
+                    const parentNode = nodes.find(n => n.id === selectedNodeId);
                     if (parentNode) {
                         log(`[Create] 使用选中节点: ${selectedNodeId}`);
                         return parentNode;
@@ -232,15 +206,14 @@ export class NodeCreationService {
             }
         }
 
-        // 3. 尝试从构建历史中推断
         const historyCopy = [...history];
         while (historyCopy.length > 0) {
             const lastId = historyCopy.pop();
-            const lastNode = nodes.find((n: any) => n.id === lastId);
+            const lastNode = nodes.find(n => n.id === lastId);
             if (lastNode) {
-                const parentEdge = edges.find((e: any) => e.toNode === lastId);
+                const parentEdge = edges.find(e => e.toNode === lastId);
                 if (parentEdge) {
-                    const parentNode = nodes.find((n: any) => n.id === parentEdge.fromNode);
+                    const parentNode = nodes.find(n => n.id === parentEdge.fromNode);
                     if (parentNode) {
                         log(`[Create] 从历史推断父节点: ${parentNode.id}`);
                         return parentNode;
@@ -250,47 +223,42 @@ export class NodeCreationService {
             }
         }
 
-        // 4. 尝试从 fromLink 标记推断
-        const nodesWithFromLink = nodes.filter((n: any) => 
-            (n.text?.includes('<!-- fromLink:')) || (n.color?.startsWith('fromLink:'))
+        const nodesWithFromLink = nodes.filter(n => 
+            (n.text?.includes('<!-- fromLink:')) || ((n as any).color?.startsWith('fromLink:'))
         );
         if (nodesWithFromLink.length > 0) {
             const lastNode = nodesWithFromLink[nodesWithFromLink.length - 1];
-            const parentEdge = edges.find((e: any) => e.toNode === lastNode.id);
-            if (parentEdge) {
-                const parentNode = nodes.find((n: any) => n.id === parentEdge.fromNode);
-                if (parentNode) {
-                    log(`[Create] 从 fromLink 推断父节点: ${parentNode.id}`);
-                    return parentNode;
+            if (lastNode) {
+                const parentEdge = edges.find(e => e.toNode === lastNode.id);
+                if (parentEdge) {
+                    const parentNode = nodes.find(n => n.id === parentEdge.fromNode);
+                    if (parentNode) {
+                        log(`[Create] 从 fromLink 推断父节点: ${parentNode.id}`);
+                        return parentNode;
+                    }
                 }
+                return lastNode;
             }
-            return lastNode;
         }
 
-        // 5. 兜底逻辑：找到根节点（无入边的节点）
-        const childNodeIds = new Set(edges.map((e: any) => e.toNode || (e.to?.node?.id)));
+        const childNodeIds = new Set(edges.map(e => e.toNode || (typeof e.to === 'object' && e.to?.node?.id)));
         for (const node of nodes) {
-            if (!childNodeIds.has(node.id)) {
+            if (node.id && !childNodeIds.has(node.id)) {
                 return node;
             }
         }
 
-        return nodes[0];
+        return nodes[0] || null;
     }
 
-    /**
-     * 节点创建后的后续处理
-     */
     private async postNodeCreation(newNodeId: string): Promise<void> {
         if (this.canvasManager) {
             if (this.canvasManager.collapseStateManager) {
                 this.canvasManager.collapseStateManager.clearCache();
             }
 
-            // 检查折叠按钮（已有防抖机制）
             await this.canvasManager.checkAndAddCollapseButtons();
 
-            // 立即调整新节点高度（多重触发以应对 DOM 渲染延迟）
             this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
             
             setTimeout(() => {
@@ -303,9 +271,6 @@ export class NodeCreationService {
         }
     }
 
-    /**
-     * 获取 Canvas 视图
-     */
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
     }

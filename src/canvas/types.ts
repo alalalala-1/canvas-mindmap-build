@@ -60,6 +60,8 @@ export type FloatingNodeMetadata = {
 export type CanvasNodeLike = {
     id?: string;
     text?: string;
+    type?: 'text' | 'file' | 'group';
+    file?: string;
     height?: number;
     nodeEl?: HTMLElement;
     data?: FloatingNodeMetadata;
@@ -103,11 +105,27 @@ export type CanvasDataLike = {
     metadata?: {
         floatingNodes?: Record<string, unknown>;
     };
+    canvasMindmapBuildHistory?: string[];
 };
 
 export type CanvasFileDataLike = {
     nodes?: CanvasNodeLike[];
     edges?: CanvasEdgeLike[];
+};
+
+export type FloatingNodeRecord = {
+    isFloating: boolean;
+    originalParent?: string;
+    floatingTimestamp?: number;
+    isSubtreeNode?: boolean;
+};
+
+export type FloatingNodesMetadata = Record<string, boolean | FloatingNodeRecord>;
+
+export type CanvasDataWithMetadata = CanvasDataLike & {
+    metadata?: {
+        floatingNodes?: FloatingNodesMetadata;
+    };
 };
 
 export type CanvasLike = {

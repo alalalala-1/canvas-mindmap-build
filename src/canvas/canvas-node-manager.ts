@@ -217,7 +217,7 @@ export class CanvasNodeManager {
                                 newHeight = this.settings.formulaNodeHeight || 80;
                                 node.width = this.settings.formulaNodeWidth || 400;
                             } else {
-                                const nodeData = nodeDomMap.get(node.id);
+                                const nodeData = node.id ? nodeDomMap.get(node.id) : undefined;
                                 const nodeEl = nodeData?.nodeEl;
                                 const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
                                 newHeight = Math.min(calculatedHeight, maxHeight);
@@ -233,7 +233,7 @@ export class CanvasNodeManager {
                             }
 
                             // 强制同步内存和渲染高度（即使文件数据没变，也要确保内存和 DOM 一致）
-                            const nodeData = nodeDomMap.get(node.id);
+                            const nodeData = node.id ? nodeDomMap.get(node.id) : undefined;
                             if (nodeData) {
                                 if (nodeData.height !== newHeight) {
                                     nodeData.height = newHeight;

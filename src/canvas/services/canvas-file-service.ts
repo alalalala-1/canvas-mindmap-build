@@ -2,11 +2,16 @@ import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { log } from '../../utils/logger';
 import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
+import { 
+    CanvasDataLike, 
+    CanvasNodeLike, 
+    CanvasEdgeLike, 
+    FloatingNodesMetadata,
+    FloatingNodeRecord 
+} from '../types';
 
-/**
- * Canvas 文件操作服务
- * 负责读取、修改 Canvas 文件
- */
+export type UpdateCallback = (data: CanvasDataLike) => boolean | Promise<boolean>;
+
 export class CanvasFileService {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
@@ -16,24 +21,23 @@ export class CanvasFileService {
         this.settings = settings;
     }
 
-    /**
-     * 获取浮动节点信息
-     * 从 metadata 和节点 data 属性中读取
-     */
-    getFloatingNodesInfo(canvasData: any): {
+    getFloatingNodesInfo(canvasData: CanvasDataLike | null): {
         floatingNodes: Set<string>,
         originalParents: Map<string, string>
     } {
         const floatingNodes = new Set<string>();
         const originalParents = new Map<string, string>();
 
+        if (!canvasData) return { floatingNodes, originalParents };
+
         // 1. 从 metadata 读取（向后兼容）
-        if (canvasData?.metadata?.floatingNodes) {
-            for (const [nodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
+        const metadata = canvasData.metadata?.floatingNodes as FloatingNodesMetadata | undefined;
+        if (metadata) {
+            for (const [nodeId, info] of Object.entries(metadata)) {
                 if (typeof info === 'boolean' && info === true) {
                     floatingNodes.add(nodeId);
                 } else if (typeof info === 'object' && info !== null) {
-                    const nodeInfo = info as any;
+                    const nodeInfo = info as FloatingNodeRecord;
                     if (nodeInfo.isFloating) {
                         floatingNodes.add(nodeId);
                         if (nodeInfo.originalParent) {
@@ -45,13 +49,12 @@ export class CanvasFileService {
         }
 
         // 2. 从节点本身的 data 属性读取（主要方式）
-        if (canvasData?.nodes && Array.isArray(canvasData.nodes)) {
-            for (const node of canvasData.nodes) {
-                if (node.data?.isFloating) {
-                    floatingNodes.add(node.id);
-                    if (node.data.originalParent) {
-                        originalParents.set(node.id, node.data.originalParent);
-                    }
+        const nodes = this.getNodes(canvasData);
+        for (const node of nodes) {
+            if (node.data?.isFloating) {
+                floatingNodes.add(node.id!);
+                if (node.data.originalParent) {
+                    originalParents.set(node.id!, node.data.originalParent);
                 }
             }
         }
@@ -59,31 +62,20 @@ export class CanvasFileService {
         return { floatingNodes, originalParents };
     }
 
-    /**
-     * 获取边列表（标准化格式）
-     */
-    getEdges(canvasData: any): any[] {
+    getEdges(canvasData: CanvasDataLike | null): CanvasEdgeLike[] {
         if (!canvasData?.edges) return [];
         return Array.isArray(canvasData.edges) ? canvasData.edges : [];
     }
 
-    /**
-     * 获取节点列表（标准化格式）
-     */
-    getNodes(canvasData: any): any[] {
+    getNodes(canvasData: CanvasDataLike | null): CanvasNodeLike[] {
         if (!canvasData?.nodes) return [];
         return Array.isArray(canvasData.nodes) ? canvasData.nodes : [];
     }
 
-    /**
-     * 获取当前 Canvas 文件路径
-     * 尝试多种方法获取路径
-     */
     getCurrentCanvasFilePath(): string | undefined {
         const currentPath = getCurrentCanvasFilePath(this.app);
         if (currentPath) return currentPath;
 
-        // 方法2: 从设置中获取
         if (this.settings.canvasFilePath) {
             return this.settings.canvasFilePath;
         }
@@ -91,16 +83,15 @@ export class CanvasFileService {
         return undefined;
     }
 
-    /**
-     * 从 CanvasView 获取文件路径
-     */
     getCanvasFilePathFromView(canvasView: ItemView): string | undefined {
-        if ((canvasView as any).canvas?.file?.path) {
-            return (canvasView as any).canvas.file.path;
+        const canvas = (canvasView as any).canvas;
+        if (canvas?.file?.path) {
+            return canvas.file.path;
         }
 
-        if ((canvasView as any).file?.path) {
-            return (canvasView as any).file.path;
+        const viewFile = (canvasView as any).file;
+        if (viewFile?.path) {
+            return viewFile.path;
         }
 
         if (this.settings.canvasFilePath) {
@@ -110,43 +101,36 @@ export class CanvasFileService {
         return undefined;
     }
 
-    /**
-     * 读取 Canvas 文件数据
-     */
-    async readCanvasData(filePath: string): Promise<any | null> {
+    async readCanvasData(filePath: string): Promise<CanvasDataLike | null> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) return null;
 
         try {
             const canvasContent = await this.app.vault.read(canvasFile);
-            return JSON.parse(canvasContent);
+            return JSON.parse(canvasContent) as CanvasDataLike;
         } catch (parseError) {
             log('[File] 解析失败:', parseError);
             return null;
         }
     }
 
-    /**
-     * 原子化修改 Canvas 文件数据
-     * 使用 "读取 -> 合并 -> 写入" 模式，防止在修改期间数据被 Obsidian 覆盖
-     */
     async modifyCanvasDataAtomic(
         filePath: string,
-        updateCallback: (data: any) => boolean | Promise<boolean>
+        updateCallback: UpdateCallback
     ): Promise<boolean> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) return false;
 
         try {
             const content = await this.app.vault.read(canvasFile);
-            const data = JSON.parse(content);
+            const data = JSON.parse(content) as CanvasDataLike;
 
             const shouldModify = await updateCallback(data);
             log(`[File] 原子修改第一次检查: shouldModify=${shouldModify}`);
 
             if (shouldModify) {
                 const latestContent = await this.app.vault.read(canvasFile);
-                const latestData = JSON.parse(latestContent);
+                const latestData = JSON.parse(latestContent) as CanvasDataLike;
                 
                 const finalShouldModify = await updateCallback(latestData);
                 log(`[File] 原子修改第二次检查: finalShouldModify=${finalShouldModify}`);
@@ -165,10 +149,7 @@ export class CanvasFileService {
         }
     }
 
-    /**
-     * 保存 Canvas 数据到文件
-     */
-    async saveCanvasData(filePath: string, data: any): Promise<boolean> {
+    async saveCanvasData(filePath: string, data: CanvasDataLike): Promise<boolean> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
         if (!(canvasFile instanceof TFile)) {
             log(`[File] 未找到文件: ${filePath}`);

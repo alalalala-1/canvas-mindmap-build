@@ -1,16 +1,12 @@
 import { App, TFile } from 'obsidian';
 import { log } from '../../utils/logger';
 import { CanvasFileService } from './canvas-file-service';
+import { FloatingNodeRecord, FloatingNodesMetadata } from '../types';
 
-/**
- * 浮动节点状态管理器
- * 负责浮动节点状态的存储、读取、清除和持久化
- * 单一职责：状态管理，不涉及视觉样式
- */
 export class FloatingNodeStateManager {
     private app: App;
     private canvasFileService: CanvasFileService;
-    private floatingNodesCache: Map<string, Map<string, any>> = new Map(); // canvasPath -> (nodeId -> data)
+    private floatingNodesCache: Map<string, Map<string, FloatingNodeRecord>> = new Map();
     private isInitialized: Map<string, boolean> = new Map();
 
     constructor(app: App, canvasFileService: CanvasFileService) {
@@ -65,9 +61,12 @@ export class FloatingNodeStateManager {
                 if (!canvasData.metadata) canvasData.metadata = {};
                 if (!canvasData.metadata.floatingNodes) canvasData.metadata.floatingNodes = {};
                 
-                const existingMeta = canvasData.metadata.floatingNodes[nodeId];
-                if (!existingMeta || existingMeta.originalParent !== originalParentId) {
-                    canvasData.metadata.floatingNodes[nodeId] = {
+                const floatingNodes = canvasData.metadata.floatingNodes as FloatingNodesMetadata;
+                const existingMeta = floatingNodes[nodeId] as FloatingNodeRecord | boolean | undefined;
+                const existingOriginalParent = typeof existingMeta === 'object' ? existingMeta.originalParent : undefined;
+                
+                if (!existingMeta || existingOriginalParent !== originalParentId) {
+                    floatingNodes[nodeId] = {
                         isFloating: true,
                         originalParent: originalParentId
                     };
@@ -76,7 +75,7 @@ export class FloatingNodeStateManager {
                 }
 
                 if (canvasData.nodes) {
-                    const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
+                    const nodeData = canvasData.nodes.find(n => n.id === nodeId);
                     if (nodeData) {
                         if (!nodeData.data) nodeData.data = {};
                         if (nodeData.data.isFloating !== true || nodeData.data.originalParent !== originalParentId) {
