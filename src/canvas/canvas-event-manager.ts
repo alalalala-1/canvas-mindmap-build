@@ -12,6 +12,13 @@ import {
     getNodeIdFromEdgeEndpoint,
     debounce
 } from '../utils/canvas-utils';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike } from './types';
+
+type FromLinkInfo = {
+    file: string;
+    from: { line: number; ch: number };
+    to: { line: number; ch: number };
+};
 
 export class CanvasEventManager {
     private plugin: Plugin;
@@ -167,23 +174,27 @@ export class CanvasEventManager {
         return deleteBtn;
     }
 
-    private getSelectedNodeFromCanvas(canvas: any): any | null {
+    private getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | null {
+        const canvasAny = canvas as any;
         if (!canvas?.nodes) return null;
         
-        if (canvas.selection && canvas.selection.size > 0) {
-            const firstSelected = canvas.selection.values().next().value;
-            // 确保它是节点而不是边
+        if (canvasAny.selection && canvasAny.selection.size > 0) {
+            const firstSelected = canvasAny.selection.values().next().value;
             if (firstSelected && (firstSelected.nodeEl || firstSelected.type)) {
                 return firstSelected;
             }
         }
         
-        if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
-            return canvas.selectedNodes[0];
+        if (canvasAny.selectedNodes && canvasAny.selectedNodes.length > 0) {
+            return canvasAny.selectedNodes[0];
         }
         
-        // 回退：检查 DOM 类名
-        const allNodes = Array.from(canvas.nodes.values());
+        const allNodes = canvas.nodes instanceof Map 
+            ? Array.from(canvas.nodes.values()) 
+            : Array.isArray(canvas.nodes) 
+                ? canvas.nodes 
+                : [];
+                
         for (const node of allNodes) {
             const nodeAny = node as any;
             if (nodeAny.nodeEl) {
@@ -198,12 +209,20 @@ export class CanvasEventManager {
         return null;
     }
 
-    private async executeDeleteOperation(selectedNode: any, canvas: any) {
+    private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
+        const canvasAny = canvas as any;
         let edges: any[] = [];
-        if (canvas.fileData?.edges) edges = canvas.fileData.edges;
-        if (canvas.edges) edges = Array.from(canvas.edges.values());
+        if (canvasAny.fileData?.edges) edges = canvasAny.fileData.edges;
+        if (canvas.edges) {
+            edges = canvas.edges instanceof Map 
+                ? Array.from(canvas.edges.values()) 
+                : Array.isArray(canvas.edges) 
+                    ? canvas.edges 
+                    : [];
+        }
         
-        const hasChildren = this.collapseStateManager.getChildNodes(selectedNode.id, edges).length > 0;
+        const nodeId = selectedNode.id!;
+        const hasChildren = this.collapseStateManager.getChildNodes(nodeId, edges).length > 0;
         
         const modal = new DeleteConfirmationModal(this.app, hasChildren);
         modal.open();
@@ -212,7 +231,7 @@ export class CanvasEventManager {
         if (result.action === 'cancel') return;
 
         this.collapseStateManager.clearCache();
-        log(`[Event] UI: 删除 ${selectedNode.id} (${result.action})`);
+        log(`[Event] UI: 删除 ${nodeId} (${result.action})`);
         if (result.action === 'confirm' || result.action === 'single') {
             await this.canvasManager['nodeManager'].handleSingleDelete(selectedNode, canvas);
         } else if (result.action === 'cascade') {
@@ -256,33 +275,34 @@ export class CanvasEventManager {
         }
         if (!nodeEl) return;
 
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as any).canvas as CanvasLike;
         if (!canvas?.nodes) return;
         
-        const nodes = Array.from(canvas.nodes.values()) as any[];
-        const clickedNode = nodes.find(node => node.nodeEl === nodeEl);
+        const nodes = canvas.nodes instanceof Map 
+            ? Array.from(canvas.nodes.values()) 
+            : Array.isArray(canvas.nodes) 
+                ? canvas.nodes 
+                : [];
+        const clickedNode = nodes.find(node => (node as any).nodeEl === nodeEl);
         if (!clickedNode) return;
 
-        // 解析 fromLink（文本节点存储在 text 中，图片/文件节点存储在 color 中）
-        let fromLink: any = null;
+        let fromLink: FromLinkInfo | null = null;
         
-        // 1. 先检查 text 属性（文本节点）
         if (clickedNode.text) {
             const match = clickedNode.text.match(/<!-- fromLink:(.*?) -->/);
             if (match?.[1]) {
                 try {
-                    fromLink = JSON.parse(match[1]);
+                    fromLink = JSON.parse(match[1]) as FromLinkInfo;
                 } catch (e) {
                     log(`[Event] fromLink 解析失败: ${e}`);
                 }
             }
         }
         
-        // 2. 再检查 color 属性（图片/文件节点）
-        if (!fromLink && clickedNode.color?.startsWith('fromLink:')) {
+        if (!fromLink && (clickedNode as any).color?.startsWith('fromLink:')) {
             try {
-                const fromLinkJson = clickedNode.color.substring('fromLink:'.length);
-                fromLink = JSON.parse(fromLinkJson);
+                const fromLinkJson = (clickedNode as any).color.substring('fromLink:'.length);
+                fromLink = JSON.parse(fromLinkJson) as FromLinkInfo;
             } catch (e) {
                 log(`[Event] fromLink (color) 解析失败: ${e}`);
             }
@@ -299,7 +319,7 @@ export class CanvasEventManager {
             }
 
             let mdLeaf = this.app.workspace.getLeavesOfType('markdown').find(
-                leaf => (leaf.view as any).file?.path === fromLink.file
+                leaf => (leaf.view as any).file?.path === fromLink!.file
             );
             if (!mdLeaf) {
                 mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
@@ -310,8 +330,8 @@ export class CanvasEventManager {
 
             const view = mdLeaf.view as any;
             setTimeout(() => {
-                view.editor.setSelection(fromLink.from, fromLink.to);
-                view.editor.scrollIntoView({ from: fromLink.from, to: fromLink.to }, true);
+                view.editor.setSelection(fromLink!.from, fromLink!.to);
+                view.editor.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
             }, 100);
         } catch (err) {
             log(`[Event] UI: 跳转失败: ${err}`);
@@ -322,7 +342,7 @@ export class CanvasEventManager {
     // Canvas 事件监听（使用 Obsidian 官方事件系统）
     // =========================================================================
     async setupCanvasEventListeners(canvasView: ItemView) {
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as any).canvas as CanvasLike;
         log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
         
         if (!canvas) {
@@ -330,7 +350,7 @@ export class CanvasEventManager {
             return;
         }
 
-        const canvasFilePath = canvas.file?.path || (canvasView as any).file?.path;
+        const canvasFilePath = (canvas as any).file?.path || (canvasView as any).file?.path;
         log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
         
         if (canvasFilePath) {
@@ -344,17 +364,18 @@ export class CanvasEventManager {
         this.registerCanvasWorkspaceEvents(canvas);
     }
 
-    private registerCanvasWorkspaceEvents(canvas: any) {
+    private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create' as any, async (edge: any) => {
-                const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-                const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
-                log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
+                const typedEdge = edge as CanvasEdgeLike;
+                const fromId = (edge as any).from?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
+                const toId = (edge as any).to?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
+                log(`[Event] Canvas:EdgeCreate: ${typedEdge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
                 requestAnimationFrame(async () => {
                     try {
-                        await this.floatingNodeService.handleNewEdge(edge);
+                        await this.floatingNodeService.handleNewEdge(typedEdge);
                     } catch (err) {
                         log(`[EdgeCreate] 异常: ${err}`);
                     }
@@ -365,9 +386,10 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-delete' as any, (edge: any) => {
-                const fromId = edge.from?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-                const toId = edge.to?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
-                log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
+                const typedEdge = edge as CanvasEdgeLike;
+                const fromId = (edge as any).from?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
+                const toId = (edge as any).to?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
+                log(`[Event] Canvas:EdgeDelete: ${typedEdge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
                 this.canvasManager.checkAndAddCollapseButtons();
@@ -376,15 +398,17 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-create' as any, async (node: any) => {
-                log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(node?.id || node)}`);
-                if (node?.id) {
-                    const isFloating = await this.floatingNodeService.isNodeFloating(node.id);
+                const typedNode = node as CanvasNodeLike;
+                const nodeId = typedNode?.id;
+                log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(nodeId || node)}`);
+                if (nodeId) {
+                    const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
                     if (isFloating) {
-                        await this.floatingNodeService.clearNodeFloatingState(node.id);
+                        await this.floatingNodeService.clearNodeFloatingState(nodeId);
                     }
-                    log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${node.id}`);
+                    log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
                     setTimeout(() => {
-                        this.canvasManager.adjustNodeHeightAfterRender(node.id);
+                        this.canvasManager.adjustNodeHeightAfterRender(nodeId);
                     }, 100);
                 } else {
                     log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
@@ -394,8 +418,9 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-delete' as any, (node: any) => {
-                log(`[Event] Canvas:NodeDelete: ${node.id}`);
-                this.floatingNodeService.clearFloatingMarks(node);
+                const typedNode = node as CanvasNodeLike;
+                log(`[Event] Canvas:NodeDelete: ${typedNode.id}`);
+                this.floatingNodeService.clearFloatingMarks(typedNode);
                 this.canvasManager.checkAndAddCollapseButtons();
             })
         );
@@ -407,7 +432,7 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:change' as any, async (canvasObj: any) => {
+            this.app.workspace.on('canvas:change' as any, async () => {
                 this.collapseStateManager.clearCache();
                 await this.canvasManager.checkAndAddCollapseButtons();
             })
@@ -464,18 +489,23 @@ export class CanvasEventManager {
     // =========================================================================
     // 辅助方法
     // =========================================================================
-    private getSelectedEdge(canvas: any): any | null {
-        if (canvas.selectedEdge) return canvas.selectedEdge;
+    private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
+        const canvasAny = canvas as any;
+        if (canvasAny.selectedEdge) return canvasAny.selectedEdge;
         
-        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges[0];
+        if (canvasAny.selectedEdges && canvasAny.selectedEdges.length > 0) {
+            return canvasAny.selectedEdges[0];
         }
         
         if (canvas.edges) {
-            const edgesArray = Array.from(canvas.edges.values()) as any[];
+            const edgesArray = canvas.edges instanceof Map 
+                ? Array.from(canvas.edges.values()) 
+                : Array.isArray(canvas.edges) 
+                    ? canvas.edges 
+                    : [];
             for (const edge of edgesArray) {
-                const isFocused = edge?.lineGroupEl?.classList?.contains('is-focused');
-                const isSelected = edge?.lineGroupEl?.classList?.contains('is-selected');
+                const isFocused = (edge as any)?.lineGroupEl?.classList?.contains('is-focused');
+                const isSelected = (edge as any)?.lineGroupEl?.classList?.contains('is-selected');
                 
                 if (isFocused || isSelected) {
                     return edge;
