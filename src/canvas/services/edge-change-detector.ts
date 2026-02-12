@@ -1,67 +1,82 @@
 import { log } from '../../utils/logger';
+import { CanvasEdgeLike, CanvasLike } from '../types';
 
-/**
- * 边变化检测器
- * 负责检测 Canvas 中边的添加和删除
- */
+export type NewEdgeCallback = (newEdges: CanvasEdgeLike[]) => void;
+
+export interface DetectionOptions {
+    interval?: number;
+    maxChecks?: number;
+    stableThreshold?: number;
+}
+
 export class EdgeChangeDetector {
     private edgeChangeInterval: number | null = null;
     private lastEdgeIds: Set<string> = new Set();
-    private processedEdgeIds: Set<string> = new Set(); // 记录在此次会话中已处理过的新边
+    private processedEdgeIds: Set<string> = new Set();
     private lastEdgeCount: number = 0;
-    private onNewEdgesCallback: ((newEdges: any[]) => void) | null = null;
+    private onNewEdgesCallback: NewEdgeCallback | null = null;
+    
+    private lastEdgeSignature: string = '';
+    private stableCount: number = 0;
+    private stableThreshold: number = 2;
+    private pendingNewEdges: Map<string, CanvasEdgeLike> = new Map();
 
-    /**
-     * 启动边变化检测
-     */
     startDetection(
-        canvas: any,
-        onNewEdges: (newEdges: any[]) => void,
-        options: { interval?: number; maxChecks?: number } = {}
+        canvas: CanvasLike,
+        onNewEdges: NewEdgeCallback,
+        options: DetectionOptions = {}
     ): void {
         this.stopDetection();
 
         const interval = options.interval || 500;
         const maxChecks = options.maxChecks || 120;
+        this.stableThreshold = options.stableThreshold || 2;
 
         this.lastEdgeIds = this.getEdgeIds(canvas);
         this.processedEdgeIds = new Set(this.lastEdgeIds);
         this.lastEdgeCount = this.lastEdgeIds.size;
         this.onNewEdgesCallback = onNewEdges;
+        this.lastEdgeSignature = this.computeEdgeSignature(canvas);
+        this.stableCount = 0;
+        this.pendingNewEdges.clear();
 
         let checkCount = 0;
 
         this.edgeChangeInterval = window.setInterval(() => {
             checkCount++;
 
-            const currentEdgeIds = this.getEdgeIds(canvas);
+            const currentSignature = this.computeEdgeSignature(canvas);
             
-            const newEdges: any[] = [];
-            const edges = canvas.edges instanceof Map
-                ? Array.from(canvas.edges.values())
-                : Array.isArray(canvas.edges)
-                    ? canvas.edges
-                    : [];
-
-            for (const edge of edges) {
-                const edgeId = this.generateEdgeId(edge);
-                if (edgeId && !this.processedEdgeIds.has(edgeId)) {
-                    newEdges.push(edge);
-                    this.processedEdgeIds.add(edgeId);
+            if (currentSignature === this.lastEdgeSignature) {
+                this.stableCount++;
+                if (this.stableCount >= this.stableThreshold && this.pendingNewEdges.size > 0) {
+                    const stableNewEdges = Array.from(this.pendingNewEdges.values());
+                    this.pendingNewEdges.clear();
+                    
+                    if (this.onNewEdgesCallback) {
+                        log(`[Detector] 边数据稳定，处理 ${stableNewEdges.length} 条新边`);
+                        this.onNewEdgesCallback(stableNewEdges);
+                    }
                 }
-            }
+            } else {
+                this.stableCount = 0;
+                this.lastEdgeSignature = currentSignature;
+                
+                const currentEdgeIds = this.getEdgeIds(canvas);
+                const edges = this.getEdgesArray(canvas);
 
-            if (newEdges.length > 0 && this.onNewEdgesCallback) {
-                for (const edge of newEdges) {
-                    const fromId = edge?.from?.node?.id || edge?.fromNode || (typeof edge?.from === 'string' ? edge.from : null);
-                    const toId = edge?.to?.node?.id || edge?.toNode || (typeof edge?.to === 'string' ? edge.to : null);
-                    log(`[Detector] 轮询发现新边: ${edge.id || 'no-id'} (${fromId} -> ${toId})`);
+                for (const edge of edges) {
+                    const edgeId = this.generateEdgeId(edge);
+                    if (edgeId && !this.processedEdgeIds.has(edgeId)) {
+                        this.pendingNewEdges.set(edgeId, edge);
+                        this.processedEdgeIds.add(edgeId);
+                        log(`[Detector] 发现新边(待稳定): ${edgeId}`);
+                    }
                 }
-                this.onNewEdgesCallback(newEdges);
-            }
 
-            this.lastEdgeIds = new Set(currentEdgeIds);
-            this.lastEdgeCount = currentEdgeIds.size;
+                this.lastEdgeIds = new Set(currentEdgeIds);
+                this.lastEdgeCount = currentEdgeIds.size;
+            }
 
             if (maxChecks > 0 && checkCount >= maxChecks) {
                 this.stopDetection();
@@ -69,28 +84,47 @@ export class EdgeChangeDetector {
         }, interval);
     }
 
-    /**
-     * 停止边变化检测
-     */
     stopDetection(): void {
         if (this.edgeChangeInterval) {
             window.clearInterval(this.edgeChangeInterval);
             this.edgeChangeInterval = null;
         }
+        this.pendingNewEdges.clear();
+        this.stableCount = 0;
     }
 
-    /**
-     * 获取当前所有边的 ID 集合
-     */
-    private getEdgeIds(canvas: any): Set<string> {
-        const edgeIds = new Set<string>();
-        if (!canvas?.edges) return edgeIds;
+    private computeEdgeSignature(canvas: CanvasLike): string {
+        const edges = this.getEdgesArray(canvas);
+        const signatures: string[] = [];
+        
+        for (const edge of edges) {
+            const edgeId = this.generateEdgeId(edge);
+            if (edgeId) {
+                signatures.push(edgeId);
+            }
+        }
+        
+        signatures.sort();
+        return signatures.join('|');
+    }
 
-        const edges = canvas.edges instanceof Map
-            ? Array.from(canvas.edges.values())
-            : Array.isArray(canvas.edges)
-                ? canvas.edges
-                : [];
+    private getEdgesArray(canvas: CanvasLike): CanvasEdgeLike[] {
+        if (!canvas?.edges) return [];
+        
+        if (canvas.edges instanceof Map) {
+            return Array.from(canvas.edges.values());
+        }
+        
+        if (Array.isArray(canvas.edges)) {
+            return canvas.edges;
+        }
+        
+        return [];
+    }
+
+    private getEdgeIds(canvas: CanvasLike): Set<string> {
+        const edgeIds = new Set<string>();
+        const edges = this.getEdgesArray(canvas);
 
         for (const edge of edges) {
             const edgeId = this.generateEdgeId(edge);
@@ -102,55 +136,56 @@ export class EdgeChangeDetector {
         return edgeIds;
     }
 
-    /**
-     * 生成边的唯一 ID
-     */
-    private generateEdgeId(edge: any): string {
-        const fromId = edge?.from?.node?.id || edge?.fromNode || (typeof edge?.from === 'string' ? edge.from : null);
-        const toId = edge?.to?.node?.id || edge?.toNode || (typeof edge?.to === 'string' ? edge.to : null);
+    private generateEdgeId(edge: CanvasEdgeLike): string {
+        let fromId: string | null = null;
+        let toId: string | null = null;
+        
+        if (typeof edge?.from === 'string') {
+            fromId = edge.from;
+        } else if (edge?.from?.node?.id) {
+            fromId = edge.from.node.id;
+        } else if (edge?.fromNode) {
+            fromId = edge.fromNode;
+        }
+        
+        if (typeof edge?.to === 'string') {
+            toId = edge.to;
+        } else if (edge?.to?.node?.id) {
+            toId = edge.to.node.id;
+        } else if (edge?.toNode) {
+            toId = edge.toNode;
+        }
+        
         if (fromId && toId) {
             return `${fromId}->${toId}`;
         }
-        return edge.id || '';
+        return edge?.id || '';
     }
 
-    /**
-     * 找出新添加的边
-     */
-    private findNewEdges(canvas: any, lastEdgeIds: Set<string>): any[] {
-        if (!canvas?.edges) return [];
+    forceCheck(canvas: CanvasLike): void {
+        if (!this.onNewEdgesCallback) return;
 
-        const edges = canvas.edges instanceof Map
-            ? Array.from(canvas.edges.values())
-            : Array.isArray(canvas.edges)
-                ? canvas.edges
-                : [];
-
-        const newEdges: any[] = [];
+        const edges = this.getEdgesArray(canvas);
+        const newEdges: CanvasEdgeLike[] = [];
 
         for (const edge of edges) {
             const edgeId = this.generateEdgeId(edge);
-            if (edgeId && !lastEdgeIds.has(edgeId)) {
+            if (edgeId && !this.processedEdgeIds.has(edgeId)) {
                 newEdges.push(edge);
+                this.processedEdgeIds.add(edgeId);
             }
         }
 
-        return newEdges;
-    }
-
-    /**
-     * 手动触发一次检测
-     */
-    forceCheck(canvas: any): void {
-        if (!this.onNewEdgesCallback) return;
-
-        const newEdges = this.findNewEdges(canvas, this.lastEdgeIds);
         if (newEdges.length > 0) {
-            log(`[Detector] 手动: ${newEdges.length}`);
+            log(`[Detector] 手动检测: ${newEdges.length} 条新边`);
             this.onNewEdgesCallback(newEdges);
         }
 
         this.lastEdgeIds = this.getEdgeIds(canvas);
         this.lastEdgeCount = this.lastEdgeIds.size;
+    }
+
+    isRunning(): boolean {
+        return this.edgeChangeInterval !== null;
     }
 }

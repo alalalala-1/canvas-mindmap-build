@@ -75,10 +75,16 @@ export type CanvasNodeLike = {
     prevY?: number;
 };
 
+export type EdgeEndpoint = {
+    node?: { id?: string };
+    side?: string;
+    end?: unknown;
+} | string;
+
 export type CanvasEdgeLike = {
     id?: string;
-    from?: unknown;
-    to?: unknown;
+    from?: EdgeEndpoint;
+    to?: EdgeEndpoint;
     fromNode?: string;
     toNode?: string;
     fromSide?: string;

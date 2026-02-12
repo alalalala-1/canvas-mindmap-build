@@ -4,11 +4,8 @@ import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
 import { getCanvasView, getCurrentCanvasFilePath } from '../../utils/canvas-utils';
+import { CanvasLike, CanvasEdgeLike } from '../types';
 
-/**
- * 边删除服务
- * 负责删除选中的边，并处理由此产生的浮动节点状态
- */
 export class EdgeDeletionService {
     private app: App;
     private plugin: Plugin;
@@ -35,9 +32,6 @@ export class EdgeDeletionService {
         this.canvasManager = canvasManager;
     }
 
-    /**
-     * 删除当前选中的边
-     */
     async deleteSelectedEdge(): Promise<void> {
         log('[Event] UI: 确认删除边');
         const canvasView = getCanvasView(this.app);
@@ -46,7 +40,7 @@ export class EdgeDeletionService {
             return;
         }
 
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as any).canvas as CanvasLike;
         if (!canvas) {
             new Notice('Canvas not initialized');
             return;
@@ -62,23 +56,27 @@ export class EdgeDeletionService {
         await this.deleteEdge(edge, canvas);
     }
 
-    /**
-     * 获取当前选中的边
-     */
-    private getSelectedEdge(canvas: any): any | null {
-        if (canvas.selectedEdge) {
-            return canvas.selectedEdge;
+    private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
+        const canvasAny = canvas as any;
+        
+        if (canvasAny.selectedEdge) {
+            return canvasAny.selectedEdge;
         }
         
-        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges[0];
+        if (canvasAny.selectedEdges && canvasAny.selectedEdges.length > 0) {
+            return canvasAny.selectedEdges[0];
         }
         
         if (canvas.edges) {
-            const edgesArray = Array.from(canvas.edges.values()) as any[];
+            const edgesArray = canvas.edges instanceof Map
+                ? Array.from(canvas.edges.values())
+                : Array.isArray(canvas.edges)
+                    ? canvas.edges
+                    : [];
+                    
             for (const edge of edgesArray) {
-                const isFocused = edge?.lineGroupEl?.classList?.contains('is-focused');
-                const isSelected = edge?.lineGroupEl?.classList?.contains('is-selected');
+                const isFocused = (edge as any)?.lineGroupEl?.classList?.contains('is-focused');
+                const isSelected = (edge as any)?.lineGroupEl?.classList?.contains('is-selected');
                 
                 if (isFocused || isSelected) {
                     return edge;
@@ -89,17 +87,36 @@ export class EdgeDeletionService {
         return null;
     }
 
-    /**
-     * 删除指定的边
-     */
-    private async deleteEdge(edge: any, canvas: any): Promise<void> {
+    private getEdgeFromId(edge: CanvasEdgeLike): string | null {
+        if (typeof edge?.from === 'string') {
+            return edge.from;
+        } else if (edge?.from?.node?.id) {
+            return edge.from.node.id;
+        } else if (edge?.fromNode) {
+            return edge.fromNode;
+        }
+        return null;
+    }
+
+    private getEdgeToId(edge: CanvasEdgeLike): string | null {
+        if (typeof edge?.to === 'string') {
+            return edge.to;
+        } else if (edge?.to?.node?.id) {
+            return edge.to.node.id;
+        } else if (edge?.toNode) {
+            return edge.toNode;
+        }
+        return null;
+    }
+
+    private async deleteEdge(edge: CanvasEdgeLike, canvas: CanvasLike): Promise<void> {
         try {
-            const parentNodeId = edge.from?.node?.id || edge.fromNode;
-            const childNodeId = edge.to?.node?.id || edge.toNode;
+            const parentNodeId = this.getEdgeFromId(edge);
+            const childNodeId = this.getEdgeToId(edge);
             
             log(`[EdgeDelete] 边: ${parentNodeId} -> ${childNodeId}`);
 
-            const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
+            const canvasFilePath = (canvas as any).file?.path || getCurrentCanvasFilePath(this.app);
             if (!canvasFilePath) return;
 
             let hasOtherIncomingEdges = false;
@@ -121,18 +138,19 @@ export class EdgeDeletionService {
                 return canvasData.edges.length !== originalEdgeCount;
             });
 
-            if (canvas.edges && edge.id) {
+            const canvasAny = canvas as any;
+            if (canvas.edges && edge?.id) {
                 const edgeId = edge.id;
-                if (canvas.edges.has(edgeId)) {
+                if (canvas.edges instanceof Map && canvas.edges.has(edgeId)) {
                     canvas.edges.delete(edgeId);
                 }
-                if (canvas.selectedEdge === edge) {
-                    canvas.selectedEdge = null;
+                if (canvasAny.selectedEdge === edge) {
+                    canvasAny.selectedEdge = null;
                 }
-                if (canvas.selectedEdges) {
-                    const index = canvas.selectedEdges.indexOf(edge);
+                if (canvasAny.selectedEdges) {
+                    const index = canvasAny.selectedEdges.indexOf(edge);
                     if (index > -1) {
-                        canvas.selectedEdges.splice(index, 1);
+                        canvasAny.selectedEdges.splice(index, 1);
                     }
                 }
             }
@@ -143,14 +161,20 @@ export class EdgeDeletionService {
                 const subtreeIds: string[] = [];
                 if (canvas.nodes && canvas.edges) {
                     const childrenMap = new Map<string, string[]>();
-                    canvas.edges.forEach((e: any) => {
-                        const f = e.from?.node?.id || e.fromNode;
-                        const t = e.to?.node?.id || e.toNode;
+                    const edgesArray = canvas.edges instanceof Map
+                        ? Array.from(canvas.edges.values())
+                        : Array.isArray(canvas.edges)
+                            ? canvas.edges
+                            : [];
+                    
+                    for (const e of edgesArray) {
+                        const f = this.getEdgeFromId(e);
+                        const t = this.getEdgeToId(e);
                         if (f && t) {
                             if (!childrenMap.has(f)) childrenMap.set(f, []);
                             childrenMap.get(f)!.push(t);
                         }
-                    });
+                    }
 
                     const collectSubtree = (id: string) => {
                         const children = childrenMap.get(id) || [];
@@ -168,10 +192,8 @@ export class EdgeDeletionService {
                 await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds);
             }
 
-            // 统一刷新画布
             this.reloadCanvas(canvas);
             
-            // 刷新折叠按钮（延迟执行确保DOM更新）
             setTimeout(() => {
                 if (this.canvasManager) {
                     log(`[EdgeDelete] 刷新折叠按钮`);
@@ -183,12 +205,10 @@ export class EdgeDeletionService {
         }
     }
 
-    /**
-     * 刷新画布
-     */
-    private reloadCanvas(canvas: any): void {
-        if (typeof canvas.reload === 'function') {
-            canvas.reload();
+    private reloadCanvas(canvas: CanvasLike): void {
+        const canvasAny = canvas as any;
+        if (typeof canvasAny.reload === 'function') {
+            canvasAny.reload();
         } else if (typeof canvas.requestUpdate === 'function') {
             canvas.requestUpdate();
         } else if (canvas.requestSave) {

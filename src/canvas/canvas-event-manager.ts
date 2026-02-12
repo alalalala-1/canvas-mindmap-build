@@ -263,14 +263,28 @@ export class CanvasEventManager {
         const clickedNode = nodes.find(node => node.nodeEl === nodeEl);
         if (!clickedNode) return;
 
-        // 解析 fromLink
+        // 解析 fromLink（文本节点存储在 text 中，图片/文件节点存储在 color 中）
         let fromLink: any = null;
+        
+        // 1. 先检查 text 属性（文本节点）
         if (clickedNode.text) {
             const match = clickedNode.text.match(/<!-- fromLink:(.*?) -->/);
             if (match?.[1]) {
                 try {
                     fromLink = JSON.parse(match[1]);
-                } catch (e) {}
+                } catch (e) {
+                    log(`[Event] fromLink 解析失败: ${e}`);
+                }
+            }
+        }
+        
+        // 2. 再检查 color 属性（图片/文件节点）
+        if (!fromLink && clickedNode.color?.startsWith('fromLink:')) {
+            try {
+                const fromLinkJson = clickedNode.color.substring('fromLink:'.length);
+                fromLink = JSON.parse(fromLinkJson);
+            } catch (e) {
+                log(`[Event] fromLink (color) 解析失败: ${e}`);
             }
         }
         

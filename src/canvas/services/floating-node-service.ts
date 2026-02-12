@@ -1,10 +1,11 @@
 import { App } from 'obsidian';
 import { FloatingNodeStateManager } from './floating-node-state-manager';
 import { FloatingNodeStyleManager } from './floating-node-style-manager';
-import { EdgeChangeDetector } from './edge-change-detector';
+import { EdgeChangeDetector, NewEdgeCallback } from './edge-change-detector';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
+import { CanvasLike, CanvasEdgeLike } from '../types';
 
 /**
  * 浮动节点服务
@@ -17,7 +18,7 @@ export class FloatingNodeService {
     private styleManager: FloatingNodeStyleManager;
     private edgeDetector: EdgeChangeDetector;
     private currentCanvasFilePath: string | null = null;
-    private canvas: any = null;
+    private canvas: CanvasLike | null = null;
     private canvasManager: any = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
@@ -31,6 +32,73 @@ export class FloatingNodeService {
         this.canvasManager = canvasManager;
     }
 
+    private getNodeFromCanvas(nodeId: string): any | null {
+        if (!this.canvas?.nodes) return null;
+        
+        if (this.canvas.nodes instanceof Map) {
+            return this.canvas.nodes.get(nodeId) || null;
+        }
+        
+        if (typeof this.canvas.nodes === 'object') {
+            return (this.canvas.nodes as Record<string, any>)[nodeId] || null;
+        }
+        
+        return null;
+    }
+
+    private getEdgesFromCanvas(): CanvasEdgeLike[] {
+        if (!this.canvas?.edges) return [];
+        
+        if (this.canvas.edges instanceof Map) {
+            return Array.from(this.canvas.edges.values());
+        }
+        
+        if (Array.isArray(this.canvas.edges)) {
+            return this.canvas.edges;
+        }
+        
+        return [];
+    }
+
+    private getEdgeToNodeId(edge: CanvasEdgeLike): string | null {
+        if (typeof edge?.to === 'string') {
+            return edge.to;
+        } else if (edge?.to?.node?.id) {
+            return edge.to.node.id;
+        } else if (edge?.toNode) {
+            return edge.toNode;
+        }
+        return null;
+    }
+
+    private hasIncomingEdge(nodeId: string, edges: CanvasEdgeLike[]): boolean {
+        return edges.some((edge) => {
+            const toId = this.getEdgeToNodeId(edge);
+            return toId === nodeId;
+        });
+    }
+
+    private getCanvasNodeIds(canvas: CanvasLike | null | undefined): Set<string> {
+        const nodeIds = new Set<string>();
+        if (!canvas?.nodes) return nodeIds;
+        
+        if (canvas.nodes instanceof Map) {
+            for (const nodeId of canvas.nodes.keys()) {
+                if (nodeId) nodeIds.add(nodeId);
+            }
+        } else if (Array.isArray(canvas.nodes)) {
+            for (const node of canvas.nodes) {
+                if (node?.id) nodeIds.add(node.id);
+            }
+        } else if (typeof canvas.nodes === 'object') {
+            for (const nodeId of Object.keys(canvas.nodes)) {
+                nodeIds.add(nodeId);
+            }
+        }
+        
+        return nodeIds;
+    }
+
     // =========================================================================
     // 初始化
     // =========================================================================
@@ -38,7 +106,7 @@ export class FloatingNodeService {
     /**
      * 为 Canvas 初始化浮动节点服务
      */
-    async initialize(canvasFilePath: string, canvas: any): Promise<void> {
+    async initialize(canvasFilePath: string, canvas: CanvasLike): Promise<void> {
         log(`[FloatingNode] initialize 被调用: canvasFilePath=${canvasFilePath}, canvas=${canvas ? 'exists' : 'null'}`);
         
         this.canvas = canvas;
@@ -67,14 +135,12 @@ export class FloatingNodeService {
         log(`[FloatingNode] 初始化完成: ${canvasFilePath}`);
         
         // 如果 canvas 节点数为0，延迟重试（canvas可能还没加载完）
-        const nodeCount = canvas?.nodes instanceof Map ? canvas.nodes.size : 
-                         Array.isArray(canvas?.nodes) ? canvas.nodes.length : 0;
+        const nodeCount = this.getNodeCount(canvas);
         if (nodeCount === 0) {
             log(`[FloatingNode] Canvas 节点数为0，延迟500ms重试样式应用`);
             setTimeout(async () => {
                 if (this.canvas) {
-                    const retryNodeCount = this.canvas.nodes instanceof Map ? this.canvas.nodes.size : 
-                                          Array.isArray(this.canvas.nodes) ? this.canvas.nodes.length : 0;
+                    const retryNodeCount = this.getNodeCount(this.canvas);
                     log(`[FloatingNode] 重试时 Canvas 节点数: ${retryNodeCount}`);
                     if (retryNodeCount > 0) {
                         await this.reapplyAllFloatingStyles(this.canvas);
@@ -82,6 +148,14 @@ export class FloatingNodeService {
                 }
             }, 500);
         }
+    }
+
+    private getNodeCount(canvas: CanvasLike | null): number {
+        if (!canvas?.nodes) return 0;
+        if (canvas.nodes instanceof Map) return canvas.nodes.size;
+        if (Array.isArray(canvas.nodes)) return canvas.nodes.length;
+        if (typeof canvas.nodes === 'object') return Object.keys(canvas.nodes).length;
+        return 0;
     }
 
     /**
@@ -135,7 +209,7 @@ export class FloatingNodeService {
 
         // 更新 canvas 内存中的节点数据
         if (this.canvas) {
-            const node = this.canvas.nodes.get(nodeId);
+            const node = this.getNodeFromCanvas(nodeId);
             if (node) {
                 if (!node.data) node.data = {};
                 node.data.isFloating = true;
@@ -193,7 +267,7 @@ export class FloatingNodeService {
         // 4. 更新 canvas 内存中的节点数据
         if (this.canvas) {
             for (const id of nodesToClear) {
-                const node = this.canvas.nodes.get(id);
+                const node = this.getNodeFromCanvas(id);
                 if (node?.data) {
                     delete node.data.isFloating;
                     delete node.data.originalParent;
@@ -233,13 +307,25 @@ export class FloatingNodeService {
      * 注意：此方法在边创建时被调用，此时边可能还未保存到文件
      * 因此只更新内存状态，不触发文件操作
      */
-    async handleNewEdge(edge: any): Promise<void> {
-        const toNodeId = edge?.to?.node?.id || edge?.toNode || 
-                        (typeof edge?.to === 'string' ? edge.to : 
-                         typeof edge?.to?.id === 'string' ? edge.to.id : null);
-        const fromNodeId = edge?.from?.node?.id || edge?.fromNode || 
-                          (typeof edge?.from === 'string' ? edge.from : 
-                           typeof edge?.from?.id === 'string' ? edge.from.id : null);
+    async handleNewEdge(edge: CanvasEdgeLike): Promise<void> {
+        let toNodeId: string | null = null;
+        let fromNodeId: string | null = null;
+        
+        if (typeof edge?.to === 'string') {
+            toNodeId = edge.to;
+        } else if (edge?.to?.node?.id) {
+            toNodeId = edge.to.node.id;
+        } else if (edge?.toNode) {
+            toNodeId = edge.toNode;
+        }
+        
+        if (typeof edge?.from === 'string') {
+            fromNodeId = edge.from;
+        } else if (edge?.from?.node?.id) {
+            fromNodeId = edge.from.node.id;
+        } else if (edge?.fromNode) {
+            fromNodeId = edge.fromNode;
+        }
 
         if (!toNodeId) {
             log(`[FloatingNode] 警告: 无法解析连线目标节点 ID`);
@@ -267,7 +353,7 @@ export class FloatingNodeService {
             this.stateManager.updateMemoryCache(this.currentCanvasFilePath, toNodeId, null);
             // 更新 canvas 内存中的节点数据
             if (this.canvas) {
-                const node = this.canvas.nodes.get(toNodeId);
+                const node = this.getNodeFromCanvas(toNodeId);
                 if (node) {
                     if (!node.data) node.data = {};
                     delete node.data.isFloating;
@@ -303,22 +389,19 @@ export class FloatingNodeService {
     /**
      * 启动边变化检测
      */
-    private startEdgeDetection(canvas: any): void {
-        this.edgeDetector.startDetection(
-            canvas,
-            async (newEdges) => {
-                for (const edge of newEdges) {
-                    await this.handleNewEdge(edge);
-                }
-            },
-            { interval: 500, maxChecks: 0 } // 0 表示持续检测
-        );
+    private startEdgeDetection(canvas: CanvasLike): void {
+        const callback: NewEdgeCallback = async (newEdges) => {
+            for (const edge of newEdges) {
+                await this.handleNewEdge(edge);
+            }
+        };
+        this.edgeDetector.startDetection(canvas, callback, { interval: 500, maxChecks: 0 });
     }
 
     /**
      * 手动触发边变化检测
      */
-    forceEdgeDetection(canvas: any): void {
+    forceEdgeDetection(canvas: CanvasLike): void {
         this.edgeDetector.forceCheck(canvas);
     }
 
@@ -330,7 +413,7 @@ export class FloatingNodeService {
      * 重新应用所有浮动节点的样式
      * @param canvas 可选，Canvas 对象。如果提供，只应用当前 Canvas 中存在的节点
      */
-    async reapplyAllFloatingStyles(canvas?: any): Promise<void> {
+    async reapplyAllFloatingStyles(canvas?: CanvasLike): Promise<void> {
         log(`[FloatingNode] reapplyAllFloatingStyles 被调用, currentCanvasFilePath=${this.currentCanvasFilePath || 'null'}`);
         
         if (canvas) {
@@ -344,31 +427,11 @@ export class FloatingNodeService {
         }
 
         // 获取当前 Canvas 中的所有节点 ID
-        const canvasNodeIds = new Set<string>();
-        if (canvas?.nodes) {
-            const nodes = canvas.nodes instanceof Map
-                ? Array.from(canvas.nodes.keys())
-                : Array.isArray(canvas.nodes)
-                    ? canvas.nodes.map((n: any) => n.id)
-                    : [];
-            for (const nodeId of nodes) {
-                if (nodeId) canvasNodeIds.add(nodeId);
-            }
-        }
+        const canvasNodeIds = this.getCanvasNodeIds(canvas);
         log(`[FloatingNode] Canvas 中节点数: ${canvasNodeIds.size}`);
 
         // 获取当前 Canvas 中的所有边（用于验证浮动节点是否真的有入边）
-        const edges: any[] = [];
-        if (canvas?.edges) {
-            const edgeData = canvas.edges instanceof Map
-                ? Array.from(canvas.edges.values())
-                : Array.isArray(canvas.edges)
-                    ? canvas.edges
-                    : [];
-            for (const edge of edgeData) {
-                if (edge) edges.push(edge);
-            }
-        }
+        const edges = this.getEdgesFromCanvas();
         log(`[FloatingNode] Canvas 中边数: ${edges.length}`);
 
         const floatingNodes = await this.stateManager.getAllFloatingNodes(
@@ -391,22 +454,12 @@ export class FloatingNodeService {
             // 检查节点是否在当前 Canvas 中
             if (!canvas || canvasNodeIds.has(nodeId)) {
                 // 检查节点是否真的有入边
-                const hasIncomingEdge = edges.some((edge: any) => {
-                    const toId = edge?.to?.node?.id || edge?.toNode || edge?.to;
-                    // 处理可能出现的复杂对象或直接 ID
-                    const actualToId = typeof toId === 'string' ? toId : toId?.id;
-                    return actualToId === nodeId;
-                });
-
-                if (hasIncomingEdge) {
-                    // 节点有入边，不应该保持浮动状态
+                if (this.hasIncomingEdge(nodeId, edges)) {
                     connectedFloatingNodes.push(nodeId);
                 } else {
-                    // 节点没有入边，是真正的浮动节点
                     validFloatingNodes.push(nodeId);
                 }
             } else {
-                // 节点不在当前 Canvas 中
                 invalidFloatingNodes.push(nodeId);
             }
         }
@@ -421,17 +474,9 @@ export class FloatingNodeService {
             
             for (const node of nodes) {
                 if (node?.data?.isFloating && !validFloatingNodes.includes(node.id)) {
-                    // 同样验证是否有入边
-                    const hasIncomingEdge = edges.some((edge: any) => {
-                        const toId = edge?.to?.node?.id || edge?.toNode || edge?.to;
-                        const actualToId = typeof toId === 'string' ? toId : toId?.id;
-                        return actualToId === node.id;
-                    });
-                    
-                    if (!hasIncomingEdge) {
+                    if (!this.hasIncomingEdge(node.id, edges)) {
                         validFloatingNodes.push(node.id);
                     } else {
-                        // 内存中标记为浮动但实际有入边，也需要清理
                         if (!connectedFloatingNodes.includes(node.id)) {
                             connectedFloatingNodes.push(node.id);
                         }

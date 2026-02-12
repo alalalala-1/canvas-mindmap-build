@@ -1,6 +1,7 @@
 ## 问题分析
 
 日志显示同一条边被检测多次，且 `lastEdgeIds` 被重置：
+
 ```
 - [EdgeChangeDetector] 上次边数量: 4, 当前边数量: 5 
 ...
@@ -10,6 +11,7 @@
 ## 根本原因
 
 `initialize` 方法的跳过条件有问题：
+
 ```typescript
 if (this.currentCanvasFilePath === canvasFilePath && this.edgeDetector['edgeChangeInterval']) {
 ```
@@ -19,6 +21,7 @@ if (this.currentCanvasFilePath === canvasFilePath && this.edgeDetector['edgeChan
 ## 修复方案
 
 修改 `initialize` 方法的跳过条件，只检查 `currentCanvasFilePath`：
+
 ```typescript
 if (this.currentCanvasFilePath === canvasFilePath) {
     info(`[FloatingNodeService] 已经在 ${canvasFilePath} 上初始化，跳过`);
@@ -34,11 +37,14 @@ if (this.currentCanvasFilePath === canvasFilePath) {
 **位置**: 第 35 行
 
 **当前代码**:
+
 ```typescript
 if (this.currentCanvasFilePath === canvasFilePath && this.edgeDetector['edgeChangeInterval']) {
 ```
 
 **修改后**:
+
 ```typescript
 if (this.currentCanvasFilePath === canvasFilePath) {
 ```
+
