@@ -1,72 +1,21 @@
-import { App, ItemView, Notice, Plugin, TFile } from 'obsidian';
+import { App, Notice, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
-import { getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
+import {
+    CanvasDataLike,
+    CanvasEdgeLike,
+    CanvasLike,
+    CanvasNodeLike,
+    FloatingNodeMetadata
+} from './types';
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
-
-type FloatingNodeMetadata = {
-    isFloating?: boolean;
-    originalParent?: string;
-    floatingTimestamp?: number;
-    isSubtreeNode?: boolean;
-};
-
-type CanvasNodeLike = {
-    id?: string;
-    x?: number;
-    y?: number;
-    width?: number;
-    height?: number;
-    nodeEl?: HTMLElement;
-    data?: FloatingNodeMetadata;
-    canvas?: CanvasLike;
-    setData?: (data: Record<string, unknown>) => void;
-    getData?: () => Record<string, unknown>;
-    update?: () => void;
-    moveAndResize?: (rect: { x: number; y: number; width: number; height: number }) => void;
-    prevX?: number;
-    prevY?: number;
-};
-
-type EdgeLike = {
-    id?: string;
-    from?: unknown;
-    to?: unknown;
-    fromNode?: string;
-    toNode?: string;
-    fromSide?: string;
-    toSide?: string;
-    fromEnd?: unknown;
-    toEnd?: unknown;
-    color?: string;
-    label?: string;
-    lineGroupEl?: HTMLElement;
-    lineEndGroupEl?: HTMLElement;
-};
-
-type CanvasDataLike = {
-    nodes?: CanvasNodeLike[];
-    edges?: EdgeLike[];
-    metadata?: {
-        floatingNodes?: Record<string, unknown>;
-    };
-};
-
-type CanvasLike = {
-    nodes?: Map<string, CanvasNodeLike> | Record<string, CanvasNodeLike>;
-    edges?: Map<string, EdgeLike> | EdgeLike[];
-    fileData?: CanvasDataLike;
-    metadata?: CanvasDataLike['metadata'];
-    file?: { path?: string };
-    requestUpdate?: () => void;
-    requestSave?: () => void;
-};
 
 type CanvasManagerLike = {
     adjustAllTextNodeHeights: () => Promise<number>;
@@ -135,7 +84,7 @@ export class LayoutManager {
     }
 
     private async performArrange(skipAdjust: boolean = false) {
-        const activeView = this.app.workspace.activeLeaf?.view;
+        const activeView = getCanvasView(this.app);
 
         if (!activeView || activeView.getViewType() !== 'canvas') {
             new Notice("No active canvas found.");
@@ -528,14 +477,7 @@ export class LayoutManager {
     private async checkAndClearConnectedFloatingNodes(canvas: CanvasLike): Promise<void> {
         try {
             // 获取当前 canvas 路径 - 使用多种方法尝试获取
-            let canvasFilePath = canvas.file?.path;
-            
-            if (!canvasFilePath) {
-                const activeView = this.app.workspace.activeLeaf?.view;
-                if (activeView && activeView.getViewType() === 'canvas') {
-                    canvasFilePath = this.getFilePathFromView(activeView);
-                }
-            }
+            const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
             
             if (!canvasFilePath) return;
             
@@ -585,13 +527,13 @@ export class LayoutManager {
     // =========================================================================
     private async clearFloatingNodeState(nodeId: string, canvas?: CanvasLike): Promise<void> {
         try {
-            const activeView = this.app.workspace.activeLeaf?.view;
+            const activeView = getCanvasView(this.app);
             if (!activeView || activeView.getViewType() !== 'canvas') return;
 
             const canvasObj = this.getCanvasFromView(activeView);
             if (!canvasObj) return;
 
-            const canvasFilePath = canvasObj.file?.path || this.getFilePathFromView(activeView);
+            const canvasFilePath = canvasObj.file?.path || getCurrentCanvasFilePath(this.app);
             if (!canvasFilePath) return;
 
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
@@ -673,7 +615,7 @@ export class LayoutManager {
     private async reapplyFloatingNodeStyles(canvas: CanvasLike): Promise<void> {
         log(`[Layout] reapplyFloatingNodeStyles 被调用, floatingNodeService=${this.floatingNodeService ? 'exists' : 'null'}`);
         try {
-            const canvasFilePath = canvas.file?.path || this.getFilePathFromView(this.app.workspace.activeLeaf?.view);
+            const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
             if (!canvasFilePath) {
                 log('[Layout] 警告: 无法获取 canvas 文件路径，跳过样式应用');
                 return;
@@ -711,7 +653,7 @@ export class LayoutManager {
         return new Map();
     }
 
-    private getCanvasEdges(canvas: CanvasLike): EdgeLike[] {
+    private getCanvasEdges(canvas: CanvasLike): CanvasEdgeLike[] {
         if (canvas.edges instanceof Map) {
             return Array.from(canvas.edges.values());
         }
@@ -719,12 +661,6 @@ export class LayoutManager {
             return canvas.edges;
         }
         return [];
-    }
-
-    private getFilePathFromView(view: unknown): string | undefined {
-        if (!this.isRecord(view)) return undefined;
-        const viewLike = view as { file?: { path?: string } };
-        return viewLike.file?.path;
     }
 
     private isCanvasManager(value: unknown): value is CanvasManagerLike {

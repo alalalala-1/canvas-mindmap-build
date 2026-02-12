@@ -1,25 +1,6 @@
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-
-type NodeLike = {
-    id?: string;
-    x?: number;
-    y?: number;
-    width?: number;
-    height?: number;
-};
-
-type EdgeLike = {
-    fromNode?: string;
-    toNode?: string;
-    from?: unknown;
-    to?: unknown;
-};
-
-type CanvasDataLike = {
-    nodes?: unknown;
-    edges?: unknown;
-};
+import { CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../types';
 
 export class NodePositionCalculator {
     constructor(private settings: CanvasMindmapBuildSettings) {}
@@ -39,27 +20,27 @@ export class NodePositionCalculator {
         return null;
     }
 
-    private getEdgeFromId(edge: EdgeLike): string | null {
+    private getEdgeFromId(edge: CanvasEdgeLike): string | null {
         if (edge.fromNode) return edge.fromNode;
         return this.getNodeIdFromEdgeEndpoint(edge.from);
     }
 
-    private getEdgeToId(edge: EdgeLike): string | null {
+    private getEdgeToId(edge: CanvasEdgeLike): string | null {
         if (edge.toNode) return edge.toNode;
         return this.getNodeIdFromEdgeEndpoint(edge.to);
     }
 
-    private getNodes(canvasData: CanvasDataLike): NodeLike[] {
-        return Array.isArray(canvasData.nodes) ? (canvasData.nodes as NodeLike[]) : [];
+    private getNodes(canvasData: CanvasDataLike): CanvasNodeLike[] {
+        return Array.isArray(canvasData.nodes) ? canvasData.nodes : [];
     }
 
-    private getEdges(canvasData: CanvasDataLike): EdgeLike[] {
-        return Array.isArray(canvasData.edges) ? (canvasData.edges as EdgeLike[]) : [];
+    private getEdges(canvasData: CanvasDataLike): CanvasEdgeLike[] {
+        return Array.isArray(canvasData.edges) ? canvasData.edges : [];
     }
 
     calculatePosition(
-        newNode: NodeLike,
-        parentNode: NodeLike | null,
+        newNode: CanvasNodeLike,
+        parentNode: CanvasNodeLike | null,
         canvasData: CanvasDataLike
     ): { x: number; y: number } {
         if (!parentNode) {
@@ -85,9 +66,7 @@ export class NodePositionCalculator {
             })
             .filter((id): id is string => typeof id === 'string');
 
-        const childNodes = this.getNodes(canvasData).filter((node) =>
-            node.id && childNodeIds.includes(node.id)
-        );
+        const childNodes = this.getNodes(canvasData).filter((node) => node.id && childNodeIds.includes(node.id));
 
         log(`[PositionCalculator] 父节点 ${parentId} 已有 ${childNodes.length} 个子节点`);
 

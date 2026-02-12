@@ -50,6 +50,70 @@ export interface CanvasView {
     file?: { path: string };
 }
 
+export type FloatingNodeMetadata = {
+    isFloating?: boolean;
+    originalParent?: string;
+    floatingTimestamp?: number;
+    isSubtreeNode?: boolean;
+};
+
+export type CanvasNodeLike = {
+    id?: string;
+    text?: string;
+    height?: number;
+    nodeEl?: HTMLElement;
+    data?: FloatingNodeMetadata;
+    x?: number;
+    y?: number;
+    width?: number;
+    canvas?: CanvasLike;
+    setData?: (data: Record<string, unknown>) => void;
+    getData?: () => Record<string, unknown>;
+    update?: () => void;
+    moveAndResize?: (rect: { x: number; y: number; width: number; height: number }) => void;
+    prevX?: number;
+    prevY?: number;
+};
+
+export type CanvasEdgeLike = {
+    id?: string;
+    from?: unknown;
+    to?: unknown;
+    fromNode?: string;
+    toNode?: string;
+    fromSide?: string;
+    toSide?: string;
+    fromEnd?: unknown;
+    toEnd?: unknown;
+    color?: string;
+    label?: string;
+    lineGroupEl?: HTMLElement;
+    lineEndGroupEl?: HTMLElement;
+};
+
+export type CanvasDataLike = {
+    nodes?: CanvasNodeLike[];
+    edges?: CanvasEdgeLike[];
+    metadata?: {
+        floatingNodes?: Record<string, unknown>;
+    };
+};
+
+export type CanvasFileDataLike = {
+    nodes?: CanvasNodeLike[];
+    edges?: CanvasEdgeLike[];
+};
+
+export type CanvasLike = {
+    nodes?: Map<string, CanvasNodeLike> | Record<string, CanvasNodeLike>;
+    edges?: Map<string, CanvasEdgeLike> | CanvasEdgeLike[];
+    fileData?: CanvasFileDataLike;
+    metadata?: CanvasDataLike['metadata'];
+    file?: { path?: string };
+    requestUpdate?: () => void;
+    requestSave?: () => void;
+};
+
 /**
  * 结果类型，用于错误处理
  */

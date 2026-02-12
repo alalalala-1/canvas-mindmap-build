@@ -3,58 +3,24 @@ import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
 import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
-
-type FloatingNodeMetadata = {
-    isFloating?: boolean;
-    originalParent?: string;
-    floatingTimestamp?: number;
-};
-
-type CanvasNodeLike = {
-    id?: string;
-    text?: string;
-    height?: number;
-    nodeEl?: HTMLElement;
-    data?: FloatingNodeMetadata;
-};
+import {
+    CanvasDataLike,
+    CanvasEdgeLike,
+    CanvasLike,
+    CanvasNodeLike,
+    FloatingNodeMetadata
+} from '../types';
 
 type EdgeEndpointLike = {
     nodeId?: string;
     node?: { id?: string };
 };
 
-type EdgeLike = {
-    from?: unknown;
-    to?: unknown;
-    fromNode?: string;
-    toNode?: string;
-};
-
-type CanvasDataLike = {
-    nodes?: CanvasNodeLike[];
-    edges?: EdgeLike[];
-    metadata?: {
-        floatingNodes?: Record<string, unknown>;
-    };
-};
-
-type CanvasFileDataLike = {
-    nodes?: CanvasNodeLike[];
-    edges?: EdgeLike[];
-};
-
-type CanvasLike = {
-    nodes?: Map<string, CanvasNodeLike> | Record<string, CanvasNodeLike>;
-    edges?: Map<string, EdgeLike> | EdgeLike[];
-    fileData?: CanvasFileDataLike;
-    file?: { path?: string };
-};
-
 export interface LayoutData {
     visibleNodes: Map<string, CanvasNodeLike>;
     allNodes: Map<string, CanvasNodeLike>;
-    edges: EdgeLike[];
-    originalEdges: EdgeLike[];
+    edges: CanvasEdgeLike[];
+    originalEdges: CanvasEdgeLike[];
     canvasData: CanvasDataLike | null;
     floatingNodes: Set<string>;
     canvasFilePath: string;
@@ -210,7 +176,12 @@ export class LayoutDataProvider {
     /**
      * 获取并验证浮动节点，同时清理 canvasData 中的无效标记
      */
-    private getValidatedFloatingNodes(canvasData: CanvasDataLike, memoryNodes: Map<string, CanvasNodeLike>, originalEdges: EdgeLike[], memoryEdges: EdgeLike[]): Set<string> {
+    private getValidatedFloatingNodes(
+        canvasData: CanvasDataLike,
+        memoryNodes: Map<string, CanvasNodeLike>,
+        originalEdges: CanvasEdgeLike[],
+        memoryEdges: CanvasEdgeLike[]
+    ): Set<string> {
         const floatingNodes = new Set<string>();
         const floatingInfo = this.canvasFileService.getFloatingNodesInfo(canvasData);
         const floatingNodesToRemove: string[] = [];
@@ -262,7 +233,7 @@ export class LayoutDataProvider {
         return floatingNodes;
     }
 
-    private getEdgeToNodeId(edge: EdgeLike): string | null {
+    private getEdgeToNodeId(edge: CanvasEdgeLike): string | null {
         const nodeId = this.getNodeIdFromEdgeEndpoint(edge.to);
         if (nodeId) return nodeId;
         return typeof edge.toNode === 'string' ? edge.toNode : null;
@@ -278,7 +249,7 @@ export class LayoutDataProvider {
         return new Map();
     }
 
-    private getCanvasEdges(canvas: CanvasLike): EdgeLike[] {
+    private getCanvasEdges(canvas: CanvasLike): CanvasEdgeLike[] {
         if (canvas.edges instanceof Map) {
             return Array.from(canvas.edges.values());
         }

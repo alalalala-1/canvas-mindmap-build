@@ -1,16 +1,6 @@
 import { CollapseStateManager } from '../../state/collapse-state';
 import { log } from '../../utils/logger';
-
-type NodeLike = {
-    id?: string;
-};
-
-type EdgeLike = {
-    from?: unknown;
-    to?: unknown;
-    fromNode?: string;
-    toNode?: string;
-};
+import { CanvasEdgeLike, CanvasNodeLike } from '../types';
 
 /**
  * 可见性服务 - 负责计算 Canvas 中哪些节点和边是可见的
@@ -29,7 +19,7 @@ export class VisibilityService {
      * @param edges Canvas 中的所有边
      * @returns 可见节点 ID 的 Set
      */
-    getVisibleNodeIds(nodes: Map<string, NodeLike> | NodeLike[], edges: EdgeLike[]): Set<string> {
+    getVisibleNodeIds(nodes: Map<string, CanvasNodeLike> | CanvasNodeLike[], edges: CanvasEdgeLike[]): Set<string> {
         const visibleNodeIds = new Set<string>();
         const allNodeIds = new Set<string>();
 
@@ -68,7 +58,7 @@ export class VisibilityService {
      * @param edges Canvas 中的所有边
      * @returns 是否可见
      */
-    isNodeVisible(nodeId: string, edges: EdgeLike[]): boolean {
+    isNodeVisible(nodeId: string, edges: CanvasEdgeLike[]): boolean {
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
         
         // 检查该节点是否是任何折叠节点的后代
@@ -83,7 +73,7 @@ export class VisibilityService {
         return true;
     }
 
-    private getNodeId(node: NodeLike): string | null {
+    private getNodeId(node: CanvasNodeLike): string | null {
         return typeof node.id === 'string' ? node.id : null;
     }
 }
