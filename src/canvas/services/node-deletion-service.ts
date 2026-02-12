@@ -4,15 +4,7 @@ import { CollapseStateManager } from '../../state/collapse-state';
 import { CanvasFileService, UpdateCallback } from './canvas-file-service';
 import { DeleteConfirmationModal } from '../../ui/delete-modal';
 import { CONSTANTS } from '../../constants';
-import {
-    generateRandomId,
-    getEdgeFromNodeId,
-    getEdgeToNodeId,
-    getCurrentCanvasFilePath,
-    getCanvasView,
-    getNodesFromCanvas,
-    getEdgesFromCanvas
-} from '../../utils/canvas-utils';
+import { generateRandomId, getEdgeFromNodeId, getEdgeToNodeId, getCurrentCanvasFilePath, getCanvasView, getEdgesFromCanvas, getNodesFromCanvas, reloadCanvas } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
 
@@ -105,7 +97,7 @@ export class NodeDeletionService {
             }
 
             this.collapseStateManager.clearCache();
-            this.reloadCanvas(canvas);
+            reloadCanvas(canvas);
             setTimeout(() => this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
 
             new Notice('节点已删除');
@@ -151,7 +143,7 @@ export class NodeDeletionService {
             });
 
             this.collapseStateManager.clearCache();
-            this.reloadCanvas(canvas);
+            reloadCanvas(canvas);
             setTimeout(() => this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
 
             new Notice(`已删除 ${nodesToDelete.size} 个节点`);
@@ -159,18 +151,6 @@ export class NodeDeletionService {
             log(`[Delete] 级联失败:`, err);
             new Notice('删除失败');
         }
-    }
-
-    private reloadCanvas(canvas: CanvasLike): void {
-        const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
-        if (typeof canvasWithReload.reload === 'function') {
-            canvasWithReload.reload();
-        } else if (typeof canvas.requestUpdate === 'function') {
-            canvas.requestUpdate();
-        } else if (typeof canvas.requestSave === 'function') {
-            canvas.requestSave();
-        }
-        log(`[Delete] 刷新 Canvas`);
     }
 
     private getEdgesFromCanvas(canvas: CanvasLike): CanvasEdgeLike[] {

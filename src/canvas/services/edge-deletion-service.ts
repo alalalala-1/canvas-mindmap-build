@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
-import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId } from '../../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId, reloadCanvas, getSelectedEdge } from '../../utils/canvas-utils';
 import { CanvasLike, CanvasEdgeLike, ICanvasManager, CanvasViewLike } from '../types';
 
 export class EdgeDeletionService {
@@ -46,7 +46,7 @@ export class EdgeDeletionService {
             return;
         }
         
-        const edge = this.getSelectedEdge(canvas);
+        const edge = getSelectedEdge(canvas);
 
         if (!edge) {
             new Notice('未选中边');
@@ -54,35 +54,6 @@ export class EdgeDeletionService {
         }
         
         await this.deleteEdge(edge, canvas);
-    }
-
-    private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-        if (canvas.selectedEdge) {
-            return canvas.selectedEdge;
-        }
-        
-        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges[0] || null;
-        }
-        
-        if (canvas.edges) {
-            const edgesArray = canvas.edges instanceof Map
-                ? Array.from(canvas.edges.values())
-                : Array.isArray(canvas.edges)
-                    ? canvas.edges
-                    : [];
-                    
-            for (const edge of edgesArray) {
-                const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
-                const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
-                
-                if (isFocused || isSelected) {
-                    return edge;
-                }
-            }
-        }
-        
-        return null;
     }
 
     private async deleteEdge(edge: CanvasEdgeLike, canvas: CanvasLike): Promise<void> {
@@ -167,7 +138,7 @@ export class EdgeDeletionService {
                 await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds);
             }
 
-            this.reloadCanvas(canvas);
+            reloadCanvas(canvas);
             
             setTimeout(() => {
                 if (this.canvasManager) {
@@ -177,17 +148,6 @@ export class EdgeDeletionService {
             }, 200);
         } catch (err) {
             log(`[EdgeDelete] 失败`, err);
-        }
-    }
-
-    private reloadCanvas(canvas: CanvasLike): void {
-        const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
-        if (typeof canvasWithReload.reload === 'function') {
-            canvasWithReload.reload();
-        } else if (typeof canvas.requestUpdate === 'function') {
-            canvas.requestUpdate();
-        } else if (canvas.requestSave) {
-            canvas.requestSave();
         }
     }
 }

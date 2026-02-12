@@ -4,9 +4,10 @@ import { CollapseStateManager } from '../state/collapse-state';
 import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
+import { handleError } from '../utils/error-handler';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
-import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas } from '../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas, isRecord } from '../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
@@ -216,8 +217,8 @@ export class LayoutManager {
                             id: memEdge.id,
                             fromNode: this.toStringId(memEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.from)) || this.toStringId(memEdge.from),
                             toNode: this.toStringId(memEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.to)) || this.toStringId(memEdge.to),
-                            fromSide: this.toStringId(memEdge.fromSide) || (this.isRecord(memEdge.from) ? this.toStringId(memEdge.from.side) : undefined),
-                            toSide: this.toStringId(memEdge.toSide) || (this.isRecord(memEdge.to) ? this.toStringId(memEdge.to.side) : undefined),
+                            fromSide: this.toStringId(memEdge.fromSide) || (isRecord(memEdge.from) ? this.toStringId(memEdge.from.side) : undefined),
+                            toSide: this.toStringId(memEdge.toSide) || (isRecord(memEdge.to) ? this.toStringId(memEdge.to.side) : undefined),
                             fromEnd: memEdge.fromEnd,
                             toEnd: memEdge.toEnd,
                             color: memEdge.color,
@@ -245,8 +246,7 @@ export class LayoutManager {
             log(`[Layout] 完成: 更新 ${updatedCount}`);
             
         } catch (err) {
-            log(`[Layout] 失败`, err);
-            new Notice("布局失败，请重试");
+            handleError(err, { context: 'Layout', message: '布局失败，请重试' });
         }
     }
 
@@ -412,7 +412,7 @@ export class LayoutManager {
             log(`[Layout] Toggle: 更新了 ${updatedCount} 个节点`);
             
         } catch (err) {
-            log(`[Layout] Toggle 失败: ${err}`);
+            handleError(err, { context: 'Layout', message: 'Toggle 失败', showNotice: false });
         }
     }
 
@@ -531,7 +531,7 @@ export class LayoutManager {
                 }
             }
         } catch (err) {
-            log(`[Layout] 检查浮动失败: ${err}`);
+            handleError(err, { context: 'Layout', message: '检查浮动失败', showNotice: false });
         }
     }
 
@@ -570,7 +570,7 @@ export class LayoutManager {
                 (node.nodeEl as HTMLElement).classList.remove('cmb-floating-node');
             }
         } catch (err) {
-            log(`[Layout] 清除浮动失败: ${nodeId}, ${err}`);
+            handleError(err, { context: 'Layout', message: `清除浮动失败: ${nodeId}`, showNotice: false });
         }
     }
 
@@ -618,7 +618,7 @@ export class LayoutManager {
                 await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
             }
         } catch (err) {
-            log(`[Layout] 清理残留失败: ${err}`);
+            handleError(err, { context: 'Layout', message: '清理残留失败', showNotice: false });
         }
     }
 
@@ -646,12 +646,12 @@ export class LayoutManager {
                 }
             }, 200);
         } catch (err) {
-            log(`[Layout] 重新应用样式失败: ${err}`);
+            handleError(err, { context: 'Layout', message: '重新应用样式失败', showNotice: false });
         }
     }
 
     private getCanvasFromView(view: unknown): CanvasLike | null {
-        if (!this.isRecord(view)) return null;
+        if (!isRecord(view)) return null;
         const maybeView = view as { canvas?: CanvasLike };
         return maybeView.canvas || null;
     }
@@ -666,18 +666,14 @@ export class LayoutManager {
     }
 
     private isCanvasManager(value: unknown): value is CanvasManagerLike {
-        return this.isRecord(value) && typeof value.adjustAllTextNodeHeights === 'function';
+        return isRecord(value) && typeof value.adjustAllTextNodeHeights === 'function';
     }
 
     private canSetData(node: unknown): node is { setData: (data: Record<string, unknown>) => void; getData?: () => Record<string, unknown> } {
-        return this.isRecord(node) && typeof node.setData === 'function';
+        return isRecord(node) && typeof node.setData === 'function';
     }
 
     private toStringId(value: unknown): string | undefined {
         return typeof value === 'string' ? value : undefined;
-    }
-
-    private isRecord(value: unknown): value is Record<string, any> {
-        return typeof value === 'object' && value !== null;
     }
 }

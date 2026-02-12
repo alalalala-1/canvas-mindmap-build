@@ -7,7 +7,8 @@ import {
     CanvasNodeLike, 
     CanvasEdgeLike, 
     FloatingNodesMetadata,
-    FloatingNodeRecord 
+    FloatingNodeRecord,
+    CanvasViewLike
 } from '../types';
 
 export type UpdateCallback = (data: CanvasDataLike) => boolean | Promise<boolean>;
@@ -84,12 +85,12 @@ export class CanvasFileService {
     }
 
     getCanvasFilePathFromView(canvasView: ItemView): string | undefined {
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (canvas?.file?.path) {
             return canvas.file.path;
         }
 
-        const viewFile = (canvasView as any).file;
+        const viewFile = (canvasView as CanvasViewLike).file;
         if (viewFile?.path) {
             return viewFile.path;
         }

@@ -4,7 +4,6 @@ import { CanvasEdgeLike } from '../canvas/types';
 
 export class CollapseStateManager {
     private collapsedNodes: Map<string, boolean> = new Map();
-    private nodeChildrenCache: Map<string, string[]> = new Map();
 
     markCollapsed(nodeId: string) {
         this.collapsedNodes.set(nodeId, true);
@@ -66,7 +65,6 @@ export class CollapseStateManager {
     }
 
     clearCache() {
-        this.nodeChildrenCache.clear();
         log('[State] 清除缓存');
     }
 

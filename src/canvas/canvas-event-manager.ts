@@ -9,8 +9,8 @@ import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
-    getCurrentCanvasFilePath,
-    getNodeIdFromEdgeEndpoint
+    getNodeIdFromEdgeEndpoint,
+    getSelectedEdge
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, CanvasEventType, MarkdownViewLike } from './types';
 
@@ -110,7 +110,7 @@ export class CanvasEventManager {
                     if (!canvas) return;
                     
                     // 先检查是否选中了边
-                    const selectedEdge = this.getSelectedEdge(canvas);
+                    const selectedEdge = getSelectedEdge(canvas);
                     if (selectedEdge) {
                         const modal = new DeleteEdgeConfirmationModal(this.app);
                         modal.open();
@@ -487,43 +487,9 @@ export class CanvasEventManager {
     // =========================================================================
     // 辅助方法
     // =========================================================================
-    private getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-        if (canvas.selectedEdge) return canvas.selectedEdge;
-        
-        if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges[0] || null;
-        }
-        
-        if (canvas.edges) {
-            const edgesArray = canvas.edges instanceof Map 
-                ? Array.from(canvas.edges.values()) 
-                : Array.isArray(canvas.edges) 
-                    ? canvas.edges 
-                    : [];
-            for (const edge of edgesArray) {
-                const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
-                const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
-                
-                if (isFocused || isSelected) {
-                    return edge;
-                }
-            }
-        }
-        
-        return null;
-    }
-
-    // 已迁移到 canvas-utils.ts，直接使用 getEdgeToNodeId / getEdgeFromNodeId
 
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
-    }
-
-    // =========================================================================
-    // 获取当前 Canvas 文件路径
-    // =========================================================================
-    private getCurrentCanvasFilePath(): string | undefined {
-        return getCurrentCanvasFilePath(this.app);
     }
 
     // =========================================================================

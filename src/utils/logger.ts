@@ -78,10 +78,3 @@ export function logCritical(...messages: unknown[]): void {
 
     console.warn(body);
 }
-
-// 为了保持兼容性，暂时保留这些导出，但内部全部指向 log
-export const info = log;
-export const warn = log;
-export const debug = log;
-export const error = log;
-export const trace = log;

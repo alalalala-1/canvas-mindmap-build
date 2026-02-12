@@ -182,7 +182,7 @@ export class FloatingNodeStateManager {
             return this.floatingNodesCache.get(canvasFilePath)!;
         }
 
-        const floatingNodes = new Map<string, any>();
+        const floatingNodes = new Map<string, FloatingNodeRecord>();
 
         try {
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
@@ -211,7 +211,7 @@ export class FloatingNodeStateManager {
             }
 
             // 从 metadata 读取补充
-            const metadataFloatingNodes = canvasData.metadata?.floatingNodes || {};
+            const metadataFloatingNodes: FloatingNodesMetadata = canvasData.metadata?.floatingNodes || {};
             const metaCount = Object.keys(metadataFloatingNodes).length;
             if (metaCount > 0) {
                 log(`[FloatingState] metadata.floatingNodes 数量: ${metaCount}`);
@@ -219,7 +219,10 @@ export class FloatingNodeStateManager {
             for (const [nodeId, data] of Object.entries(metadataFloatingNodes)) {
                 if (!floatingNodes.has(nodeId)) {
                     log(`[FloatingState] 从 metadata 找到浮动节点: ${nodeId}`);
-                    floatingNodes.set(nodeId, data as any);
+                    const record: FloatingNodeRecord = typeof data === 'boolean' 
+                        ? { isFloating: data } 
+                        : data;
+                    floatingNodes.set(nodeId, record);
                 }
             }
 

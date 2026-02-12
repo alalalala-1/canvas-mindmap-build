@@ -210,6 +210,61 @@ export function getEdgesFromCanvas(canvas: CanvasLike | null | undefined): Canva
 }
 
 /**
+ * 刷新 Canvas 视图
+ * 尝试调用 reload、requestUpdate 或 requestSave 方法
+ */
+export function reloadCanvas(canvas: CanvasLike): void {
+    const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
+    if (typeof canvasWithReload.reload === 'function') {
+        canvasWithReload.reload();
+    } else if (typeof canvas.requestUpdate === 'function') {
+        canvas.requestUpdate();
+    } else if (canvas.requestSave) {
+        canvas.requestSave();
+    }
+}
+
+/**
+ * 从 Canvas 获取选中的边
+ * 兼容 selectedEdge 和 selectedEdges 两种属性
+ */
+export function getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
+    if (canvas.selectedEdge) {
+        return canvas.selectedEdge;
+    }
+    
+    if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
+        return canvas.selectedEdges[0] || null;
+    }
+    
+    if (canvas.edges) {
+        const edgesArray = canvas.edges instanceof Map
+            ? Array.from(canvas.edges.values())
+            : Array.isArray(canvas.edges)
+                ? canvas.edges
+                : [];
+                
+        for (const edge of edgesArray) {
+            const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
+            const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
+            
+            if (isFocused || isSelected) {
+                return edge;
+            }
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * 检查值是否为 Record 对象
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
  * 估算文本节点高度
  * 用于布局计算和节点高度调整
  */

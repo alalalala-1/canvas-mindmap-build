@@ -2,7 +2,7 @@ import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
-import { getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint } from '../../utils/canvas-utils';
+import { getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, isRecord } from '../../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
@@ -40,7 +40,7 @@ export class LayoutDataProvider {
      * 获取布局所需的所有数据
      */
     async getLayoutData(canvas: unknown): Promise<LayoutData | null> {
-        if (!this.isRecord(canvas)) return null;
+        if (!isRecord(canvas)) return null;
         const canvasLike = canvas as CanvasLike;
 
         const allNodes = this.getCanvasNodes(canvasLike);
@@ -222,7 +222,7 @@ export class LayoutDataProvider {
         if (canvas.nodes instanceof Map) {
             return canvas.nodes;
         }
-        if (canvas.nodes && this.isRecord(canvas.nodes)) {
+        if (canvas.nodes && isRecord(canvas.nodes)) {
             return new Map(Object.entries(canvas.nodes) as Array<[string, CanvasNodeLike]>);
         }
         return new Map();
@@ -236,9 +236,5 @@ export class LayoutDataProvider {
             return canvas.edges;
         }
         return [];
-    }
-
-    private isRecord(value: unknown): value is Record<string, unknown> {
-        return typeof value === 'object' && value !== null;
     }
 }
