@@ -36,7 +36,7 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
                 if (mdView && mdView.editor.getSelection()) {
                     await this.canvasManager.addNodeToCanvas(mdView.editor.getSelection(), mdView.file);
                 } else {
-                    new Notice('Please select some text in a Markdown editor.');
+                    new Notice('请在 Markdown 编辑器中选择文本');
                 }
             }
         });

@@ -36,20 +36,20 @@ export class EdgeDeletionService {
         log('[Event] UI: 确认删除边');
         const canvasView = getCanvasView(this.app);
         if (!canvasView) {
-            new Notice('No active canvas found');
+            new Notice('未找到活动的 Canvas');
             return;
         }
 
         const canvas = (canvasView as any).canvas as CanvasLike;
         if (!canvas) {
-            new Notice('Canvas not initialized');
+            new Notice('Canvas 未初始化');
             return;
         }
         
         const edge = this.getSelectedEdge(canvas);
 
         if (!edge) {
-            new Notice('No edge selected');
+            new Notice('未选中边');
             return;
         }
         

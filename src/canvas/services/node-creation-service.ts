@@ -35,7 +35,7 @@ export class NodeCreationService {
 
     async addNodeToCanvas(content: string, sourceFile: TFile | null): Promise<void> {
         if (!sourceFile) {
-            new Notice('No file selected');
+            new Notice('未选择文件');
             return;
         }
 
@@ -46,7 +46,7 @@ export class NodeCreationService {
         }
 
         if (!canvasFilePath) {
-            new Notice('Please configure the canvas file path in settings or open a canvas file.');
+            new Notice('请在设置中配置 Canvas 文件路径或打开一个 Canvas 文件');
             return;
         }
 
@@ -95,13 +95,13 @@ export class NodeCreationService {
         });
 
         if (!success) {
-            new Notice('Error saving canvas file.');
+            new Notice('保存 Canvas 文件失败');
             return;
         }
 
         await this.postNodeCreation(newNodeId);
 
-        new Notice('Node added to canvas successfully!');
+        new Notice('节点已成功添加到 Canvas');
     }
 
     private createNodeData(content: string, sourceFile: TFile, nodeId: string): CanvasNodeLike {

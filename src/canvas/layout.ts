@@ -1,6 +1,7 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint } from './types';
 import { CONSTANTS } from '../constants';
+import { estimateTextNodeHeight } from '../utils/canvas-utils';
 
 interface LayoutNode {
     id: string;
@@ -112,47 +113,6 @@ function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[
     }
 }
 
-/**
- * 估算文本节点高度（保守估计，防止重叠）
- */
-function estimateTextNodeHeight(content: string, width: number, settings: CanvasArrangerSettings): number {
-    const maxHeight = settings.textNodeMaxHeight || 800;
-    const contentWidth = width - 40;
-    const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
-    const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
-    
-    const chineseCharRegex = /[\u4e00-\u9fa5]/;
-    let totalLines = 0;
-    const textLines = content.split('\n');
-
-    for (const line of textLines) {
-        const trimmedLine = line.trim();
-        if (trimmedLine === '') {
-            totalLines += 0.5;
-            continue;
-        }
-
-        const cleanLine = trimmedLine
-            .replace(/^#{1,6}\s+/, '')
-            .replace(/\*\*|\*|__|_|`/g, '');
-
-        let pixelWidth = 0;
-        for (const char of cleanLine) {
-            if (chineseCharRegex.test(char)) {
-                pixelWidth += fontSize * 1.15;
-            } else {
-                pixelWidth += fontSize * 0.6;
-            }
-        }
-
-        const linesNeeded = Math.ceil(pixelWidth / contentWidth);
-        totalLines += Math.max(1, linesNeeded);
-    }
-
-    const calculatedHeight = Math.ceil(totalLines * lineHeight + CONSTANTS.TYPOGRAPHY.SAFETY_PADDING);
-    return Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
-}
-
 function initializeLayoutNodes(
     nodes: Map<string, CanvasNodeLike>,
     settings: CanvasArrangerSettings
@@ -168,7 +128,7 @@ function initializeLayoutNodes(
             nodeHeight = settings.formulaNodeHeight || 80;
         } else {
             const currentWidth = nodeData.width || settings.textNodeWidth;
-            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings);
+            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings.textNodeMaxHeight || 800);
             if (nodeData.height && nodeData.height > 0) {
                 nodeHeight = Math.max(nodeData.height, estimatedHeight);
             } else {

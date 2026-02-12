@@ -8,7 +8,9 @@ import {
     getEdgeFromNodeId,
     getEdgeToNodeId,
     getCurrentCanvasFilePath,
-    getCanvasView
+    getCanvasView,
+    getNodesFromCanvas,
+    getEdgesFromCanvas
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
@@ -173,25 +175,11 @@ export class NodeDeletionService {
     private getEdgesFromCanvas(canvas: CanvasLike): CanvasEdgeLike[] {
         const canvasAny = canvas as any;
         if (canvasAny.fileData?.edges) return canvasAny.fileData.edges as CanvasEdgeLike[];
-        if (canvas.edges) {
-            return canvas.edges instanceof Map 
-                ? Array.from(canvas.edges.values()) 
-                : Array.isArray(canvas.edges) 
-                    ? canvas.edges 
-                    : [];
-        }
-        return [];
+        return getEdgesFromCanvas(canvas);
     }
 
     private getNodesFromCanvas(canvas: CanvasLike): CanvasNodeLike[] {
-        if (canvas.nodes) {
-            return canvas.nodes instanceof Map 
-                ? Array.from(canvas.nodes.values()) 
-                : Array.isArray(canvas.nodes) 
-                    ? canvas.nodes 
-                    : [];
-        }
-        return [];
+        return getNodesFromCanvas(canvas);
     }
 
     private findParentNode(nodeId: string, edges: CanvasEdgeLike[], allNodes: CanvasNodeLike[]): CanvasNodeLike | null {

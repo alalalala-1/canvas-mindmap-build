@@ -8,10 +8,10 @@ import { EditTextModal } from '../ui/edit-modal';
 import { log } from '../utils/logger';
 import {
     getCanvasView,
-    getCurrentCanvasFilePath
+    getCurrentCanvasFilePath,
+    estimateTextNodeHeight
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager } from './types';
-import { CONSTANTS } from '../constants';
 
 export class CanvasNodeManager {
     private app: App;
@@ -404,44 +404,6 @@ export class CanvasNodeManager {
 
     private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
-
-        const contentWidth = nodeWidth - 40;
-
-        const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
-        const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
-
-        const chineseCharRegex = /[\u4e00-\u9fa5]/;
-        let totalLines = 0;
-        const textLines = content.split('\n');
-
-        for (const line of textLines) {
-            const trimmedLine = line.trim();
-            if (trimmedLine === '') {
-                totalLines += 0.5;
-                continue;
-            }
-
-            const cleanLine = trimmedLine
-                .replace(/^#{1,6}\s+/, '')
-                .replace(/\*\*|\*|__|_|`/g, '');
-
-            let pixelWidth = 0;
-            for (const char of cleanLine) {
-                if (chineseCharRegex.test(char)) {
-                    pixelWidth += fontSize * 1.15;
-                } else {
-                    pixelWidth += fontSize * 0.6;
-                }
-            }
-
-            const linesNeeded = Math.ceil(pixelWidth / contentWidth);
-            totalLines += Math.max(1, linesNeeded);
-        }
-
-        const safetyPadding = CONSTANTS.TYPOGRAPHY.SAFETY_PADDING;
-        const calculatedHeight = Math.ceil(totalLines * lineHeight + safetyPadding);
-        const minHeight = CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT;
-
-        return Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
+        return estimateTextNodeHeight(content, nodeWidth, maxHeight);
     }
 }

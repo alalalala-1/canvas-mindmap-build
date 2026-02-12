@@ -6,6 +6,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasLike, CanvasEdgeLike, CanvasNodeLike, ICanvasManager } from '../types';
+import { getNodeFromCanvas, getEdgesFromCanvas, getEdgeToNodeId as getEdgeToNodeIdUtil } from '../../utils/canvas-utils';
 
 export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
@@ -28,42 +29,15 @@ export class FloatingNodeService {
     }
 
     private getNodeFromCanvas(nodeId: string): CanvasNodeLike | null {
-        if (!this.canvas?.nodes) return null;
-        
-        if (this.canvas.nodes instanceof Map) {
-            return this.canvas.nodes.get(nodeId) || null;
-        }
-        
-        if (typeof this.canvas.nodes === 'object') {
-            return (this.canvas.nodes as Record<string, CanvasNodeLike>)[nodeId] || null;
-        }
-        
-        return null;
+        return getNodeFromCanvas(this.canvas, nodeId);
     }
 
     private getEdgesFromCanvas(): CanvasEdgeLike[] {
-        if (!this.canvas?.edges) return [];
-        
-        if (this.canvas.edges instanceof Map) {
-            return Array.from(this.canvas.edges.values());
-        }
-        
-        if (Array.isArray(this.canvas.edges)) {
-            return this.canvas.edges;
-        }
-        
-        return [];
+        return getEdgesFromCanvas(this.canvas);
     }
 
     private getEdgeToNodeId(edge: CanvasEdgeLike): string | null {
-        if (typeof edge?.to === 'string') {
-            return edge.to;
-        } else if (edge?.to?.node?.id) {
-            return edge.to.node.id;
-        } else if (edge?.toNode) {
-            return edge.toNode;
-        }
-        return null;
+        return getEdgeToNodeIdUtil(edge);
     }
 
     private hasIncomingEdge(nodeId: string, edges: CanvasEdgeLike[]): boolean {

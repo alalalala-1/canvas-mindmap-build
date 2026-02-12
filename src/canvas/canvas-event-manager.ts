@@ -313,7 +313,7 @@ export class CanvasEventManager {
         try {
             const sourceFile = this.app.vault.getAbstractFileByPath(fromLink.file);
             if (!(sourceFile instanceof TFile)) {
-                new Notice('Source file not found.');
+                new Notice('找不到源文件');
                 return;
             }
 

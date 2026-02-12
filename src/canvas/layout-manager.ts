@@ -5,7 +5,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
-import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas } from '../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
@@ -629,23 +629,12 @@ export class LayoutManager {
     }
 
     private getCanvasNodes(canvas: CanvasLike): Map<string, CanvasNodeLike> {
-        if (canvas.nodes instanceof Map) {
-            return canvas.nodes;
-        }
-        if (canvas.nodes && this.isRecord(canvas.nodes)) {
-            return new Map(Object.entries(canvas.nodes) as Array<[string, CanvasNodeLike]>);
-        }
-        return new Map();
+        const nodes = getNodesFromCanvas(canvas);
+        return new Map(nodes.filter(n => n.id).map(n => [n.id!, n]));
     }
 
     private getCanvasEdges(canvas: CanvasLike): CanvasEdgeLike[] {
-        if (canvas.edges instanceof Map) {
-            return Array.from(canvas.edges.values());
-        }
-        if (Array.isArray(canvas.edges)) {
-            return canvas.edges;
-        }
-        return [];
+        return getEdgesFromCanvas(canvas);
     }
 
     private isCanvasManager(value: unknown): value is CanvasManagerLike {

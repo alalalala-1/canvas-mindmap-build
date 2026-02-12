@@ -1,6 +1,7 @@
 import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
-import { Canvas, CanvasEdge, CanvasNode } from '../canvas/types';
+import { CONSTANTS } from '../constants';
+import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;
@@ -144,6 +145,113 @@ export function getEdgeToNodeId(edge: CanvasDataEdge | CanvasEdge | null | undef
  */
 export function generateRandomId(): string {
     return Math.random().toString(36).substring(2, 10);
+}
+
+// ============================================================================
+// Canvas 数据获取辅助函数
+// ============================================================================
+
+/**
+ * 从 Canvas 对象获取节点
+ * 兼容 Map 和普通对象两种存储方式
+ */
+export function getNodeFromCanvas(canvas: CanvasLike | null | undefined, nodeId: string): CanvasNodeLike | null {
+    if (!canvas?.nodes) return null;
+    
+    if (canvas.nodes instanceof Map) {
+        return canvas.nodes.get(nodeId) || null;
+    }
+    
+    if (typeof canvas.nodes === 'object') {
+        return (canvas.nodes as Record<string, CanvasNodeLike>)[nodeId] || null;
+    }
+    
+    return null;
+}
+
+/**
+ * 从 Canvas 对象获取所有节点数组
+ * 兼容 Map 和数组两种存储方式
+ */
+export function getNodesFromCanvas(canvas: CanvasLike | null | undefined): CanvasNodeLike[] {
+    if (!canvas?.nodes) return [];
+    
+    if (canvas.nodes instanceof Map) {
+        return Array.from(canvas.nodes.values());
+    }
+    
+    if (Array.isArray(canvas.nodes)) {
+        return canvas.nodes;
+    }
+    
+    if (typeof canvas.nodes === 'object') {
+        return Object.values(canvas.nodes as Record<string, CanvasNodeLike>);
+    }
+    
+    return [];
+}
+
+/**
+ * 从 Canvas 对象获取所有边数组
+ * 兼容 Map 和数组两种存储方式
+ */
+export function getEdgesFromCanvas(canvas: CanvasLike | null | undefined): CanvasEdgeLike[] {
+    if (!canvas?.edges) return [];
+    
+    if (canvas.edges instanceof Map) {
+        return Array.from(canvas.edges.values());
+    }
+    
+    if (Array.isArray(canvas.edges)) {
+        return canvas.edges;
+    }
+    
+    if (typeof canvas.edges === 'object') {
+        return Object.values(canvas.edges as Record<string, CanvasEdgeLike>);
+    }
+    
+    return [];
+}
+
+/**
+ * 估算文本节点高度
+ * 用于布局计算和节点高度调整
+ */
+export function estimateTextNodeHeight(content: string, width: number, maxHeight: number = 800): number {
+    const contentWidth = width - 40;
+    const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
+    const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
+    
+    const chineseCharRegex = /[\u4e00-\u9fa5]/;
+    let totalLines = 0;
+    const textLines = content.split('\n');
+
+    for (const line of textLines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine === '') {
+            totalLines += 0.5;
+            continue;
+        }
+
+        const cleanLine = trimmedLine
+            .replace(/^#{1,6}\s+/, '')
+            .replace(/\*\*|\*|__|_|`/g, '');
+
+        let pixelWidth = 0;
+        for (const char of cleanLine) {
+            if (chineseCharRegex.test(char)) {
+                pixelWidth += fontSize * 1.15;
+            } else {
+                pixelWidth += fontSize * 0.6;
+            }
+        }
+
+        const linesNeeded = Math.ceil(pixelWidth / contentWidth);
+        totalLines += Math.max(1, linesNeeded);
+    }
+
+    const calculatedHeight = Math.ceil(totalLines * lineHeight + CONSTANTS.TYPOGRAPHY.SAFETY_PADDING);
+    return Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
 }
 
 // ============================================================================
