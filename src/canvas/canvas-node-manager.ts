@@ -11,6 +11,7 @@ import {
     getCurrentCanvasFilePath
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager } from './types';
+import { CONSTANTS } from '../constants';
 
 export class CanvasNodeManager {
     private app: App;
@@ -406,8 +407,8 @@ export class CanvasNodeManager {
 
         const contentWidth = nodeWidth - 40;
 
-        const fontSize = 14;
-        const lineHeight = 26;
+        const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
+        const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
 
         const chineseCharRegex = /[\u4e00-\u9fa5]/;
         let totalLines = 0;
@@ -437,9 +438,9 @@ export class CanvasNodeManager {
             totalLines += Math.max(1, linesNeeded);
         }
 
-        const safetyPadding = 44;
+        const safetyPadding = CONSTANTS.TYPOGRAPHY.SAFETY_PADDING;
         const calculatedHeight = Math.ceil(totalLines * lineHeight + safetyPadding);
-        const minHeight = 60;
+        const minHeight = CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT;
 
         return Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
     }
