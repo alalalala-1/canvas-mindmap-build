@@ -11,14 +11,14 @@ import {
     getCanvasView
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike } from '../types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
 
 export class NodeDeletionService {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
     private canvasFileService: CanvasFileService;
-    private canvasManager: any;
+    private canvasManager: ICanvasManager | null = null;
 
     constructor(
         app: App,
@@ -32,7 +32,7 @@ export class NodeDeletionService {
         this.canvasFileService = canvasFileService;
     }
 
-    setCanvasManager(canvasManager: any): void {
+    setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
     }
 

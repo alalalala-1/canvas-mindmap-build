@@ -12,14 +12,14 @@ import {
     getCurrentCanvasFilePath,
     isFormulaContent
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasDataLike } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager } from './types';
 
 export class CanvasNodeManager {
     private app: App;
     private plugin: Plugin;
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
-    private canvasManager: any;
+    private canvasManager: ICanvasManager | null = null;
 
     private canvasFileService: CanvasFileService;
     private nodeCreationService: NodeCreationService;
@@ -52,7 +52,7 @@ export class CanvasNodeManager {
         );
     }
 
-    setCanvasManager(canvasManager: any): void {
+    setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
         this.nodeCreationService.setCanvasManager(canvasManager);
         this.nodeDeletionService.setCanvasManager(canvasManager);

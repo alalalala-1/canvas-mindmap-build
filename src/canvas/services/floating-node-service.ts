@@ -5,13 +5,8 @@ import { EdgeChangeDetector, NewEdgeCallback } from './edge-change-detector';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { CanvasLike, CanvasEdgeLike } from '../types';
+import { CanvasLike, CanvasEdgeLike, ICanvasManager } from '../types';
 
-/**
- * 浮动节点服务
- * 整合状态管理、视觉样式和边变化检测
- * 提供统一的浮动节点管理接口
- */
 export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
     private stateManager: FloatingNodeStateManager;
@@ -19,7 +14,7 @@ export class FloatingNodeService {
     private edgeDetector: EdgeChangeDetector;
     private currentCanvasFilePath: string | null = null;
     private canvas: CanvasLike | null = null;
-    private canvasManager: any = null;
+    private canvasManager: ICanvasManager | null = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
@@ -28,7 +23,7 @@ export class FloatingNodeService {
         this.edgeDetector = new EdgeChangeDetector();
     }
 
-    setCanvasManager(canvasManager: any): void {
+    setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
     }
 

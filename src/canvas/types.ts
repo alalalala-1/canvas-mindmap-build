@@ -2,6 +2,17 @@
  * Canvas 类型定义
  */
 
+import type { CollapseStateManager } from '../state/collapse-state';
+
+export interface ICanvasManager {
+    checkAndAddCollapseButtons(): Promise<void>;
+    adjustNodeHeightAfterRender(nodeId: string): Promise<void>;
+    toggleNodeCollapse(nodeId: string): Promise<void>;
+    syncHiddenChildrenOnDrag(node: unknown): Promise<void>;
+    calculateTextNodeHeight(content: string, nodeEl?: Element): number;
+    readonly collapseStateManager: CollapseStateManager;
+}
+
 export interface FromLink {
     path: string;
     line?: number;

@@ -19,12 +19,13 @@ import {
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
+import { ICanvasManager } from './types';
 
-export class CanvasManager {
+export class CanvasManager implements ICanvasManager {
     private plugin: Plugin;
     private app: App;
     private settings: CanvasMindmapBuildSettings;
-    private collapseStateManager: CollapseStateManager;
+    public readonly collapseStateManager: CollapseStateManager;
     private canvasFileService: CanvasFileService;
     private visibilityService: VisibilityService;
     private layoutDataProvider: LayoutDataProvider;
@@ -102,6 +103,10 @@ export class CanvasManager {
 
     public async adjustAllTextNodeHeights(): Promise<number> {
         return await this.nodeManager.adjustAllTextNodeHeights();
+    }
+
+    public calculateTextNodeHeight(content: string, nodeEl?: Element): number {
+        return this.nodeManager.calculateTextNodeHeight(content, nodeEl);
     }
 
     async deleteSelectedEdge() {

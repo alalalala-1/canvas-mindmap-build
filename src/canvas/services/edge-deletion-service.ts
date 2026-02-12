@@ -4,7 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
 import { getCanvasView, getCurrentCanvasFilePath } from '../../utils/canvas-utils';
-import { CanvasLike, CanvasEdgeLike } from '../types';
+import { CanvasLike, CanvasEdgeLike, ICanvasManager } from '../types';
 
 export class EdgeDeletionService {
     private app: App;
@@ -12,7 +12,7 @@ export class EdgeDeletionService {
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
     private floatingNodeService: FloatingNodeService;
-    private canvasManager: any;
+    private canvasManager: ICanvasManager | null = null;
 
     constructor(
         app: App,
@@ -28,7 +28,7 @@ export class EdgeDeletionService {
         this.floatingNodeService = floatingNodeService;
     }
 
-    setCanvasManager(canvasManager: any): void {
+    setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
     }
 

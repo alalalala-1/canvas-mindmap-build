@@ -4,7 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
-import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike } from '../types';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
 
 export class NodeCreationService {
     private app: App;
@@ -12,24 +12,24 @@ export class NodeCreationService {
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
     private positionCalculator: NodePositionCalculator;
-    private canvasManager: any;
+    private canvasManager: ICanvasManager | null = null;
 
     constructor(
         app: App,
         plugin: Plugin,
         settings: CanvasMindmapBuildSettings,
         canvasFileService: CanvasFileService,
-        canvasManager?: any
+        canvasManager?: ICanvasManager
     ) {
         this.app = app;
         this.plugin = plugin;
         this.settings = settings;
         this.canvasFileService = canvasFileService;
         this.positionCalculator = new NodePositionCalculator(settings);
-        this.canvasManager = canvasManager;
+        this.canvasManager = canvasManager || null;
     }
 
-    setCanvasManager(canvasManager: any) {
+    setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
     }
 
@@ -83,8 +83,7 @@ export class NodeCreationService {
                 };
                 canvasData.edges!.push(newEdge);
                 
-                const isParentCollapsed = this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id);
-                if (isParentCollapsed) {
+                if (parentNode.id && this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id)) {
                     (newNode as any).unknownData = {
                         ...(newNode as any).unknownData,
                         collapsedHide: true
@@ -134,8 +133,8 @@ export class NodeCreationService {
                 newNode.text = content;
                 newNode.width = this.settings.textNodeWidth || 250;
                 
-                if (this.canvasManager?.nodeManager) {
-                    newNode.height = this.canvasManager.nodeManager.calculateTextNodeHeight(content);
+                if (this.canvasManager) {
+                    newNode.height = this.canvasManager.calculateTextNodeHeight(content);
                 } else {
                     newNode.height = 100;
                 }
@@ -261,12 +260,13 @@ export class NodeCreationService {
 
             this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
             
+            const manager = this.canvasManager;
             setTimeout(() => {
-                this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+                manager.adjustNodeHeightAfterRender(newNodeId);
             }, 300);
 
             setTimeout(() => {
-                this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+                manager.adjustNodeHeightAfterRender(newNodeId);
             }, 800);
         }
     }
