@@ -10,6 +10,68 @@ import { getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
 
+type FloatingNodeMetadata = {
+    isFloating?: boolean;
+    originalParent?: string;
+    floatingTimestamp?: number;
+    isSubtreeNode?: boolean;
+};
+
+type CanvasNodeLike = {
+    id?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    nodeEl?: HTMLElement;
+    data?: FloatingNodeMetadata;
+    canvas?: CanvasLike;
+    setData?: (data: Record<string, unknown>) => void;
+    getData?: () => Record<string, unknown>;
+    update?: () => void;
+    moveAndResize?: (rect: { x: number; y: number; width: number; height: number }) => void;
+    prevX?: number;
+    prevY?: number;
+};
+
+type EdgeLike = {
+    id?: string;
+    from?: unknown;
+    to?: unknown;
+    fromNode?: string;
+    toNode?: string;
+    fromSide?: string;
+    toSide?: string;
+    fromEnd?: unknown;
+    toEnd?: unknown;
+    color?: string;
+    label?: string;
+    lineGroupEl?: HTMLElement;
+    lineEndGroupEl?: HTMLElement;
+};
+
+type CanvasDataLike = {
+    nodes?: CanvasNodeLike[];
+    edges?: EdgeLike[];
+    metadata?: {
+        floatingNodes?: Record<string, unknown>;
+    };
+};
+
+type CanvasLike = {
+    nodes?: Map<string, CanvasNodeLike> | Record<string, CanvasNodeLike>;
+    edges?: Map<string, EdgeLike> | EdgeLike[];
+    fileData?: CanvasDataLike;
+    metadata?: CanvasDataLike['metadata'];
+    file?: { path?: string };
+    requestUpdate?: () => void;
+    requestSave?: () => void;
+};
+
+type CanvasManagerLike = {
+    adjustAllTextNodeHeights: () => Promise<number>;
+};
+
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
  */
@@ -22,7 +84,7 @@ export class LayoutManager {
     private visibilityService: VisibilityService;
     private layoutDataProvider: LayoutDataProvider;
     private floatingNodeService: FloatingNodeService | null = null;
-    private canvasManager: any | null = null;
+    private canvasManager: CanvasManagerLike | null = null;
 
     constructor(
         plugin: Plugin,
@@ -45,8 +107,8 @@ export class LayoutManager {
     /**
      * 设置 CanvasManager 实例
      */
-    setCanvasManager(manager: any): void {
-        this.canvasManager = manager;
+    setCanvasManager(manager: unknown): void {
+        this.canvasManager = this.isCanvasManager(manager) ? manager : null;
     }
 
     /**
@@ -80,7 +142,7 @@ export class LayoutManager {
             return;
         }
 
-        const canvas = (activeView as any)?.canvas;
+        const canvas = this.getCanvasFromView(activeView);
 
         if (!canvas) {
             new Notice("Canvas view not initialized.");
@@ -120,41 +182,39 @@ export class LayoutManager {
 
             if (!canvasFilePath) throw new Error('找不到路径');
 
-            const memoryEdges = canvas.edges instanceof Map 
-                ? Array.from((canvas.edges as Map<string, any>).values()) 
-                : Array.isArray(canvas.edges) ? canvas.edges : [];
+            const memoryEdges = this.getCanvasEdges(canvas);
 
             let updatedCount = 0;
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
-                if (!data.nodes) return false;
+                const canvasData = data as CanvasDataLike;
+                if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
                 let changed = false;
 
-                for (const node of data.nodes) {
+                for (const node of canvasData.nodes) {
+                    if (typeof node.id !== 'string') continue;
                     const newPos = result.get(node.id);
-                    if (newPos) {
-                        if (node.x !== newPos.x || node.y !== newPos.y) {
-                            node.x = newPos.x;
-                            node.y = newPos.y;
-                            changed = true;
-                        }
+                    if (newPos && (node.x !== newPos.x || node.y !== newPos.y)) {
+                        node.x = newPos.x;
+                        node.y = newPos.y;
+                        changed = true;
                     }
                 }
 
-                const fileEdgeIds = new Set(data.edges.map((e: any) => e.id));
+                const fileEdgeIds = new Set(canvasData.edges.map((e) => e.id).filter((id): id is string => typeof id === 'string'));
                 for (const memEdge of memoryEdges) {
                     if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
                         const serializableEdge = {
                             id: memEdge.id,
-                            fromNode: memEdge.fromNode || memEdge.from?.node?.id || memEdge.from,
-                            toNode: memEdge.toNode || memEdge.to?.node?.id || memEdge.to,
-                            fromSide: memEdge.fromSide || memEdge.from?.side,
-                            toSide: memEdge.toSide || memEdge.to?.side,
+                            fromNode: this.toStringId(memEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.from)) || this.toStringId(memEdge.from),
+                            toNode: this.toStringId(memEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.to)) || this.toStringId(memEdge.to),
+                            fromSide: this.toStringId(memEdge.fromSide) || (this.isRecord(memEdge.from) ? this.toStringId(memEdge.from.side) : undefined),
+                            toSide: this.toStringId(memEdge.toSide) || (this.isRecord(memEdge.to) ? this.toStringId(memEdge.to.side) : undefined),
                             fromEnd: memEdge.fromEnd,
                             toEnd: memEdge.toEnd,
                             color: memEdge.color,
                             label: memEdge.label
                         };
-                        data.edges.push(serializableEdge);
+                        canvasData.edges.push(serializableEdge);
                         changed = true;
                     }
                 }
@@ -165,7 +225,7 @@ export class LayoutManager {
             if (success) {
                 for (const [nodeId, newPosition] of result.entries()) {
                     const node = allNodes.get(nodeId);
-                    if (node && typeof node.setData === 'function') {
+                    if (this.canSetData(node)) {
                         const currentData = node.getData ? node.getData() : {};
                         node.setData({
                             ...currentData,
@@ -228,14 +288,12 @@ export class LayoutManager {
      * 在折叠/展开节点后自动整理布局
      * 修复：考虑所有已折叠的节点，而不仅仅是当前操作的节点
      */
-    async autoArrangeAfterToggle(nodeId: string, canvas: any, isCollapsing: boolean = true) {
+    async autoArrangeAfterToggle(nodeId: string, canvas: CanvasLike, isCollapsing: boolean = true) {
         if (!canvas) return;
 
         // 获取所有节点和边
-        const nodes = canvas.nodes instanceof Map ? canvas.nodes : new Map(Object.entries(canvas.nodes));
-        const edges = canvas.fileData?.edges || 
-                     (canvas.edges instanceof Map ? Array.from(canvas.edges.values()) : 
-                     Array.isArray(canvas.edges) ? canvas.edges : []);
+        const nodes = this.getCanvasNodes(canvas);
+        const edges = canvas.fileData?.edges || this.getCanvasEdges(canvas);
 
         if (!nodes || nodes.size === 0) return;
 
@@ -255,7 +313,7 @@ export class LayoutManager {
             }
             
             // 也添加浮动子树节点
-            const canvasData = canvas.fileData || canvas;
+            const canvasData = (canvas.fileData || canvas) as CanvasDataLike;
             if (canvasData?.metadata?.floatingNodes) {
                 for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
                     let isFloating = false;
@@ -263,8 +321,9 @@ export class LayoutManager {
                     if (typeof info === 'boolean') {
                         isFloating = info;
                     } else if (typeof info === 'object' && info !== null) {
-                        isFloating = (info as any).isFloating;
-                        originalParent = (info as any).originalParent || '';
+                        const infoRecord = info as FloatingNodeMetadata;
+                        isFloating = infoRecord.isFloating === true;
+                        originalParent = infoRecord.originalParent || '';
                     }
                     
                     // 如果原父节点已折叠，添加浮动节点到隐藏集合
@@ -277,7 +336,7 @@ export class LayoutManager {
             log(`[Layout] Toggle: 需要隐藏 ${allHiddenNodeIds.size} 个节点`);
 
             // 应用显示/隐藏
-            nodes.forEach((node: any, id: string) => {
+            nodes.forEach((node, id) => {
                 if (node?.nodeEl) {
                     const shouldHide = allHiddenNodeIds.has(id);
                     (node.nodeEl as HTMLElement).style.display = shouldHide ? 'none' : '';
@@ -335,8 +394,10 @@ export class LayoutManager {
             // 计算偏移量，保持当前操作节点的位置不变，避免整个画布跳动
             const anchorNode = nodes.get(nodeId);
             const anchorLayout = newLayout.get(nodeId);
-            const anchorOffsetX = anchorNode && anchorLayout ? anchorNode.x - anchorLayout.x : 0;
-            const anchorOffsetY = anchorNode && anchorLayout ? anchorNode.y - anchorLayout.y : 0;
+            const anchorX = anchorNode && typeof anchorNode.x === 'number' ? anchorNode.x : 0;
+            const anchorY = anchorNode && typeof anchorNode.y === 'number' ? anchorNode.y : 0;
+            const anchorOffsetX = anchorLayout ? anchorX - anchorLayout.x : 0;
+            const anchorOffsetY = anchorLayout ? anchorY - anchorLayout.y : 0;
 
             let updatedCount = 0;
             for (const [targetNodeId, newPosition] of newLayout.entries()) {
@@ -347,7 +408,9 @@ export class LayoutManager {
                     const targetY = isNaN(newPosition.y) ? 0 : newPosition.y + anchorOffsetY;
 
                     // 只有当位置发生显著变化时才更新，减少对 Canvas 的操作
-                    if (Math.abs(node.x - targetX) > 0.5 || Math.abs(node.y - targetY) > 0.5) {
+                    const nodeX = typeof node.x === 'number' ? node.x : 0;
+                    const nodeY = typeof node.y === 'number' ? node.y : 0;
+                    if (Math.abs(nodeX - targetX) > 0.5 || Math.abs(nodeY - targetY) > 0.5) {
                         if (typeof node.setData === 'function') {
                             const currentData = node.getData ? node.getData() : {};
                             node.setData({
@@ -356,7 +419,7 @@ export class LayoutManager {
                                 y: targetY,
                             });
                             updatedCount++;
-                        } else if (typeof node.x === 'number') {
+                        } else {
                             node.x = targetX;
                             node.y = targetY;
                             if (typeof node.update === 'function') node.update();
@@ -379,18 +442,19 @@ export class LayoutManager {
     // =========================================================================
     // 辅助方法：从边的端点获取节点 ID
     // =========================================================================
-    private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
+    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
         if (!endpoint) return null;
         if (typeof endpoint === 'string') return endpoint;
+        if (!this.isRecord(endpoint)) return null;
         if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-        if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
+        if (this.isRecord(endpoint.node) && typeof endpoint.node.id === 'string') return endpoint.node.id;
         return null;
     }
 
     // =========================================================================
     // 折叠/展开节点
     // =========================================================================
-    async toggleNodeCollapse(nodeId: string, canvas: any) {
+    async toggleNodeCollapse(nodeId: string, canvas: CanvasLike) {
         const isCurrentlyCollapsed = this.collapseStateManager.isCollapsed(nodeId);
         
         if (isCurrentlyCollapsed) {
@@ -407,8 +471,8 @@ export class LayoutManager {
     // =========================================================================
     // 拖拽时同步隐藏的子节点和浮动子树
     // =========================================================================
-    async syncHiddenChildrenOnDrag(node: any) {
-        if (!node || !node.id) return;
+    async syncHiddenChildrenOnDrag(node: CanvasNodeLike) {
+        if (!node?.id) return;
 
         const canvas = node.canvas;
         if (!canvas) return;
@@ -422,8 +486,10 @@ export class LayoutManager {
         if (this.floatingNodeService) {
             const floatingChildrenIds = this.floatingNodeService.getFloatingChildren(node.id);
             if (floatingChildrenIds.length > 0) {
-                const dx = node.x - (node.prevX ?? node.x);
-                const dy = node.y - (node.prevY ?? node.y);
+                const nodeX = typeof node.x === 'number' ? node.x : 0;
+                const nodeY = typeof node.y === 'number' ? node.y : 0;
+                const dx = nodeX - (node.prevX ?? nodeX);
+                const dy = nodeY - (node.prevY ?? nodeY);
 
                 if (dx === 0 && dy === 0) {
                     node.prevX = node.x;
@@ -432,13 +498,17 @@ export class LayoutManager {
                 }
 
                 for (const childId of floatingChildrenIds) {
-                    const childNode = canvas.nodes.get(childId);
-                    if (childNode) {
+                    const childNode = this.getCanvasNodes(canvas).get(childId);
+                    if (childNode && typeof childNode.moveAndResize === 'function') {
+                        const childX = typeof childNode.x === 'number' ? childNode.x : 0;
+                        const childY = typeof childNode.y === 'number' ? childNode.y : 0;
+                        const childWidth = typeof childNode.width === 'number' ? childNode.width : 0;
+                        const childHeight = typeof childNode.height === 'number' ? childNode.height : 0;
                         childNode.moveAndResize({
-                            x: childNode.x + dx,
-                            y: childNode.y + dy,
-                            width: childNode.width,
-                            height: childNode.height
+                            x: childX + dx,
+                            y: childY + dy,
+                            width: childWidth,
+                            height: childHeight
                         });
                         // 递归同步子节点的子节点（虽然浮动节点本身会触发拖拽，但这里是父节点带动）
                         // 注意：moveAndResize 可能会触发 childNode 的 node-drag 事件，导致死循环
@@ -446,8 +516,8 @@ export class LayoutManager {
                     }
                 }
                 
-                node.prevX = node.x;
-                node.prevY = node.y;
+                node.prevX = nodeX;
+                node.prevY = nodeY;
             }
         }
     }
@@ -455,7 +525,7 @@ export class LayoutManager {
     // =========================================================================
     // 检查并清除已连接的浮动节点状态
     // =========================================================================
-    private async checkAndClearConnectedFloatingNodes(canvas: any): Promise<void> {
+    private async checkAndClearConnectedFloatingNodes(canvas: CanvasLike): Promise<void> {
         try {
             // 获取当前 canvas 路径 - 使用多种方法尝试获取
             let canvasFilePath = canvas.file?.path;
@@ -463,7 +533,7 @@ export class LayoutManager {
             if (!canvasFilePath) {
                 const activeView = this.app.workspace.activeLeaf?.view;
                 if (activeView && activeView.getViewType() === 'canvas') {
-                    canvasFilePath = (activeView as any).file?.path;
+                    canvasFilePath = this.getFilePathFromView(activeView);
                 }
             }
             
@@ -473,20 +543,20 @@ export class LayoutManager {
             if (!(canvasFile instanceof TFile)) return;
 
             const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
+            const canvasData = JSON.parse(canvasContent) as CanvasDataLike;
             const floatingNodes = canvasData.metadata?.floatingNodes || {};
 
             // 获取当前所有边
-            const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) :
-                         Array.isArray(canvas.edges) ? canvas.edges : [];
+            const edges = this.getCanvasEdges(canvas);
 
             // 检查每个浮动节点是否已经有连接
             for (const nodeId of Object.keys(floatingNodes)) {
                 let isFloating = false;
                 if (typeof floatingNodes[nodeId] === 'boolean') {
-                    isFloating = floatingNodes[nodeId];
+                    isFloating = floatingNodes[nodeId] === true;
                 } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
-                    isFloating = (floatingNodes[nodeId] as any).isFloating;
+                    const infoRecord = floatingNodes[nodeId] as FloatingNodeMetadata;
+                    isFloating = infoRecord.isFloating === true;
                 }
                 
                 if (isFloating) {
@@ -513,22 +583,22 @@ export class LayoutManager {
     // =========================================================================
     // 辅助方法：清除浮动节点状态
     // =========================================================================
-    private async clearFloatingNodeState(nodeId: string, canvas?: any): Promise<void> {
+    private async clearFloatingNodeState(nodeId: string, canvas?: CanvasLike): Promise<void> {
         try {
             const activeView = this.app.workspace.activeLeaf?.view;
             if (!activeView || activeView.getViewType() !== 'canvas') return;
 
-            const canvasObj = (activeView as any)?.canvas;
+            const canvasObj = this.getCanvasFromView(activeView);
             if (!canvasObj) return;
 
-            const canvasFilePath = canvasObj.file?.path || (activeView as any).file?.path;
+            const canvasFilePath = canvasObj.file?.path || this.getFilePathFromView(activeView);
             if (!canvasFilePath) return;
 
             const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
             if (!(canvasFile instanceof TFile)) return;
 
             const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
+            const canvasData = JSON.parse(canvasContent) as CanvasDataLike;
 
             if (canvasData.metadata?.floatingNodes?.[nodeId]) {
                 delete canvasData.metadata.floatingNodes[nodeId];
@@ -538,7 +608,7 @@ export class LayoutManager {
                 await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
             }
 
-            const node = canvas.nodes?.get(nodeId);
+            const node = canvas ? this.getCanvasNodes(canvas).get(nodeId) : undefined;
             if (node?.nodeEl) {
                 (node.nodeEl as HTMLElement).style.border = '';
                 (node.nodeEl as HTMLElement).style.borderRadius = '';
@@ -552,7 +622,7 @@ export class LayoutManager {
     // =========================================================================
     // 清理残留的浮动节点数据（不存在的节点）
     // =========================================================================
-    private async cleanupStaleFloatingNodes(canvas: any, currentNodes: Map<string, any>): Promise<void> {
+    private async cleanupStaleFloatingNodes(canvas: CanvasLike, currentNodes: Map<string, CanvasNodeLike>): Promise<void> {
         try {
             const canvasFilePath = canvas.file?.path;
             if (!canvasFilePath) return;
@@ -561,7 +631,7 @@ export class LayoutManager {
             if (!(canvasFile instanceof TFile)) return;
 
             const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
+            const canvasData = JSON.parse(canvasContent) as CanvasDataLike;
 
             if (!canvasData.metadata?.floatingNodes) return;
 
@@ -600,10 +670,10 @@ export class LayoutManager {
     // =========================================================================
     // 重新应用浮动节点的红框样式
     // =========================================================================
-    private async reapplyFloatingNodeStyles(canvas: any): Promise<void> {
+    private async reapplyFloatingNodeStyles(canvas: CanvasLike): Promise<void> {
         log(`[Layout] reapplyFloatingNodeStyles 被调用, floatingNodeService=${this.floatingNodeService ? 'exists' : 'null'}`);
         try {
-            const canvasFilePath = canvas.file?.path || (this.app.workspace.activeLeaf?.view as any).file?.path;
+            const canvasFilePath = canvas.file?.path || this.getFilePathFromView(this.app.workspace.activeLeaf?.view);
             if (!canvasFilePath) {
                 log('[Layout] 警告: 无法获取 canvas 文件路径，跳过样式应用');
                 return;
@@ -623,5 +693,53 @@ export class LayoutManager {
         } catch (err) {
             log(`[Layout] 重新应用样式失败: ${err}`);
         }
+    }
+
+    private getCanvasFromView(view: unknown): CanvasLike | null {
+        if (!this.isRecord(view)) return null;
+        const maybeView = view as { canvas?: CanvasLike };
+        return maybeView.canvas || null;
+    }
+
+    private getCanvasNodes(canvas: CanvasLike): Map<string, CanvasNodeLike> {
+        if (canvas.nodes instanceof Map) {
+            return canvas.nodes;
+        }
+        if (canvas.nodes && this.isRecord(canvas.nodes)) {
+            return new Map(Object.entries(canvas.nodes) as Array<[string, CanvasNodeLike]>);
+        }
+        return new Map();
+    }
+
+    private getCanvasEdges(canvas: CanvasLike): EdgeLike[] {
+        if (canvas.edges instanceof Map) {
+            return Array.from(canvas.edges.values());
+        }
+        if (Array.isArray(canvas.edges)) {
+            return canvas.edges;
+        }
+        return [];
+    }
+
+    private getFilePathFromView(view: unknown): string | undefined {
+        if (!this.isRecord(view)) return undefined;
+        const viewLike = view as { file?: { path?: string } };
+        return viewLike.file?.path;
+    }
+
+    private isCanvasManager(value: unknown): value is CanvasManagerLike {
+        return this.isRecord(value) && typeof value.adjustAllTextNodeHeights === 'function';
+    }
+
+    private canSetData(node: unknown): node is { setData: (data: Record<string, unknown>) => void; getData?: () => Record<string, unknown> } {
+        return this.isRecord(node) && typeof node.setData === 'function';
+    }
+
+    private toStringId(value: unknown): string | undefined {
+        return typeof value === 'string' ? value : undefined;
+    }
+
+    private isRecord(value: unknown): value is Record<string, any> {
+        return typeof value === 'object' && value !== null;
     }
 }

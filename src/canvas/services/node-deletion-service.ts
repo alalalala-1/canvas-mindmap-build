@@ -7,7 +7,8 @@ import {
     generateRandomId,
     getEdgeFromNodeId,
     getEdgeToNodeId,
-    getCurrentCanvasFilePath
+    getCurrentCanvasFilePath,
+    getCanvasView
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
 
@@ -229,23 +230,6 @@ export class NodeDeletionService {
      * 获取 Canvas 视图
      */
     private getCanvasView(): ItemView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-            return activeLeaf.view as ItemView;
-        }
-
-        const leaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of leaves) {
-            if (leaf.view && (leaf.view as any).canvas) {
-                return leaf.view as ItemView;
-            }
-        }
-
-        const view = this.app.workspace.getActiveViewOfType(ItemView);
-        if (view && view.getViewType() === 'canvas') {
-            return view;
-        }
-
-        return null;
+        return getCanvasView(this.app);
     }
 }

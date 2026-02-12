@@ -1,6 +1,7 @@
 import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
+import { getCanvasView } from '../utils/canvas-utils';
 import { log } from '../utils/logger';
 
 export class CanvasUIManager {
@@ -267,24 +268,7 @@ export class CanvasUIManager {
     }
 
     private getCanvasView(): ItemView | null {
-        const activeLeaf = this.app.workspace.activeLeaf;
-        if (activeLeaf?.view && (activeLeaf.view as any).canvas) {
-            return activeLeaf.view as ItemView;
-        }
-
-        const leaves = this.app.workspace.getLeavesOfType('canvas');
-        for (const leaf of leaves) {
-            if (leaf.view && (leaf.view as any).canvas) {
-                return leaf.view as ItemView;
-            }
-        }
-
-        const view = this.app.workspace.getActiveViewOfType(ItemView);
-        if (view && view.getViewType() === 'canvas') {
-            return view;
-        }
-
-        return null;
+        return getCanvasView(this.app);
     }
 
     // =========================================================================

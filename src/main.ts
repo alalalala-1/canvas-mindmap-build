@@ -1,4 +1,4 @@
-import { Editor, ItemView, MarkdownView, Notice, Plugin, TFile } from 'obsidian';
+import { App, MarkdownView, Notice, Plugin, PluginManifest } from 'obsidian';
 import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
 import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
 import { CollapseStateManager } from './state/collapse-state';
@@ -13,7 +13,7 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
     private collapseStateManager: CollapseStateManager = new CollapseStateManager();
     private canvasManager: CanvasManager;
 
-    constructor(app: any, manifest: any) {
+    constructor(app: App, manifest: PluginManifest) {
         super(app, manifest);
         this.settings = DEFAULT_SETTINGS;
         this.canvasManager = new CanvasManager(this, app, this.settings, this.collapseStateManager);
@@ -30,11 +30,11 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
         this.addCommand({
             id: 'add-to-canvas-mindmap',
-            name: 'Add to Canvas Mindmap',
-            callback: () => {
+            name: 'Add to canvas mindmap',
+            callback: async () => {
                 const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
                 if (mdView && mdView.editor.getSelection()) {
-                    this.canvasManager.addNodeToCanvas(mdView.editor.getSelection(), mdView.file);
+                    await this.canvasManager.addNodeToCanvas(mdView.editor.getSelection(), mdView.file);
                 } else {
                     new Notice('Please select some text in a Markdown editor.');
                 }
@@ -43,19 +43,19 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
         this.addCommand({
             id: 'arrange-canvas-mindmap-layout',
-            name: 'Arrange Canvas Mindmap Layout',
+            name: 'Arrange canvas mindmap layout',
             callback: () => this.canvasManager.arrangeCanvas(),
         });
 
         this.addCommand({ 
             id: 'delete-selected-edge',
-            name: 'Delete Selected Edge',
+            name: 'Delete selected edge',
             callback: () => this.canvasManager.deleteSelectedEdge(),
         });
 
         this.addCommand({
             id: 'adjust-all-text-node-heights',
-            name: 'Adjust All Text Node Heights',
+            name: 'Adjust all text node heights',
             callback: () => this.canvasManager.adjustAllTextNodeHeights(),
         });
 
@@ -69,14 +69,15 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
     async loadSettings() {
         try {
-            const data = await this.loadData();
+            const data = (await this.loadData()) as unknown;
+            const dataObj = (data && typeof data === 'object') ? (data as Record<string, unknown>) : {};
 
-            const validatedData = validateSettings(data || {});
+            const validatedData = validateSettings(dataObj);
             let mergedSettings = { ...DEFAULT_SETTINGS, ...validatedData };
             mergedSettings = migrateSettings(mergedSettings);
 
             this.settings = mergedSettings;
-            this.lastClickedNodeId = data?.lastClickedNodeId || null;
+            this.lastClickedNodeId = typeof dataObj.lastClickedNodeId === 'string' ? dataObj.lastClickedNodeId : null;
 
             updateLoggerConfig(this.settings);
             log('[Settings] 加载成功');

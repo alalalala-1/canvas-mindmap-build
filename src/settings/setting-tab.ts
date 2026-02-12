@@ -1,6 +1,5 @@
 import {App, PluginSettingTab, Setting} from "obsidian";
 import CanvasMindmapBuildPlugin from "../main";
-import { CanvasMindmapBuildSettings } from "./types";
 import { updateLoggerConfig, log } from "../utils/logger";
 
 export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
@@ -16,23 +15,23 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
 
         containerEl.empty();
 
-        containerEl.createEl('h2', {text: 'Canvas Mindmap Build Settings'});
+        new Setting(containerEl).setName('Basics').setHeading();
 
         new Setting(containerEl)
-            .setName('Target Canvas File')
+            .setName('Target canvas file')
             .setDesc('The path to the canvas file where new nodes will be added.')
             .addText(text => text
-                .setPlaceholder('path/to/your/canvas.canvas')
+                .setPlaceholder('Path/to/your/canvas.canvas')
                 .setValue(this.plugin.settings.canvasFilePath)
                 .onChange(async (value) => {
                     this.plugin.settings.canvasFilePath = value;
                     await this.plugin.saveSettings();
                 }));
 
-        containerEl.createEl('h3', {text: 'Text Nodes'});
+        new Setting(containerEl).setName('Text nodes').setHeading();
 
         new Setting(containerEl)
-            .setName('Text Node Width')
+            .setName('Text node width')
             .addText(text => text
                 .setPlaceholder('300')
                 .setValue(this.plugin.settings.textNodeWidth.toString())
@@ -42,7 +41,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Text Node Max Height')
+            .setName('Text node max height')
             .setDesc('The maximum height for a text node when auto-sizing is enabled.')
             .addText(text => text
                 .setPlaceholder('400')
@@ -52,10 +51,10 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        containerEl.createEl('h3', {text: 'Image Nodes'});
+        new Setting(containerEl).setName('Image nodes').setHeading();
 
         new Setting(containerEl)
-            .setName('Image Node Width')
+            .setName('Image node width')
             .addText(text => text
                 .setPlaceholder('400')
                 .setValue(this.plugin.settings.imageNodeWidth.toString())
@@ -65,7 +64,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Image Node Height')
+            .setName('Image node height')
             .addText(text => text
                 .setPlaceholder('400')
                 .setValue(this.plugin.settings.imageNodeHeight.toString())
@@ -74,10 +73,10 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        containerEl.createEl('h3', {text: 'Formula (LaTeX) Nodes'});
+        new Setting(containerEl).setName('Formula (LaTeX) nodes').setHeading();
 
         new Setting(containerEl)
-            .setName('Enable Formula Detection')
+            .setName('Enable formula detection')
             .setDesc('Use special dimensions for content identified as a formula (starts with $$).')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.enableFormulaDetection)
@@ -87,7 +86,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Formula Node Width')
+            .setName('Formula node width')
             .addText(text => text
                 .setPlaceholder('600')
                 .setValue(this.plugin.settings.formulaNodeWidth.toString())
@@ -97,7 +96,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Formula Node Height')
+            .setName('Formula node height')
             .addText(text => text
                 .setPlaceholder('200')
                 .setValue(this.plugin.settings.formulaNodeHeight.toString())
@@ -106,10 +105,10 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        containerEl.createEl('h3', {text: 'Node Spacing'});
+        new Setting(containerEl).setName('Node spacing').setHeading();
 
         new Setting(containerEl)
-            .setName('Horizontal Spacing')
+            .setName('Horizontal spacing')
             .setDesc('The horizontal distance between parent and child nodes.')
             .addText(text => text
                 .setPlaceholder('200')
@@ -120,7 +119,7 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
-            .setName('Vertical Spacing')
+            .setName('Vertical spacing')
             .setDesc('The vertical distance between sibling nodes.')
             .addText(text => text
                 .setPlaceholder('40')
@@ -130,10 +129,10 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        containerEl.createEl('h3', {text: 'Collapse Button'});
+        new Setting(containerEl).setName('Collapse button').setHeading();
 
         new Setting(containerEl)
-            .setName('Collapse Button Color')
+            .setName('Collapse button color')
             .setDesc('The color of the collapse button for all states.')
             .addColorPicker(color => color
                 .setValue(this.plugin.settings.collapseButtonColor)
@@ -143,11 +142,10 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     this.plugin.updateCollapseButtonColor();
                 }));
 
-        // Debug Settings Section
-        containerEl.createEl('h3', {text: 'Debug Settings'});
+        new Setting(containerEl).setName('Debug').setHeading();
 
         new Setting(containerEl)
-            .setName('Enable Debug Logging')
+            .setName('Enable debug logging')
             .setDesc('Enable detailed logging for debugging purposes. Logs will appear in the developer console.')
             .addToggle(toggle => toggle
                 .setValue(this.plugin.settings.enableDebugLogging)

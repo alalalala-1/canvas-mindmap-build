@@ -3,14 +3,60 @@ import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
 
+type FloatingNodeMetadata = {
+    isFloating?: boolean;
+    originalParent?: string;
+    floatingTimestamp?: number;
+};
+
+type CanvasNodeLike = {
+    id?: string;
+    text?: string;
+    height?: number;
+    nodeEl?: HTMLElement;
+    data?: FloatingNodeMetadata;
+};
+
+type EdgeEndpointLike = {
+    nodeId?: string;
+    node?: { id?: string };
+};
+
+type EdgeLike = {
+    from?: unknown;
+    to?: unknown;
+    fromNode?: string;
+    toNode?: string;
+};
+
+type CanvasDataLike = {
+    nodes?: CanvasNodeLike[];
+    edges?: EdgeLike[];
+    metadata?: {
+        floatingNodes?: Record<string, unknown>;
+    };
+};
+
+type CanvasFileDataLike = {
+    nodes?: CanvasNodeLike[];
+    edges?: EdgeLike[];
+};
+
+type CanvasLike = {
+    nodes?: Map<string, CanvasNodeLike> | Record<string, CanvasNodeLike>;
+    edges?: Map<string, EdgeLike> | EdgeLike[];
+    fileData?: CanvasFileDataLike;
+    file?: { path?: string };
+};
+
 export interface LayoutData {
-    visibleNodes: Map<string, any>;
-    allNodes: Map<string, any>; // 内存中的所有节点
-    edges: any[];               // 内存中的所有边
-    originalEdges: any[];       // 文件中的所有边
-    canvasData: any;            // 画布完整数据
-    floatingNodes: Set<string>; // 浮动节点 ID 集合
-    canvasFilePath: string;     // 画布文件路径
+    visibleNodes: Map<string, CanvasNodeLike>;
+    allNodes: Map<string, CanvasNodeLike>;
+    edges: EdgeLike[];
+    originalEdges: EdgeLike[];
+    canvasData: CanvasDataLike | null;
+    floatingNodes: Set<string>;
+    canvasFilePath: string;
 }
 
 /**
@@ -31,12 +77,12 @@ export class LayoutDataProvider {
     /**
      * 获取布局所需的所有数据
      */
-    async getLayoutData(canvas: any): Promise<LayoutData | null> {
-        if (!canvas) return null;
+    async getLayoutData(canvas: unknown): Promise<LayoutData | null> {
+        if (!this.isRecord(canvas)) return null;
+        const canvasLike = canvas as CanvasLike;
 
-        const allNodes = canvas.nodes instanceof Map ? canvas.nodes : new Map(Object.entries(canvas.nodes));
-        const edges = canvas.edges instanceof Map ? Array.from(canvas.edges.values()) : 
-                     Array.isArray(canvas.edges) ? canvas.edges : [];
+        const allNodes = this.getCanvasNodes(canvasLike);
+        const edges = this.getCanvasEdges(canvasLike);
 
         if (!allNodes || allNodes.size === 0) return null;
 
@@ -44,25 +90,27 @@ export class LayoutDataProvider {
         if (visibleNodeIds.size === 0) return null;
 
         // 过滤可见边：只保留两个端点都可见的边
-        const visibleEdges = edges.filter((edge: any) => {
-            const fromId = this.getNodeIdFromEdgeEndpoint(edge?.from);
-            const toId = this.getNodeIdFromEdgeEndpoint(edge?.to);
+        const visibleEdges = edges.filter((edge) => {
+            const fromId = this.getNodeIdFromEdgeEndpoint(edge.from);
+            const toId = this.getNodeIdFromEdgeEndpoint(edge.to);
             return fromId && toId && visibleNodeIds.has(fromId) && visibleNodeIds.has(toId);
         });
 
         let originalEdges = edges;
-        let fileNodes = new Map<string, any>();
+        let fileNodes = new Map<string, CanvasNodeLike>();
         let floatingNodes = new Set<string>();
-        let canvasData: any = null;
-        const canvasFilePath = canvas.file?.path || (this.app.workspace.activeLeaf?.view as any).file?.path;
+        let canvasData: CanvasDataLike | null = null;
+        const canvasFilePath = canvasLike.file?.path || this.getActiveViewFilePath();
 
         if (canvasFilePath) {
             try {
                 canvasData = await this.canvasFileService.readCanvasData(canvasFilePath);
                 if (canvasData) {
                     const nodesList = this.canvasFileService.getNodes(canvasData);
-                    for (const node of nodesList) {
-                        if (node.id) fileNodes.set(node.id, node);
+                    if (Array.isArray(nodesList)) {
+                        for (const node of nodesList) {
+                            if (node?.id) fileNodes.set(node.id, node);
+                        }
                     }
                     originalEdges = this.canvasFileService.getEdges(canvasData);
                     floatingNodes = this.getValidatedFloatingNodes(canvasData, allNodes, originalEdges, edges);
@@ -72,14 +120,14 @@ export class LayoutDataProvider {
             }
         }
 
-        const visibleNodes = new Map<string, any>();
+        const visibleNodes = new Map<string, CanvasNodeLike>();
         let domHeightAppliedCount = 0;
         let domHeightMissingElCount = 0;
         let domHeightHiddenCount = 0;
         let domHeightZeroCount = 0;
         const domHeightDiffSamples: Array<{ id: string; domHeight: number; dataHeight: number }> = [];
         const heightSamples: Array<{ id: string; height: number }> = [];
-        allNodes.forEach((node: any, id: string) => {
+        allNodes.forEach((node, id) => {
             if (visibleNodeIds.has(id)) {
                 const fileNode = fileNodes.get(id);
                 const nodeText = fileNode?.text || node.text;
@@ -90,7 +138,7 @@ export class LayoutDataProvider {
                     text: nodeText
                 };
 
-                const nodeEl = node?.nodeEl as HTMLElement | undefined;
+                const nodeEl = node?.nodeEl;
                 if (nodeEl && nodeEl instanceof HTMLElement) {
                     const display = window.getComputedStyle(nodeEl).display;
                     if (display !== 'none') {
@@ -148,18 +196,20 @@ export class LayoutDataProvider {
     /**
      * 从边的端点获取节点 ID
      */
-    private getNodeIdFromEdgeEndpoint(endpoint: any): string | null {
+    private getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
         if (!endpoint) return null;
         if (typeof endpoint === 'string') return endpoint;
-        if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-        if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
+        if (!this.isRecord(endpoint)) return null;
+        const endpointLike = endpoint as EdgeEndpointLike;
+        if (typeof endpointLike.nodeId === 'string') return endpointLike.nodeId;
+        if (this.isRecord(endpointLike.node) && typeof endpointLike.node.id === 'string') return endpointLike.node.id;
         return null;
     }
 
     /**
      * 获取并验证浮动节点，同时清理 canvasData 中的无效标记
      */
-    private getValidatedFloatingNodes(canvasData: any, memoryNodes: Map<string, any>, originalEdges: any[], memoryEdges: any[]): Set<string> {
+    private getValidatedFloatingNodes(canvasData: CanvasDataLike, memoryNodes: Map<string, CanvasNodeLike>, originalEdges: EdgeLike[], memoryEdges: EdgeLike[]): Set<string> {
         const floatingNodes = new Set<string>();
         const floatingInfo = this.canvasFileService.getFloatingNodesInfo(canvasData);
         const floatingNodesToRemove: string[] = [];
@@ -170,17 +220,8 @@ export class LayoutDataProvider {
                 continue;
             }
 
-            const hasIncomingEdge = originalEdges.some((edge: any) => {
-                const toId = edge.to?.node?.id || edge.toNode || 
-                            (typeof edge.to === 'string' ? edge.to : null);
-                return toId === nodeId;
-            });
-
-            const hasIncomingMemoryEdge = memoryEdges.some((edge: any) => {
-                const toId = edge.to?.node?.id || edge.toNode || 
-                            (typeof edge.to === 'string' ? edge.to : null);
-                return toId === nodeId;
-            });
+            const hasIncomingEdge = originalEdges.some((edge) => this.getEdgeToNodeId(edge) === nodeId);
+            const hasIncomingMemoryEdge = memoryEdges.some((edge) => this.getEdgeToNodeId(edge) === nodeId);
 
             if (!hasIncomingEdge && !hasIncomingMemoryEdge) {
                 floatingNodes.add(nodeId);
@@ -197,8 +238,8 @@ export class LayoutDataProvider {
             if (canvasData?.metadata?.floatingNodes?.[nodeId]) {
                 delete canvasData.metadata.floatingNodes[nodeId];
             }
-            if (canvasData?.nodes) {
-                const nodeData = canvasData.nodes.find((n: any) => n.id === nodeId);
+            if (Array.isArray(canvasData?.nodes)) {
+                const nodeData = canvasData.nodes.find((n) => n?.id === nodeId);
                 if (nodeData?.data?.isFloating) {
                     delete nodeData.data.isFloating;
                     delete nodeData.data.originalParent;
@@ -218,5 +259,45 @@ export class LayoutDataProvider {
         }
 
         return floatingNodes;
+    }
+
+    private getEdgeToNodeId(edge: EdgeLike): string | null {
+        const nodeId = this.getNodeIdFromEdgeEndpoint(edge.to);
+        if (nodeId) return nodeId;
+        return typeof edge.toNode === 'string' ? edge.toNode : null;
+    }
+
+    private getCanvasNodes(canvas: CanvasLike): Map<string, CanvasNodeLike> {
+        if (canvas.nodes instanceof Map) {
+            return canvas.nodes;
+        }
+        if (canvas.nodes && this.isRecord(canvas.nodes)) {
+            return new Map(Object.entries(canvas.nodes) as Array<[string, CanvasNodeLike]>);
+        }
+        return new Map();
+    }
+
+    private getCanvasEdges(canvas: CanvasLike): EdgeLike[] {
+        if (canvas.edges instanceof Map) {
+            return Array.from(canvas.edges.values());
+        }
+        if (Array.isArray(canvas.edges)) {
+            return canvas.edges;
+        }
+        return [];
+    }
+
+    private getActiveViewFilePath(): string | null {
+        const activeLeaf = this.app.workspace.activeLeaf;
+        const activeView = activeLeaf?.view;
+        if (activeView instanceof ItemView && this.isRecord(activeView)) {
+            const file = (activeView as unknown as { file?: { path?: string } }).file;
+            if (file?.path) return file.path;
+        }
+        return null;
+    }
+
+    private isRecord(value: unknown): value is Record<string, unknown> {
+        return typeof value === 'object' && value !== null;
     }
 }

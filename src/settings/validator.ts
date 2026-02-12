@@ -8,60 +8,61 @@ import { log } from '../utils/logger';
 /**
  * 验证设置数据
  */
-export function validateSettings(data: any): Partial<CanvasMindmapBuildSettings> {
+export function validateSettings(data: unknown): Partial<CanvasMindmapBuildSettings> {
+    const dataObj = (data && typeof data === 'object') ? (data as Record<string, unknown>) : {};
     const validated: Partial<CanvasMindmapBuildSettings> = {};
 
     // 验证 Canvas 文件路径
-    if (typeof data.canvasFilePath === 'string') {
-        validated.canvasFilePath = data.canvasFilePath;
+    if (typeof dataObj.canvasFilePath === 'string') {
+        validated.canvasFilePath = dataObj.canvasFilePath;
     }
 
     // 验证文本节点设置
-    if (typeof data.enableTextAutoSize === 'boolean') {
-        validated.enableTextAutoSize = data.enableTextAutoSize;
+    if (typeof dataObj.enableTextAutoSize === 'boolean') {
+        validated.enableTextAutoSize = dataObj.enableTextAutoSize;
     }
-    if (typeof data.textNodeWidth === 'number' && data.textNodeWidth > 0) {
-        validated.textNodeWidth = data.textNodeWidth;
+    if (typeof dataObj.textNodeWidth === 'number' && dataObj.textNodeWidth > 0) {
+        validated.textNodeWidth = dataObj.textNodeWidth;
     }
-    if (typeof data.textNodeMaxHeight === 'number' && data.textNodeMaxHeight > 0) {
-        validated.textNodeMaxHeight = data.textNodeMaxHeight;
+    if (typeof dataObj.textNodeMaxHeight === 'number' && dataObj.textNodeMaxHeight > 0) {
+        validated.textNodeMaxHeight = dataObj.textNodeMaxHeight;
     }
 
     // 验证图片节点设置
-    if (typeof data.imageNodeWidth === 'number' && data.imageNodeWidth > 0) {
-        validated.imageNodeWidth = data.imageNodeWidth;
+    if (typeof dataObj.imageNodeWidth === 'number' && dataObj.imageNodeWidth > 0) {
+        validated.imageNodeWidth = dataObj.imageNodeWidth;
     }
-    if (typeof data.imageNodeHeight === 'number' && data.imageNodeHeight > 0) {
-        validated.imageNodeHeight = data.imageNodeHeight;
+    if (typeof dataObj.imageNodeHeight === 'number' && dataObj.imageNodeHeight > 0) {
+        validated.imageNodeHeight = dataObj.imageNodeHeight;
     }
 
     // 验证公式节点设置
-    if (typeof data.enableFormulaDetection === 'boolean') {
-        validated.enableFormulaDetection = data.enableFormulaDetection;
+    if (typeof dataObj.enableFormulaDetection === 'boolean') {
+        validated.enableFormulaDetection = dataObj.enableFormulaDetection;
     }
-    if (typeof data.formulaNodeWidth === 'number' && data.formulaNodeWidth > 0) {
-        validated.formulaNodeWidth = data.formulaNodeWidth;
+    if (typeof dataObj.formulaNodeWidth === 'number' && dataObj.formulaNodeWidth > 0) {
+        validated.formulaNodeWidth = dataObj.formulaNodeWidth;
     }
-    if (typeof data.formulaNodeHeight === 'number' && data.formulaNodeHeight > 0) {
-        validated.formulaNodeHeight = data.formulaNodeHeight;
+    if (typeof dataObj.formulaNodeHeight === 'number' && dataObj.formulaNodeHeight > 0) {
+        validated.formulaNodeHeight = dataObj.formulaNodeHeight;
     }
 
     // 验证间距设置
-    if (typeof data.horizontalSpacing === 'number' && data.horizontalSpacing > 0) {
-        validated.horizontalSpacing = data.horizontalSpacing;
+    if (typeof dataObj.horizontalSpacing === 'number' && dataObj.horizontalSpacing > 0) {
+        validated.horizontalSpacing = dataObj.horizontalSpacing;
     }
-    if (typeof data.verticalSpacing === 'number' && data.verticalSpacing > 0) {
-        validated.verticalSpacing = data.verticalSpacing;
+    if (typeof dataObj.verticalSpacing === 'number' && dataObj.verticalSpacing > 0) {
+        validated.verticalSpacing = dataObj.verticalSpacing;
     }
 
     // 验证折叠按钮颜色
-    if (typeof data.collapseButtonColor === 'string' && isValidColor(data.collapseButtonColor)) {
-        validated.collapseButtonColor = data.collapseButtonColor;
+    if (typeof dataObj.collapseButtonColor === 'string' && isValidColor(dataObj.collapseButtonColor)) {
+        validated.collapseButtonColor = dataObj.collapseButtonColor;
     }
 
     // 验证调试设置
-    if (typeof data.enableDebugLogging === 'boolean') {
-        validated.enableDebugLogging = data.enableDebugLogging;
+    if (typeof dataObj.enableDebugLogging === 'boolean') {
+        validated.enableDebugLogging = dataObj.enableDebugLogging;
     }
 
     return validated;

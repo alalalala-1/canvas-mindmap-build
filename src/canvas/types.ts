@@ -41,8 +41,8 @@ export interface Canvas {
     reload(): void;
     requestSave(): void;
     requestUpdate(): void;
-    on(event: string, callback: Function): void;
-    off?(event: string, callback: Function): void;
+    on(event: string, callback: (...args: unknown[]) => void): void;
+    off?(event: string, callback: (...args: unknown[]) => void): void;
 }
 
 export interface CanvasView {

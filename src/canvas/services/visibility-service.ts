@@ -1,6 +1,17 @@
 import { CollapseStateManager } from '../../state/collapse-state';
 import { log } from '../../utils/logger';
 
+type NodeLike = {
+    id?: string;
+};
+
+type EdgeLike = {
+    from?: unknown;
+    to?: unknown;
+    fromNode?: string;
+    toNode?: string;
+};
+
 /**
  * 可见性服务 - 负责计算 Canvas 中哪些节点和边是可见的
  * 主要处理折叠状态导致的节点隐藏逻辑
@@ -18,15 +29,16 @@ export class VisibilityService {
      * @param edges Canvas 中的所有边
      * @returns 可见节点 ID 的 Set
      */
-    getVisibleNodeIds(nodes: Map<string, any> | any[], edges: any[]): Set<string> {
+    getVisibleNodeIds(nodes: Map<string, NodeLike> | NodeLike[], edges: EdgeLike[]): Set<string> {
         const visibleNodeIds = new Set<string>();
         const allNodeIds = new Set<string>();
 
         if (nodes instanceof Map) {
             nodes.forEach((_, id) => allNodeIds.add(id));
         } else if (Array.isArray(nodes)) {
-            nodes.forEach(node => {
-                if (node.id) allNodeIds.add(node.id);
+            nodes.forEach((node) => {
+                const nodeId = this.getNodeId(node);
+                if (nodeId) allNodeIds.add(nodeId);
             });
         }
 
@@ -56,7 +68,7 @@ export class VisibilityService {
      * @param edges Canvas 中的所有边
      * @returns 是否可见
      */
-    isNodeVisible(nodeId: string, edges: any[]): boolean {
+    isNodeVisible(nodeId: string, edges: EdgeLike[]): boolean {
         const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
         
         // 检查该节点是否是任何折叠节点的后代
@@ -69,5 +81,9 @@ export class VisibilityService {
         }
 
         return true;
+    }
+
+    private getNodeId(node: NodeLike): string | null {
+        return typeof node.id === 'string' ? node.id : null;
     }
 }
