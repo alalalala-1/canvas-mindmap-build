@@ -425,7 +425,7 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move' as any, (node: unknown) => {
-                this.canvasManager.syncHiddenChildrenOnDrag(node);
+                this.canvasManager.syncHiddenChildrenOnDrag(node as CanvasNodeLike);
             })
         );
 

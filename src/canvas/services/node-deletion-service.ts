@@ -85,8 +85,8 @@ export class NodeDeletionService {
                 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                     data.nodes = data.nodes?.filter(n => n.id !== nodeId) || [];
                     data.edges = data.edges?.filter(e => {
-                        const fromId = getEdgeFromNodeId(e as any);
-                        const toId = getEdgeToNodeId(e as any);
+                        const fromId = getEdgeFromNodeId(e);
+                        const toId = getEdgeToNodeId(e);
                         return fromId !== nodeId && toId !== nodeId;
                     }) || [];
                     data.edges?.push(...newEdges);
@@ -96,8 +96,8 @@ export class NodeDeletionService {
                 await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                     data.nodes = data.nodes?.filter(n => n.id !== nodeId) || [];
                     data.edges = data.edges?.filter(e => {
-                        const fromId = getEdgeFromNodeId(e as any);
-                        const toId = getEdgeToNodeId(e as any);
+                        const fromId = getEdgeFromNodeId(e);
+                        const toId = getEdgeToNodeId(e);
                         return fromId !== nodeId && toId !== nodeId;
                     }) || [];
                     return true;
@@ -143,8 +143,8 @@ export class NodeDeletionService {
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 data.nodes = data.nodes?.filter(n => n.id && !nodesToDelete.has(n.id)) || [];
                 data.edges = data.edges?.filter(e => {
-                    const fromId = getEdgeFromNodeId(e as any);
-                    const toId = getEdgeToNodeId(e as any);
+                    const fromId = getEdgeFromNodeId(e);
+                    const toId = getEdgeToNodeId(e);
                     return !nodesToDelete.has(fromId || '') && !nodesToDelete.has(toId || '');
                 }) || [];
                 return true;
@@ -162,9 +162,9 @@ export class NodeDeletionService {
     }
 
     private reloadCanvas(canvas: CanvasLike): void {
-        const canvasAny = canvas as any;
-        if (typeof canvasAny.reload === 'function') {
-            canvasAny.reload();
+        const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
+        if (typeof canvasWithReload.reload === 'function') {
+            canvasWithReload.reload();
         } else if (typeof canvas.requestUpdate === 'function') {
             canvas.requestUpdate();
         } else if (typeof canvas.requestSave === 'function') {
@@ -174,8 +174,7 @@ export class NodeDeletionService {
     }
 
     private getEdgesFromCanvas(canvas: CanvasLike): CanvasEdgeLike[] {
-        const canvasAny = canvas as any;
-        if (canvasAny.fileData?.edges) return canvasAny.fileData.edges as CanvasEdgeLike[];
+        if (canvas.fileData?.edges) return canvas.fileData.edges as CanvasEdgeLike[];
         return getEdgesFromCanvas(canvas);
     }
 
@@ -185,8 +184,8 @@ export class NodeDeletionService {
 
     private findParentNode(nodeId: string, edges: CanvasEdgeLike[], allNodes: CanvasNodeLike[]): CanvasNodeLike | null {
         for (const edge of edges) {
-            const fromId = getEdgeFromNodeId(edge as any);
-            const toId = getEdgeToNodeId(edge as any);
+            const fromId = getEdgeFromNodeId(edge);
+            const toId = getEdgeToNodeId(edge);
 
             if (toId === nodeId && fromId) {
                 const parentNode = allNodes.find(n => n.id === fromId);
@@ -204,7 +203,8 @@ export class NodeDeletionService {
             log(`[Delete] canvasManager 未设置，尝试从视图获取`);
             const canvasView = this.getCanvasView();
             if (canvasView) {
-                const canvasManager = (canvasView as any).plugin?.canvasManager;
+                const viewWithPlugin = canvasView as ItemView & { plugin?: { canvasManager?: ICanvasManager } };
+                const canvasManager = viewWithPlugin.plugin?.canvasManager;
                 if (canvasManager) {
                     canvasManager.checkAndAddCollapseButtons();
                 }

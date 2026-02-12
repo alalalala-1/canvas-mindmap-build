@@ -8,7 +8,7 @@ export interface ICanvasManager {
     checkAndAddCollapseButtons(): Promise<void>;
     adjustNodeHeightAfterRender(nodeId: string): Promise<void>;
     toggleNodeCollapse(nodeId: string): Promise<void>;
-    syncHiddenChildrenOnDrag(node: unknown): Promise<void>;
+    syncHiddenChildrenOnDrag(node: CanvasNodeLike): Promise<void>;
     calculateTextNodeHeight(content: string, nodeEl?: Element): number;
     readonly collapseStateManager: CollapseStateManager;
 }
@@ -87,6 +87,7 @@ export type CanvasNodeLike = {
     prevX?: number;
     prevY?: number;
     color?: string;
+    unknownData?: Record<string, unknown>;
 };
 
 export type EdgeEndpoint = {
@@ -167,7 +168,18 @@ export type MarkdownViewLike = {
     editor?: {
         setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => void;
         scrollIntoView: (range: { from: { line: number; ch: number }; to: { line: number; ch: number } }, center?: boolean) => void;
+        listSelections?: () => Array<{ anchor: { line: number; ch: number }; head: { line: number; ch: number } }>;
     };
+};
+
+export type EditorWithSelection = {
+    editor?: {
+        listSelections?: () => Array<{ anchor: { line: number; ch: number }; head: { line: number; ch: number } }>;
+    };
+};
+
+export type PluginWithLastClicked = {
+    lastClickedNodeId?: string;
 };
 
 export type CanvasEventMap = {

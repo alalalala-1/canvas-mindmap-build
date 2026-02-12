@@ -84,6 +84,77 @@ export class LayoutManager {
         }, CONSTANTS.TIMING.ARRANGE_DEBOUNCE);
     }
 
+    private getLayoutSettings(): CanvasArrangerSettings {
+        return {
+            horizontalSpacing: this.settings.horizontalSpacing,
+            verticalSpacing: this.settings.verticalSpacing,
+            textNodeWidth: this.settings.textNodeWidth,
+            textNodeMaxHeight: this.settings.textNodeMaxHeight,
+            imageNodeWidth: this.settings.imageNodeWidth,
+            imageNodeHeight: this.settings.imageNodeHeight,
+            formulaNodeWidth: this.settings.formulaNodeWidth,
+            formulaNodeHeight: this.settings.formulaNodeHeight,
+        };
+    }
+
+    private async updateNodePositions(
+        result: Map<string, { x: number; y: number }>,
+        allNodes: Map<string, CanvasNodeLike>,
+        canvas: CanvasLike
+    ): Promise<number> {
+        let updatedCount = 0;
+        for (const [nodeId, newPosition] of result.entries()) {
+            const node = allNodes.get(nodeId);
+            if (this.canSetData(node)) {
+                const currentData = node.getData ? node.getData() : {};
+                node.setData({
+                    ...currentData,
+                    x: newPosition.x,
+                    y: newPosition.y,
+                });
+                updatedCount++;
+            }
+        }
+
+        if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
+        if (typeof canvas.requestSave === 'function') canvas.requestSave();
+        return updatedCount;
+    }
+
+    private async triggerHeightAdjustment(skipAdjust: boolean): Promise<void> {
+        if (skipAdjust) return;
+
+        let adjustLogged = false;
+        let postAdjustScheduled = false;
+        const triggerAdjust = async () => {
+            if (!this.canvasManager) {
+                if (!adjustLogged) {
+                    log(`[Layout] 调整高度失败: 未找到管理器`);
+                    adjustLogged = true;
+                }
+                return;
+            }
+            if (!adjustLogged) {
+                log(`[Layout] 调整高度触发`);
+                adjustLogged = true;
+            }
+            await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+            });
+            const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
+            if (adjustedCount > 0 && !postAdjustScheduled) {
+                postAdjustScheduled = true;
+                setTimeout(() => {
+                    void this.performArrange(true);
+                }, 0);
+            }
+        };
+
+        void triggerAdjust();
+        setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
+        setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL);
+    }
+
     private async performArrange(skipAdjust: boolean = false) {
         const activeView = getCanvasView(this.app);
 
@@ -110,21 +181,10 @@ export class LayoutManager {
 
             log(`[Layout] 整理: ${visibleNodes.size} 节点, ${edges.length} 边`);
 
-            const layoutSettings: CanvasArrangerSettings = {
-                horizontalSpacing: this.settings.horizontalSpacing,
-                verticalSpacing: this.settings.verticalSpacing,
-                textNodeWidth: this.settings.textNodeWidth,
-                textNodeMaxHeight: this.settings.textNodeMaxHeight,
-                imageNodeWidth: this.settings.imageNodeWidth,
-                imageNodeHeight: this.settings.imageNodeHeight,
-                formulaNodeWidth: this.settings.formulaNodeWidth,
-                formulaNodeHeight: this.settings.formulaNodeHeight,
-            };
-
             const result = originalArrangeLayout(
                 visibleNodes,
                 edges,
-                layoutSettings,
+                this.getLayoutSettings(),
                 originalEdges,
                 allNodes,
                 canvasData || undefined
@@ -134,7 +194,6 @@ export class LayoutManager {
 
             const memoryEdges = this.getCanvasEdges(canvas);
 
-            let updatedCount = 0;
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 const canvasData = data as CanvasDataLike;
                 if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
@@ -172,55 +231,12 @@ export class LayoutManager {
                 return changed;
             });
 
+            let updatedCount = 0;
             if (success) {
-                for (const [nodeId, newPosition] of result.entries()) {
-                    const node = allNodes.get(nodeId);
-                    if (this.canSetData(node)) {
-                        const currentData = node.getData ? node.getData() : {};
-                        node.setData({
-                            ...currentData,
-                            x: newPosition.x,
-                            y: newPosition.y,
-                        });
-                        updatedCount++;
-                    }
-                }
-
-                if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
-                if (typeof canvas.requestSave === 'function') canvas.requestSave();
+                updatedCount = await this.updateNodePositions(result, allNodes, canvas);
             }
 
-            if (!skipAdjust) {
-                let adjustLogged = false;
-                let postAdjustScheduled = false;
-                const triggerAdjust = async () => {
-                    if (!this.canvasManager) {
-                        if (!adjustLogged) {
-                            log(`[Layout] 调整高度失败: 未找到管理器`);
-                            adjustLogged = true;
-                        }
-                        return;
-                    }
-                    if (!adjustLogged) {
-                        log(`[Layout] 调整高度触发`);
-                        adjustLogged = true;
-                    }
-                    await new Promise<void>((resolve) => {
-                        requestAnimationFrame(() => resolve());
-                    });
-                    const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
-                    if (adjustedCount > 0 && !postAdjustScheduled) {
-                        postAdjustScheduled = true;
-                        setTimeout(() => {
-                            void this.performArrange(true);
-                        }, 0);
-                    }
-                };
-
-                void triggerAdjust();
-                setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
-                setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL);
-            }
+            await this.triggerHeightAdjustment(skipAdjust);
 
             await this.cleanupStaleFloatingNodes(canvas, allNodes);
             await this.reapplyFloatingNodeStyles(canvas);
@@ -234,6 +250,110 @@ export class LayoutManager {
         }
     }
 
+    private collectHiddenNodeIds(
+        nodes: Map<string, CanvasNodeLike>,
+        edges: CanvasEdgeLike[],
+        canvasData: CanvasDataLike
+    ): Set<string> {
+        const allCollapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
+        const allHiddenNodeIds = new Set<string>();
+        
+        for (const collapsedId of allCollapsedNodes) {
+            if (!nodes.has(collapsedId)) continue;
+            this.collapseStateManager.addAllDescendantsToSet(collapsedId, edges, allHiddenNodeIds);
+        }
+        
+        if (canvasData?.metadata?.floatingNodes) {
+            for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
+                let isFloating = false;
+                let originalParent = '';
+                if (typeof info === 'boolean') {
+                    isFloating = info;
+                } else if (typeof info === 'object' && info !== null) {
+                    const infoRecord = info as FloatingNodeMetadata;
+                    isFloating = infoRecord.isFloating === true;
+                    originalParent = infoRecord.originalParent || '';
+                }
+                
+                if (isFloating && originalParent && allCollapsedNodes.has(originalParent)) {
+                    allHiddenNodeIds.add(floatingNodeId);
+                }
+            }
+        }
+        
+        return allHiddenNodeIds;
+    }
+
+    private applyVisibilityToNodes(nodes: Map<string, CanvasNodeLike>, hiddenIds: Set<string>): void {
+        nodes.forEach((node, id) => {
+            if (node?.nodeEl) {
+                const shouldHide = hiddenIds.has(id);
+                (node.nodeEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+            }
+        });
+    }
+
+    private applyVisibilityToEdges(edges: CanvasEdgeLike[], hiddenIds: Set<string>): void {
+        for (const edge of edges) {
+            const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
+            const toId = getNodeIdFromEdgeEndpoint(edge?.to);
+            const shouldHide = (fromId && hiddenIds.has(fromId)) || (toId && hiddenIds.has(toId));
+            if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+            if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+        }
+    }
+
+    private calculateAnchorOffset(
+        nodeId: string,
+        nodes: Map<string, CanvasNodeLike>,
+        newLayout: Map<string, { x: number; y: number }>
+    ): { offsetX: number; offsetY: number } {
+        const anchorNode = nodes.get(nodeId);
+        const anchorLayout = newLayout.get(nodeId);
+        const anchorX = anchorNode && typeof anchorNode.x === 'number' ? anchorNode.x : 0;
+        const anchorY = anchorNode && typeof anchorNode.y === 'number' ? anchorNode.y : 0;
+        return {
+            offsetX: anchorLayout ? anchorX - anchorLayout.x : 0,
+            offsetY: anchorLayout ? anchorY - anchorLayout.y : 0,
+        };
+    }
+
+    private async updateNodePositionsWithOffset(
+        newLayout: Map<string, { x: number; y: number }>,
+        nodes: Map<string, CanvasNodeLike>,
+        offsetX: number,
+        offsetY: number
+    ): Promise<number> {
+        let updatedCount = 0;
+        for (const [targetNodeId, newPosition] of newLayout.entries()) {
+            const node = nodes.get(targetNodeId);
+            if (node) {
+                const targetX = isNaN(newPosition.x) ? 0 : newPosition.x + offsetX;
+                const targetY = isNaN(newPosition.y) ? 0 : newPosition.y + offsetY;
+
+                const nodeX = typeof node.x === 'number' ? node.x : 0;
+                const nodeY = typeof node.y === 'number' ? node.y : 0;
+                if (Math.abs(nodeX - targetX) > 0.5 || Math.abs(nodeY - targetY) > 0.5) {
+                    if (typeof node.setData === 'function') {
+                        const currentData = node.getData ? node.getData() : {};
+                        node.setData({
+                            ...currentData,
+                            x: targetX,
+                            y: targetY,
+                        });
+                        updatedCount++;
+                    } else {
+                        node.x = targetX;
+                        node.y = targetY;
+                        if (typeof node.update === 'function') node.update();
+                        updatedCount++;
+                    }
+                }
+            }
+        }
+        return updatedCount;
+    }
+
     /**
      * 在折叠/展开节点后自动整理布局
      * 修复：考虑所有已折叠的节点，而不仅仅是当前操作的节点
@@ -241,69 +361,22 @@ export class LayoutManager {
     async autoArrangeAfterToggle(nodeId: string, canvas: CanvasLike, isCollapsing: boolean = true) {
         if (!canvas) return;
 
-        // 获取所有节点和边
         const nodes = this.getCanvasNodes(canvas);
         const edges = canvas.fileData?.edges || this.getCanvasEdges(canvas);
 
         if (!nodes || nodes.size === 0) return;
 
         try {
-            // 获取所有已折叠的节点（从全局状态）
-            const allCollapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
-            log(`[Layout] Toggle: 当前操作=${nodeId}, 已折叠=${Array.from(allCollapsedNodes).join(',')}`);
+            log(`[Layout] Toggle: 当前操作=${nodeId}, 已折叠=${Array.from(this.collapseStateManager.getAllCollapsedNodes()).join(',')}`);
 
-            // 计算所有需要隐藏的节点（所有已折叠节点的后代）
-            const allHiddenNodeIds = new Set<string>();
-            
-            for (const collapsedId of allCollapsedNodes) {
-                // 检查节点是否仍然存在（可能已被删除）
-                if (!nodes.has(collapsedId)) continue;
-                
-                this.collapseStateManager.addAllDescendantsToSet(collapsedId, edges, allHiddenNodeIds);
-            }
-            
-            // 也添加浮动子树节点
             const canvasData = (canvas.fileData || canvas) as CanvasDataLike;
-            if (canvasData?.metadata?.floatingNodes) {
-                for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
-                    let isFloating = false;
-                    let originalParent = '';
-                    if (typeof info === 'boolean') {
-                        isFloating = info;
-                    } else if (typeof info === 'object' && info !== null) {
-                        const infoRecord = info as FloatingNodeMetadata;
-                        isFloating = infoRecord.isFloating === true;
-                        originalParent = infoRecord.originalParent || '';
-                    }
-                    
-                    // 如果原父节点已折叠，添加浮动节点到隐藏集合
-                    if (isFloating && originalParent && allCollapsedNodes.has(originalParent)) {
-                        allHiddenNodeIds.add(floatingNodeId);
-                    }
-                }
-            }
+            const allHiddenNodeIds = this.collectHiddenNodeIds(nodes, edges, canvasData);
             
             log(`[Layout] Toggle: 需要隐藏 ${allHiddenNodeIds.size} 个节点`);
 
-            // 应用显示/隐藏
-            nodes.forEach((node, id) => {
-                if (node?.nodeEl) {
-                    const shouldHide = allHiddenNodeIds.has(id);
-                    (node.nodeEl as HTMLElement).style.display = shouldHide ? 'none' : '';
-                }
-            });
-            
-            // 应用边的显示/隐藏
-            for (const edge of edges) {
-                const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
-                const toId = getNodeIdFromEdgeEndpoint(edge?.to);
-                const shouldHide = (fromId && allHiddenNodeIds.has(fromId)) || 
-                                  (toId && allHiddenNodeIds.has(toId));
-                if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
-                if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
-            }
+            this.applyVisibilityToNodes(nodes, allHiddenNodeIds);
+            this.applyVisibilityToEdges(edges, allHiddenNodeIds);
 
-            // 获取布局数据
             const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
             if (!layoutData) {
                 log(`[Layout] Toggle: 无法获取布局数据`);
@@ -313,27 +386,15 @@ export class LayoutManager {
             const { visibleNodes, edges: visibleEdges, canvasData: finalCanvasData } = layoutData;
             log(`[Layout] Toggle: 可见节点=${visibleNodes.size}, 可见边=${visibleEdges.length}`);
 
-            // 如果可见节点太少，不需要布局
             if (visibleNodes.size <= 1) {
                 log(`[Layout] Toggle: 可见节点太少，跳过布局`);
                 return;
             }
             
-            const layoutSettings: CanvasArrangerSettings = {
-                horizontalSpacing: this.settings.horizontalSpacing,
-                verticalSpacing: this.settings.verticalSpacing,
-                textNodeWidth: this.settings.textNodeWidth,
-                textNodeMaxHeight: this.settings.textNodeMaxHeight,
-                imageNodeWidth: this.settings.imageNodeWidth,
-                imageNodeHeight: this.settings.imageNodeHeight,
-                formulaNodeWidth: this.settings.formulaNodeWidth,
-                formulaNodeHeight: this.settings.formulaNodeHeight,
-            };
-
             const newLayout = originalArrangeLayout(
                 visibleNodes, 
                 visibleEdges, 
-                layoutSettings, 
+                this.getLayoutSettings(), 
                 layoutData.originalEdges, 
                 layoutData.allNodes, 
                 finalCanvasData || canvasData
@@ -341,43 +402,9 @@ export class LayoutManager {
 
             if (!newLayout || newLayout.size === 0) return;
 
-            // 计算偏移量，保持当前操作节点的位置不变，避免整个画布跳动
-            const anchorNode = nodes.get(nodeId);
-            const anchorLayout = newLayout.get(nodeId);
-            const anchorX = anchorNode && typeof anchorNode.x === 'number' ? anchorNode.x : 0;
-            const anchorY = anchorNode && typeof anchorNode.y === 'number' ? anchorNode.y : 0;
-            const anchorOffsetX = anchorLayout ? anchorX - anchorLayout.x : 0;
-            const anchorOffsetY = anchorLayout ? anchorY - anchorLayout.y : 0;
+            const { offsetX, offsetY } = this.calculateAnchorOffset(nodeId, nodes, newLayout);
 
-            let updatedCount = 0;
-            for (const [targetNodeId, newPosition] of newLayout.entries()) {
-                // 不再限制在 subtreeIds 内，而是全局更新所有可见节点，防止重叠
-                const node = nodes.get(targetNodeId);
-                if (node) {
-                    const targetX = isNaN(newPosition.x) ? 0 : newPosition.x + anchorOffsetX;
-                    const targetY = isNaN(newPosition.y) ? 0 : newPosition.y + anchorOffsetY;
-
-                    // 只有当位置发生显著变化时才更新，减少对 Canvas 的操作
-                    const nodeX = typeof node.x === 'number' ? node.x : 0;
-                    const nodeY = typeof node.y === 'number' ? node.y : 0;
-                    if (Math.abs(nodeX - targetX) > 0.5 || Math.abs(nodeY - targetY) > 0.5) {
-                        if (typeof node.setData === 'function') {
-                            const currentData = node.getData ? node.getData() : {};
-                            node.setData({
-                                ...currentData,
-                                x: targetX,
-                                y: targetY,
-                            });
-                            updatedCount++;
-                        } else {
-                            node.x = targetX;
-                            node.y = targetY;
-                            if (typeof node.update === 'function') node.update();
-                            updatedCount++;
-                        }
-                    }
-                }
-            }
+            const updatedCount = await this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
 
             if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
             if (canvas.requestSave) canvas.requestSave();

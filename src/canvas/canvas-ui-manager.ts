@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { getCanvasView } from '../utils/canvas-utils';
 import { log } from '../utils/logger';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike } from './types';
 
 export class CanvasUIManager {
     private app: App;
@@ -28,7 +28,7 @@ export class CanvasUIManager {
             return;
         }
 
-        const canvas = (canvasView as any).canvas as CanvasLike;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) {
             log(`[UI] checkAndAddCollapseButtons: 无 canvas`);
             return;
@@ -130,7 +130,7 @@ export class CanvasUIManager {
     }
 
     private async addCollapseButton(nodeEl: Element, nodeId: string, edges: CanvasEdgeLike[]) {
-        const direction = this.collapseStateManager.getNodeDirection(nodeId, edges as any[]);
+        const direction = this.collapseStateManager.getNodeDirection(nodeId, edges);
         const computedStyle = window.getComputedStyle(nodeEl);
         if (computedStyle.position !== 'relative' && computedStyle.position !== 'absolute') {
             nodeEl.setAttribute('style', `position: relative; ${nodeEl.getAttribute('style') || ''}`);
@@ -201,7 +201,7 @@ export class CanvasUIManager {
 
         const canvasView = this.getCanvasView();
         if (canvasView) {
-            const canvas = (canvasView as any).canvas as CanvasLike;
+            const canvas = (canvasView as CanvasViewLike).canvas;
             if (canvas?.nodes) {
                 if (canvas.nodes instanceof Map) {
                     const node = canvas.nodes.get(nodeId);
@@ -218,7 +218,7 @@ export class CanvasUIManager {
         }
 
         const allNodeEls = document.querySelectorAll('.canvas-node');
-        const canvas = canvasView ? (canvasView as any).canvas as CanvasLike : null;
+        const canvas = canvasView ? (canvasView as CanvasViewLike).canvas ?? null : null;
         for (const el of Array.from(allNodeEls)) {
             const id = this.getNodeIdFromElement(el, canvas);
             if (id === nodeId) {

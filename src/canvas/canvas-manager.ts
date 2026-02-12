@@ -16,7 +16,7 @@ import {
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
-import { ICanvasManager } from './types';
+import { ICanvasManager, CanvasViewLike, CanvasNodeLike } from './types';
 
 export class CanvasManager implements ICanvasManager {
     private plugin: Plugin;
@@ -130,13 +130,13 @@ export class CanvasManager implements ICanvasManager {
         const canvasView = this.getCanvasView();
         if (!canvasView) return;
         
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) return;
 
         await this.layoutManager.toggleNodeCollapse(nodeId, canvas);
     }
 
-    public async syncHiddenChildrenOnDrag(node: any) {
+    public async syncHiddenChildrenOnDrag(node: CanvasNodeLike) {
         await this.layoutManager.syncHiddenChildrenOnDrag(node);
     }
 
@@ -149,7 +149,7 @@ export class CanvasManager implements ICanvasManager {
         const canvasView = this.getCanvasView();
         if (!canvasView) return;
 
-        const canvas = (canvasView as any).canvas;
+        const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) return;
 
         // 使用新的服务强制检测边变化

@@ -1,5 +1,6 @@
 import { log } from '../utils/logger';
 import { getEdgeFromNodeId, getEdgeToNodeId } from '../utils/canvas-utils';
+import { CanvasEdgeLike } from '../canvas/types';
 
 export class CollapseStateManager {
     private collapsedNodes: Map<string, boolean> = new Map();
@@ -19,14 +20,14 @@ export class CollapseStateManager {
         return this.collapsedNodes.get(nodeId) === true;
     }
 
-    getChildNodes(nodeId: string, edges: unknown[]): string[] {
+    getChildNodes(nodeId: string, edges: CanvasEdgeLike[]): string[] {
         // 不使用缓存，因为边的内容可能变化但数量相同
         // 直接计算子节点
         const childIds: string[] = [];
 
         for (const e of edges) {
-            const fromId = getEdgeFromNodeId(e as any);
-            const toId = getEdgeToNodeId(e as any);
+            const fromId = getEdgeFromNodeId(e);
+            const toId = getEdgeToNodeId(e);
 
             if (fromId === nodeId && toId) {
                 childIds.push(toId);
@@ -40,11 +41,11 @@ export class CollapseStateManager {
         return value === 'left' || value === 'right' || value === 'top' || value === 'bottom';
     }
 
-    getNodeDirection(nodeId: string, edges: unknown[]): 'left' | 'right' | 'top' | 'bottom' | 'unknown' {
-        const outgoingEdges: unknown[] = [];
+    getNodeDirection(nodeId: string, edges: CanvasEdgeLike[]): 'left' | 'right' | 'top' | 'bottom' | 'unknown' {
+        const outgoingEdges: CanvasEdgeLike[] = [];
         
         for (const e of edges) {
-            const fromId = getEdgeFromNodeId(e as any);
+            const fromId = getEdgeFromNodeId(e);
             if (fromId === nodeId) {
                 outgoingEdges.push(e);
             }
@@ -82,7 +83,7 @@ export class CollapseStateManager {
     /**
      * 递归添加所有后代节点到集合中
      */
-    addAllDescendantsToSet(nodeId: string, edges: unknown[], targetSet: Set<string>) {
+    addAllDescendantsToSet(nodeId: string, edges: CanvasEdgeLike[], targetSet: Set<string>) {
         const childNodeIds = this.getChildNodes(nodeId, edges);
         for (const childId of childNodeIds) {
             if (!targetSet.has(childId)) {

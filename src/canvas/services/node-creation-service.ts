@@ -4,7 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
-import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager, EditorWithSelection, CanvasViewLike, PluginWithLastClicked } from '../types';
 
 export class NodeCreationService {
     private app: App;
@@ -84,8 +84,8 @@ export class NodeCreationService {
                 canvasData.edges!.push(newEdge);
                 
                 if (parentNode.id && this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id)) {
-                    (newNode as any).unknownData = {
-                        ...(newNode as any).unknownData,
+                    newNode.unknownData = {
+                        ...newNode.unknownData,
                         collapsedHide: true
                     };
                 }
@@ -147,8 +147,8 @@ export class NodeCreationService {
     }
 
     private addFromLink(node: CanvasNodeLike, sourceFile: TFile): void {
-        const editor = this.app.workspace.getActiveViewOfType(ItemView)?.leaf?.view as any;
-        if (editor?.editor) {
+        const editor = this.app.workspace.getActiveViewOfType(ItemView)?.leaf?.view as EditorWithSelection;
+        if (editor?.editor?.listSelections) {
             const selection = editor.editor.listSelections()?.[0];
             if (selection) {
                 const from = selection.anchor.line < selection.head.line ||
@@ -164,7 +164,7 @@ export class NodeCreationService {
                     if (node.type === 'text') {
                         node.text = (node.text || '') + `\n<!-- fromLink:${fromLinkJson} -->`;
                     } else {
-                        (node as any).color = `fromLink:${fromLinkJson}`;
+                        node.color = `fromLink:${fromLinkJson}`;
                     }
                 } catch (jsonError) {
                     log('[Create] 添加 fromLink 失败', jsonError);
@@ -179,7 +179,7 @@ export class NodeCreationService {
         const history = canvasData.canvasMindmapBuildHistory || [];
         if (nodes.length === 0) return null;
 
-        const lastClickedNodeId = (this.plugin as any).lastClickedNodeId;
+        const lastClickedNodeId = (this.plugin as PluginWithLastClicked).lastClickedNodeId;
         if (lastClickedNodeId) {
             const clickedNode = nodes.find(n => n.id === lastClickedNodeId);
             if (clickedNode) {
@@ -190,7 +190,7 @@ export class NodeCreationService {
 
         const canvasView = this.getCanvasView();
         if (canvasView) {
-            const canvas = (canvasView as any).canvas;
+            const canvas = (canvasView as CanvasViewLike).canvas;
             if (canvas?.selection) {
                 const selectedNodes = Array.from(canvas.selection.values()) as CanvasNodeLike[];
                 const firstSelected = selectedNodes[0];
@@ -223,7 +223,7 @@ export class NodeCreationService {
         }
 
         const nodesWithFromLink = nodes.filter(n => 
-            (n.text?.includes('<!-- fromLink:')) || ((n as any).color?.startsWith('fromLink:'))
+            (n.text?.includes('<!-- fromLink:')) || (n.color?.startsWith('fromLink:'))
         );
         if (nodesWithFromLink.length > 0) {
             const lastNode = nodesWithFromLink[nodesWithFromLink.length - 1];

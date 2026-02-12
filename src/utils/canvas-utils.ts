@@ -1,7 +1,7 @@
 import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
 import { CONSTANTS } from '../constants';
-import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike } from '../canvas/types';
+import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;
@@ -13,8 +13,8 @@ type CanvasDataEdge = {
     id?: string;
     fromNode?: string;
     toNode?: string;
-    from?: unknown;
-    to?: unknown;
+    from?: EdgeEndpoint;
+    to?: EdgeEndpoint;
 };
 
 type CanvasData = {
@@ -120,24 +120,20 @@ export function getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
  * 获取边的源节点 ID
  * 兼容 fileData.edges (fromNode) 和 canvas.edges (from)
  */
-export function getEdgeFromNodeId(edge: CanvasDataEdge | CanvasEdge | null | undefined): string | null {
+export function getEdgeFromNodeId(edge: CanvasEdgeLike | null | undefined): string | null {
     if (!edge) return null;
-    const fromNode = (edge as { fromNode?: string }).fromNode;
-    if (fromNode) return fromNode;
-    const from = (edge as { from?: unknown }).from;
-    return getNodeIdFromEdgeEndpoint(from);
+    if (edge.fromNode) return edge.fromNode;
+    return getNodeIdFromEdgeEndpoint(edge.from);
 }
 
 /**
  * 获取边的目标节点 ID
  * 兼容 fileData.edges (toNode) 和 canvas.edges (to)
  */
-export function getEdgeToNodeId(edge: CanvasDataEdge | CanvasEdge | null | undefined): string | null {
+export function getEdgeToNodeId(edge: CanvasEdgeLike | null | undefined): string | null {
     if (!edge) return null;
-    const toNode = (edge as { toNode?: string }).toNode;
-    if (toNode) return toNode;
-    const to = (edge as { to?: unknown }).to;
-    return getNodeIdFromEdgeEndpoint(to);
+    if (edge.toNode) return edge.toNode;
+    return getNodeIdFromEdgeEndpoint(edge.to);
 }
 
 /**
