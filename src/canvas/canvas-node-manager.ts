@@ -7,10 +7,8 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { EditTextModal } from '../ui/edit-modal';
 import { log } from '../utils/logger';
 import {
-    generateRandomId,
     getCanvasView,
-    getCurrentCanvasFilePath,
-    isFormulaContent
+    getCurrentCanvasFilePath
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager } from './types';
 
@@ -246,38 +244,6 @@ export class CanvasNodeManager {
         }
     }
 
-    async createNewNode(): Promise<void> {
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (!activeView) {
-            new Notice('请先打开一个文件');
-            return;
-        }
-
-        const editor = (activeView as any).editor;
-        if (!editor) {
-            new Notice('当前视图不支持文本选择');
-            return;
-        }
-
-        const selection = editor.getSelection();
-        if (!selection || selection.trim().length === 0) {
-            new Notice('请先选择要添加的文本');
-            return;
-        }
-
-        const sourceFile = (activeView as any).file;
-        if (!sourceFile) {
-            new Notice('无法获取当前文件');
-            return;
-        }
-
-        await this.addNodeToCanvas(selection, sourceFile);
-    }
-
-    async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
-        return this.nodeDeletionService.executeDeleteOperation(selectedNode, canvas);
-    }
-
     async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
         return this.nodeDeletionService.handleSingleDelete(node, canvas);
     }
@@ -476,13 +442,5 @@ export class CanvasNodeManager {
         const minHeight = 60;
 
         return Math.max(minHeight, Math.min(calculatedHeight, maxHeight));
-    }
-
-    async readCanvasData(filePath: string): Promise<CanvasDataLike | null> {
-        return this.canvasFileService.readCanvasData(filePath);
-    }
-
-    generateRandomId(): string {
-        return generateRandomId();
     }
 }

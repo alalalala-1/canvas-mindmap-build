@@ -11,10 +11,7 @@ import { EdgeDeletionService } from './services/edge-deletion-service';
 import { log } from '../utils/logger';
 import {
     getCanvasView,
-    getCurrentCanvasFilePath,
-    readCanvasData,
-    writeCanvasData,
-    isFormulaContent
+    getCurrentCanvasFilePath
 } from '../utils/canvas-utils';
 
 import { VisibilityService } from './services/visibility-service';
@@ -159,17 +156,6 @@ export class CanvasManager implements ICanvasManager {
         this.floatingNodeService.forceEdgeDetection(canvas);
     }
 
-    // =========================================================================
-    // 启动边变化检测轮询 - 当有浮动节点时调用
-    // =========================================================================
-    public startEdgeChangeDetectionForFloatingNodes(canvas: any) {
-        // 边变化检测已经在 FloatingNodeService.initialize 中启动
-        // 这里不需要重复启动
-    }
-
-    // =========================================================================
-    // 获取浮动节点服务
-    // =========================================================================
     public getFloatingNodeService(): FloatingNodeService {
         return this.floatingNodeService;
     }

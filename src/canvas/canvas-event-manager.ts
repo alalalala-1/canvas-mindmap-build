@@ -9,8 +9,7 @@ import { log } from '../utils/logger';
 import {
     getCanvasView,
     getCurrentCanvasFilePath,
-    getNodeIdFromEdgeEndpoint,
-    debounce
+    getNodeIdFromEdgeEndpoint
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike } from './types';
 
