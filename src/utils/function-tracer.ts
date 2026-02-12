@@ -17,46 +17,26 @@ function getIndent(): string {
 }
 
 /**
- * 格式化参数
- */
-function formatArgs(args: any[]): string {
-    if (args.length === 0) return '';
-    return args.map(arg => {
-        if (arg === null) return 'null';
-        if (arg === undefined) return 'undefined';
-        if (typeof arg === 'string') return `"${arg.substring(0, 50)}${arg.length > 50 ? '...' : ''}"`;
-        if (typeof arg === 'number') return String(arg);
-        if (typeof arg === 'boolean') return String(arg);
-        if (typeof arg === 'object') {
-            try {
-                const str = JSON.stringify(arg);
-                return str.length > 100 ? str.substring(0, 100) + '...' : str;
-            } catch (e) {
-                return '[Object]';
-            }
-        }
-        return String(arg);
-    }).join(', ');
-}
-
-/**
  * 格式化返回值
  */
-function formatResult(result: any): string {
+function formatResult(result: unknown): string {
     if (result === null) return 'null';
     if (result === undefined) return 'undefined';
     if (typeof result === 'string') return `"${result.substring(0, 50)}${result.length > 50 ? '...' : ''}"`;
     if (typeof result === 'number') return String(result);
     if (typeof result === 'boolean') return String(result);
+    if (typeof result === 'bigint') return result.toString();
+    if (typeof result === 'symbol') return result.toString();
+    if (typeof result === 'function') return '[Function]';
     if (typeof result === 'object') {
         try {
             const str = JSON.stringify(result);
             return str.length > 100 ? str.substring(0, 100) + '...' : str;
-        } catch (e) {
+        } catch {
             return '[Object]';
         }
     }
-    return String(result);
+    return '[Unknown]';
 }
 
 /**
@@ -65,7 +45,7 @@ function formatResult(result: any): string {
  * @param functionName 函数名
  * @param args 参数列表
  */
-export function traceEnter(className: string, functionName: string, ...args: any[]): void {
+export function traceEnter(className: string, functionName: string, ...args: unknown[]): void {
     // 彻底禁用追踪日志，防止大量刷屏
     return;
 }
@@ -76,7 +56,7 @@ export function traceEnter(className: string, functionName: string, ...args: any
  * @param functionName 函数名
  * @param result 返回值
  */
-export function traceExit(className: string, functionName: string, result?: any): void {
+export function traceExit(className: string, functionName: string, result?: unknown): void {
     // 彻底禁用追踪日志
     return;
 }
@@ -87,10 +67,10 @@ export function traceExit(className: string, functionName: string, result?: any)
  * @param functionName 函数名
  * @param error 错误对象
  */
-export function traceError(className: string, functionName: string, error: any): void {
+export function traceError(className: string, functionName: string, error: unknown): void {
     callDepth = Math.max(0, callDepth - 1);
     const indent = getIndent();
-    log(`${indent}✖ ${className}.${functionName} => ERROR: ${error}`);
+    log(`${indent}✖ ${className}.${functionName} => ERROR: ${formatResult(error)}`);
 }
 
 /**
@@ -100,7 +80,7 @@ export function traceError(className: string, functionName: string, error: any):
  * @param step 步骤描述
  * @param data 数据
  */
-export function traceStep(className: string, functionName: string, step: string, data?: any): void {
+export function traceStep(className: string, functionName: string, step: string, data?: unknown): void {
     const indent = getIndent();
     if (data !== undefined) {
         log(`${indent}  ${className}.${functionName}: ${step} | ${formatResult(data)}`);
@@ -113,21 +93,22 @@ export function traceStep(className: string, functionName: string, step: string,
  * 装饰器：自动跟踪函数调用
  * 使用方法：@traceMethod('ClassName')
  */
-export function traceMethod(className: string) {
-    return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+export function traceMethod<T extends (...args: unknown[]) => unknown>(className: string) {
+    return function (_target: object, propertyKey: string, descriptor: TypedPropertyDescriptor<T>) {
         const originalMethod = descriptor.value;
+        if (!originalMethod) return descriptor;
 
-        descriptor.value = async function (...args: any[]) {
+        descriptor.value = (async function (this: unknown, ...args: Parameters<T>): Promise<ReturnType<T>> {
             traceEnter(className, propertyKey, ...args);
             try {
-                const result = await originalMethod.apply(this, args);
+                const result = await originalMethod.apply(this, args) as ReturnType<T>;
                 traceExit(className, propertyKey, result);
                 return result;
             } catch (error) {
                 traceError(className, propertyKey, error);
                 throw error;
             }
-        };
+        }) as T;
 
         return descriptor;
     };

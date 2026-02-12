@@ -1,7 +1,7 @@
 /**
  * 安全的JSON解析函数
  */
-export function safeJsonParse(str: string, defaultValue: any = null): any {
+export function safeJsonParse<T>(str: string, defaultValue: T): T {
     if (!str) return defaultValue;
     
     // 检查是否是有效的JSON格式
@@ -11,8 +11,8 @@ export function safeJsonParse(str: string, defaultValue: any = null): any {
     }
     
     try {
-        return JSON.parse(str);
-    } catch (error) {
+        return JSON.parse(str) as T;
+    } catch {
         return defaultValue;
     }
 }

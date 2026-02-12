@@ -20,7 +20,7 @@ export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>
  * 核心日志函数 - 唯一出口
  * 格式：直接输出内容（代码中已有分类前缀如 [Layout]、[Event] 等）
  */
-export function log(...messages: any[]): void {
+export function log(...messages: unknown[]): void {
     if (!isLoggingEnabled) return;
 
     const body = messages.map(msg => {
@@ -32,21 +32,27 @@ export function log(...messages: any[]): void {
                     return `${msg.name}: ${msg.message}\n${msg.stack}`;
                 }
                 return JSON.stringify(msg);
-            } catch (e) {
+            } catch {
                 return '[Complex Object]';
             }
         }
-        return String(msg);
+        if (typeof msg === 'string') return msg;
+        if (typeof msg === 'number') return String(msg);
+        if (typeof msg === 'boolean') return String(msg);
+        if (typeof msg === 'bigint') return msg.toString();
+        if (typeof msg === 'symbol') return msg.toString();
+        if (typeof msg === 'function') return '[Function]';
+        return '[Unknown]';
     }).join(' ');
 
-    console.log(body);
+    console.debug(body);
 }
 
 /**
  * 关键日志函数 - 始终输出（用于浮动节点等关键诊断）
  * 不受 enableDebugLogging 设置影响
  */
-export function logCritical(...messages: any[]): void {
+export function logCritical(...messages: unknown[]): void {
 
     const body = messages.map(msg => {
         if (msg === null) return 'null';
@@ -57,14 +63,20 @@ export function logCritical(...messages: any[]): void {
                     return `${msg.name}: ${msg.message}\n${msg.stack}`;
                 }
                 return JSON.stringify(msg);
-            } catch (e) {
+            } catch {
                 return '[Complex Object]';
             }
         }
-        return String(msg);
+        if (typeof msg === 'string') return msg;
+        if (typeof msg === 'number') return String(msg);
+        if (typeof msg === 'boolean') return String(msg);
+        if (typeof msg === 'bigint') return msg.toString();
+        if (typeof msg === 'symbol') return msg.toString();
+        if (typeof msg === 'function') return '[Function]';
+        return '[Unknown]';
     }).join(' ');
 
-    console.log(body);
+    console.warn(body);
 }
 
 // 为了保持兼容性，暂时保留这些导出，但内部全部指向 log
