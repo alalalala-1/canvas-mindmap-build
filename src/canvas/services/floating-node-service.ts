@@ -32,10 +32,16 @@ export class FloatingNodeService {
         this.canvasManager = canvasManager;
     }
 
+    /**
+     * 从Canvas获取指定节点
+     */
     private getNodeFromCanvas(nodeId: string): CanvasNodeLike | null {
         return getNodeFromCanvas(this.canvas, nodeId);
     }
 
+    /**
+     * 从Canvas获取所有边
+     */
     private getEdgesFromCanvas(): CanvasEdgeLike[] {
         if (!this.canvas) return [];
         let edges = getEdgesFromCanvas(this.canvas);
@@ -46,10 +52,16 @@ export class FloatingNodeService {
         return edges;
     }
 
+    /**
+     * 获取边的目标节点ID
+     */
     private getEdgeToNodeId(edge: CanvasEdgeLike): string | null {
         return getEdgeToNodeIdUtil(edge);
     }
 
+    /**
+     * 检查节点是否有入边
+     */
     private hasIncomingEdge(nodeId: string, edges: CanvasEdgeLike[]): boolean {
         return edges.some((edge) => {
             const toId = this.getEdgeToNodeId(edge);
@@ -57,6 +69,9 @@ export class FloatingNodeService {
         });
     }
 
+    /**
+     * 获取Canvas中所有节点ID
+     */
     private getCanvasNodeIds(canvas: CanvasLike | null | undefined): Set<string> {
         const nodeIds = new Set<string>();
         if (!canvas?.nodes) return nodeIds;
@@ -208,18 +223,27 @@ export class FloatingNodeService {
         return persistSuccess;
     }
 
+    /**
+     * 清除多个节点的浮动样式
+     */
     private clearFloatingStyles(nodeIds: string[]): void {
         for (const id of nodeIds) {
             this.styleManager.clearFloatingStyle(id);
         }
     }
 
+    /**
+     * 清除内存中的浮动状态缓存
+     */
     private clearFloatingMemory(filePath: string, nodeIds: string[]): void {
         for (const id of nodeIds) {
             this.stateManager.updateMemoryCache(filePath, id, null);
         }
     }
 
+    /**
+     * 清除Canvas节点数据中的浮动状态
+     */
     private clearFloatingCanvasData(nodeIds: string[], requestSave: boolean = true): void {
         if (!this.canvas) return;
         for (const id of nodeIds) {
@@ -236,6 +260,9 @@ export class FloatingNodeService {
         }
     }
 
+    /**
+     * 持久化清除浮动状态到文件
+     */
     private async persistClearFloatingState(nodeId: string, clearSubtree: boolean): Promise<boolean> {
         if (!this.currentCanvasFilePath) {
             return false;
