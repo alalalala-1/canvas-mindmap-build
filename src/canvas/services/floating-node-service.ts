@@ -267,7 +267,7 @@ export class FloatingNodeService {
      * 注意：此方法在边创建时被调用，此时边可能还未保存到文件
      * 因此只更新内存状态，不触发文件操作
      */
-    async handleNewEdge(edge: CanvasEdgeLike): Promise<void> {
+    async handleNewEdge(edge: CanvasEdgeLike, persistToFile: boolean = false): Promise<void> {
         const toNodeId = getEdgeToNodeIdUtil(edge);
         const fromNodeId = getEdgeFromNodeIdUtil(edge);
 
@@ -290,10 +290,9 @@ export class FloatingNodeService {
         const isToNodeFloating = await this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
         log(`[FloatingNode] 目标节点 ${toNodeId} 浮动状态(内存): ${isToNodeFloating}`);
 
-        // 3. 如果目标节点是浮动节点，清除其浮动状态（仅内存）
+        // 3. 如果目标节点是浮动节点，清除其浮动状态
         if (isToNodeFloating) {
-            log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态（仅内存）...`);
-            // 只更新内存缓存，不触发文件修改
+            log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
             this.stateManager.updateMemoryCache(this.currentCanvasFilePath, toNodeId, null);
             // 更新 canvas 内存中的节点数据
             if (this.canvas) {
@@ -306,6 +305,9 @@ export class FloatingNodeService {
                     delete node.data.isSubtreeNode;
                     log(`[FloatingNode] 已清除 canvas 内存中的浮动数据: ${toNodeId}`);
                 }
+            }
+            if (persistToFile) {
+                await this.clearNodeFloatingState(toNodeId, false);
             }
         }
 
@@ -356,8 +358,8 @@ export class FloatingNodeService {
                 // 检查目标节点是否是浮动节点
                 const isFloating = this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
                 if (isFloating) {
-                    log(`[FloatingNode] 检测到浮动节点的新入边: ${toNodeId}`);
-                    this.handleNewEdge(edge);
+                    log(`[FloatingNode] 检测到浮动节点的新入边: ${fromNodeId || 'unknown'} -> ${toNodeId}`);
+                    void this.handleNewEdge(edge, false);
                 }
             }
         }

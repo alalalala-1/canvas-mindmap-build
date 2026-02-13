@@ -147,12 +147,19 @@ export class CanvasManager implements ICanvasManager {
 
     public async checkAndClearFloatingStateForNewEdges() {
         const canvasView = this.getCanvasView();
-        if (!canvasView) return;
+        if (!canvasView) {
+            log(`[CanvasManager] 无 canvasView，跳过浮动清理检测`);
+            return;
+        }
 
         const canvas = (canvasView as CanvasViewLike).canvas;
-        if (!canvas) return;
+        if (!canvas) {
+            log(`[CanvasManager] 无 canvas，跳过浮动清理检测`);
+            return;
+        }
 
         // 使用新的服务强制检测边变化
+        log(`[CanvasManager] 触发浮动清理检测`);
         this.floatingNodeService.forceEdgeDetection(canvas);
     }
 

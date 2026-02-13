@@ -4,13 +4,17 @@ import { CollapseStateManager } from '../state/collapse-state';
 import { DeleteConfirmationModal } from '../ui/delete-modal';
 import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
 import { FloatingNodeService } from './services/floating-node-service';
+import { CanvasFileService } from './services/canvas-file-service';
 import { CanvasManager } from './canvas-manager';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
     getNodeIdFromEdgeEndpoint,
-    getSelectedEdge
+    getSelectedEdge,
+    getEdgeFromNodeId,
+    getEdgeToNodeId,
+    getEdgesFromCanvas
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, CanvasEventType, MarkdownViewLike } from './types';
 
@@ -27,11 +31,16 @@ export class CanvasEventManager {
     private collapseStateManager: CollapseStateManager;
     private floatingNodeService: FloatingNodeService;
     private canvasManager: CanvasManager;
+    private canvasFileService: CanvasFileService;
     private mutationObserver: MutationObserver | null = null;
     private clickDebounceMap = new Map<string, number>();
     private mutationObserverRetryCount = 0;
     private readonly MAX_MUTATION_OBSERVER_RETRIES = 10;
     private isObserverSetup = false;
+    private canvasChangeTimeoutId: number | null = null;
+    private currentCanvasFilePath: string | null = null;
+    private lastEdgeIds: Set<string> = new Set();
+    private canvasFileModifyTimeoutId: number | null = null;
 
     constructor(
         plugin: Plugin,
@@ -47,6 +56,7 @@ export class CanvasEventManager {
         this.canvasManager = canvasManager;
         // 从 CanvasManager 获取 FloatingNodeService
         this.floatingNodeService = canvasManager.getFloatingNodeService();
+        this.canvasFileService = new CanvasFileService(app, settings);
     }
 
     /**
@@ -69,6 +79,20 @@ export class CanvasEventManager {
     }
 
     private registerEventListeners() {
+        this.plugin.registerEvent(
+            this.app.vault.on('modify', (file) => {
+                if (!this.currentCanvasFilePath) return;
+                if (file.path !== this.currentCanvasFilePath) return;
+                if (this.canvasFileModifyTimeoutId !== null) {
+                    window.clearTimeout(this.canvasFileModifyTimeoutId);
+                }
+                this.canvasFileModifyTimeoutId = window.setTimeout(async () => {
+                    this.canvasFileModifyTimeoutId = null;
+                    await this.handleCanvasFileModified(file.path);
+                }, CONSTANTS.TIMING.BUTTON_CHECK_DEBOUNCE);
+            })
+        );
+
         // 监听 Canvas 视图打开
         this.plugin.registerEvent(
             this.app.workspace.on('active-leaf-change', async (leaf) => {
@@ -350,6 +374,12 @@ export class CanvasEventManager {
 
         const canvasFilePath = canvas.file?.path || (canvasView as CanvasViewLike).file?.path;
         log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
+        this.currentCanvasFilePath = canvasFilePath || null;
+        if (canvas) {
+            const edges = getEdgesFromCanvas(canvas);
+            this.lastEdgeIds = this.buildEdgeIdSet(edges);
+            log(`[Event] 初始化边快照: edges=${edges.length}`);
+        }
         
         if (canvasFilePath) {
             log(`[Event] 正在初始化 FloatingNodeService...`);
@@ -362,6 +392,51 @@ export class CanvasEventManager {
         this.registerCanvasWorkspaceEvents(canvas);
     }
 
+    private buildEdgeIdSet(edges: CanvasEdgeLike[]): Set<string> {
+        const ids = new Set<string>();
+        for (const edge of edges) {
+            const fromId = getEdgeFromNodeId(edge);
+            const toId = getEdgeToNodeId(edge);
+            if (fromId && toId) {
+                ids.add(`${fromId}->${toId}`);
+            } else if (edge.id) {
+                ids.add(edge.id);
+            }
+        }
+        return ids;
+    }
+
+    private async handleCanvasFileModified(filePath: string): Promise<void> {
+        log(`[Event] Canvas 文件变更: ${filePath}`);
+        const data = await this.canvasFileService.readCanvasData(filePath);
+        if (!data) {
+            log(`[Event] Canvas 文件读取失败: ${filePath}`);
+            return;
+        }
+        const edges = data.edges || [];
+        const newEdgeIds = this.buildEdgeIdSet(edges);
+        const newEdges: CanvasEdgeLike[] = [];
+
+        for (const edge of edges) {
+            const fromId = getEdgeFromNodeId(edge);
+            const toId = getEdgeToNodeId(edge);
+            const edgeId = fromId && toId ? `${fromId}->${toId}` : edge.id;
+            if (edgeId && !this.lastEdgeIds.has(edgeId)) {
+                newEdges.push(edge);
+            }
+        }
+
+        if (newEdges.length > 0) {
+            log(`[Event] Canvas 文件检测到新边: ${newEdges.length}`);
+            for (const edge of newEdges) {
+                await this.floatingNodeService.handleNewEdge(edge, true);
+            }
+            await this.canvasManager.checkAndAddCollapseButtons();
+        }
+
+        this.lastEdgeIds = newEdgeIds;
+    }
+
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
@@ -372,12 +447,18 @@ export class CanvasEventManager {
                 this.collapseStateManager.clearCache();
                 requestAnimationFrame(async () => {
                     try {
-                        await this.floatingNodeService.handleNewEdge(edge);
+                        await this.floatingNodeService.handleNewEdge(edge, false);
                     } catch (err) {
                         log(`[EdgeCreate] 异常: ${err}`);
                     }
                 });
                 await this.canvasManager.checkAndAddCollapseButtons();
+                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+                    setTimeout(() => {
+                        this.canvasManager.checkAndAddCollapseButtons();
+                        this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                    }, delay);
+                }
             })
         );
 
@@ -389,6 +470,22 @@ export class CanvasEventManager {
 
                 this.collapseStateManager.clearCache();
                 this.canvasManager.checkAndAddCollapseButtons();
+            })
+        );
+
+        this.plugin.registerEvent(
+            this.app.workspace.on('canvas:change', () => {
+                log(`[Event] Canvas:Change 触发`);
+                if (this.canvasChangeTimeoutId !== null) {
+                    log(`[Event] Canvas:Change 清理上一次防抖任务`);
+                    window.clearTimeout(this.canvasChangeTimeoutId);
+                }
+                this.canvasChangeTimeoutId = window.setTimeout(() => {
+                    this.canvasChangeTimeoutId = null;
+                    log(`[Event] Canvas:Change 防抖执行`);
+                    this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                    this.canvasManager.checkAndAddCollapseButtons();
+                }, CONSTANTS.TIMING.BUTTON_CHECK_DEBOUNCE);
             })
         );
 
@@ -422,13 +519,6 @@ export class CanvasEventManager {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
                 this.canvasManager.syncHiddenChildrenOnDrag(node);
-            })
-        );
-
-        this.plugin.registerEvent(
-            this.app.workspace.on('canvas:change', async () => {
-                this.collapseStateManager.clearCache();
-                await this.canvasManager.checkAndAddCollapseButtons();
             })
         );
 

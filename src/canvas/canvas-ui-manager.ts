@@ -37,21 +37,26 @@ export class CanvasUIManager {
 
         let nodes: CanvasNodeLike[] = [];
         let edges: CanvasEdgeLike[] = [];
-        
-        if (canvas.fileData?.nodes) {
-            nodes = canvas.fileData.nodes;
-            edges = canvas.fileData?.edges || [];
-            log(`[UI] checkAndAddCollapseButtons: 从 fileData 获取, nodes=${nodes.length}, edges=${edges.length}`);
-        } else if (canvas.nodes && canvas.edges) {
-            nodes = canvas.nodes instanceof Map 
-                ? Array.from(canvas.nodes.values()) 
+
+        const fileEdges = canvas.fileData?.edges || [];
+        if (canvas.nodes && canvas.edges) {
+            nodes = canvas.nodes instanceof Map
+                ? Array.from(canvas.nodes.values())
                 : Object.values(canvas.nodes);
-            edges = canvas.edges instanceof Map 
-                ? Array.from(canvas.edges.values()) 
-                : Array.isArray(canvas.edges) 
-                    ? canvas.edges 
+            edges = canvas.edges instanceof Map
+                ? Array.from(canvas.edges.values())
+                : Array.isArray(canvas.edges)
+                    ? canvas.edges
                     : [];
             log(`[UI] checkAndAddCollapseButtons: 从内存获取, nodes=${nodes.length}, edges=${edges.length}`);
+            if (fileEdges.length > edges.length) {
+                edges = fileEdges;
+                log(`[UI] checkAndAddCollapseButtons: 使用 fileData 边覆盖, edges=${edges.length}`);
+            }
+        } else if (canvas.fileData?.nodes) {
+            nodes = canvas.fileData.nodes;
+            edges = fileEdges;
+            log(`[UI] checkAndAddCollapseButtons: 从 fileData 获取, nodes=${nodes.length}, edges=${edges.length}`);
         }
 
         if (nodes.length === 0) {
@@ -70,9 +75,15 @@ export class CanvasUIManager {
         for (const node of nodes) {
             const nodeId = node.id;
             if (!nodeId) continue;
-            
-            const nodeEl = node.nodeEl;
-            if (!nodeEl) continue;
+
+            let nodeEl: HTMLElement | null = node.nodeEl ?? null;
+            if (!nodeEl) {
+                nodeEl = this.findNodeElementById(nodeId);
+            }
+            if (!nodeEl) {
+                log(`[UI] 找不到节点元素: ${nodeId}`);
+                continue;
+            }
 
             nodeEl.setAttribute('data-node-id', nodeId);
 
