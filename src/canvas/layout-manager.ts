@@ -644,7 +644,7 @@ export class LayoutManager {
                 } else {
                     log(`[Layout] 警告: floatingNodeService 为 null，无法应用样式`);
                 }
-            }, 200);
+            }, CONSTANTS.TIMING.STYLE_APPLY_DELAY);
         } catch (err) {
             handleError(err, { context: 'Layout', message: '重新应用样式失败', showNotice: false });
         }

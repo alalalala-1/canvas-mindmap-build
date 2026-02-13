@@ -6,6 +6,7 @@ import { NodeDeletionService } from './services/node-deletion-service';
 import { CanvasFileService } from './services/canvas-file-service';
 import { EditTextModal } from '../ui/edit-modal';
 import { log } from '../utils/logger';
+import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
     getCurrentCanvasFilePath,
@@ -139,7 +140,7 @@ export class CanvasNodeManager {
                         if (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0) {
                             setTimeout(() => {
                                 this.adjustNodeHeightAfterRender(nodeId);
-                            }, 500);
+                            }, CONSTANTS.TIMING.RETRY_DELAY);
                         }
                         if (typeof canvas.requestSave === 'function') {
                             canvas.requestSave();

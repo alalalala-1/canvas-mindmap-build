@@ -3,6 +3,7 @@ import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { getCanvasView } from '../utils/canvas-utils';
 import { log } from '../utils/logger';
+import { CONSTANTS } from '../constants';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike } from './types';
 
 export class CanvasUIManager {
@@ -182,7 +183,7 @@ export class CanvasUIManager {
                         retryNodeEl.classList.add('cmb-floating-node');
                     }
                 }
-            }, 500);
+            }, CONSTANTS.TIMING.RETRY_DELAY);
         }
     }
 

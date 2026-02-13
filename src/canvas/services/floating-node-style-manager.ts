@@ -1,4 +1,5 @@
 import { log } from '../../utils/logger';
+import { CONSTANTS } from '../../constants';
 import { CanvasLike, CanvasNodeLike } from '../types';
 
 export class FloatingNodeStyleManager {
@@ -30,8 +31,8 @@ export class FloatingNodeStyleManager {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 找不到节点元素: ${nodeId}，将延迟重试`);
-                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 1), 300);
-                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 2), 1000);
+                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
+                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_LONG);
                 return false;
             }
 
@@ -61,9 +62,9 @@ export class FloatingNodeStyleManager {
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 1), 300);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 2), 600);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 3), 1000);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_MEDIUM);
+                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 3), CONSTANTS.TIMING.RETRY_DELAY_LONG);
                 return false;
             }
 

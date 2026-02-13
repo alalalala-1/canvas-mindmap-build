@@ -3,6 +3,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
+import { CONSTANTS } from '../../constants';
 import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId, reloadCanvas, getSelectedEdge } from '../../utils/canvas-utils';
 import { CanvasLike, CanvasEdgeLike, ICanvasManager, CanvasViewLike } from '../types';
 
@@ -145,7 +146,7 @@ export class EdgeDeletionService {
                     log(`[EdgeDelete] 刷新折叠按钮`);
                     this.canvasManager.checkAndAddCollapseButtons();
                 }
-            }, 200);
+            }, CONSTANTS.TIMING.STYLE_APPLY_DELAY);
         } catch (err) {
             log(`[EdgeDelete] 失败`, err);
         }

@@ -4,6 +4,7 @@ import { FloatingNodeStyleManager } from './floating-node-style-manager';
 import { EdgeChangeDetector, NewEdgeCallback } from './edge-change-detector';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
+import { CONSTANTS } from '../../constants';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasLike, CanvasEdgeLike, CanvasNodeLike, ICanvasManager } from '../types';
 import { getNodeFromCanvas, getEdgesFromCanvas, getEdgeToNodeId as getEdgeToNodeIdUtil } from '../../utils/canvas-utils';
@@ -115,7 +116,7 @@ export class FloatingNodeService {
                         await this.reapplyAllFloatingStyles(this.canvas);
                     }
                 }
-            }, 500);
+            }, CONSTANTS.TIMING.RETRY_DELAY);
         }
     }
 

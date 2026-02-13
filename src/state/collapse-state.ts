@@ -80,8 +80,11 @@ export class CollapseStateManager {
 
     /**
      * 递归添加所有后代节点到集合中
+     * 已通过 targetSet 检查防止循环引用导致的无限递归
      */
     addAllDescendantsToSet(nodeId: string, edges: CanvasEdgeLike[], targetSet: Set<string>) {
+        if (targetSet.has(nodeId)) return;
+        
         const childNodeIds = this.getChildNodes(nodeId, edges);
         for (const childId of childNodeIds) {
             if (!targetSet.has(childId)) {

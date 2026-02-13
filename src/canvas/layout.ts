@@ -302,8 +302,9 @@ function findRootNodes(
     });
 
     rootNodes.sort((a, b) => {
-        const nodeA = layoutNodes.get(a)!;
-        const nodeB = layoutNodes.get(b)!;
+        const nodeA = layoutNodes.get(a);
+        const nodeB = layoutNodes.get(b);
+        if (!nodeA || !nodeB) return 0;
         return nodeA.y - nodeB.y || nodeA.x - nodeB.x;
     });
     
@@ -417,8 +418,10 @@ function calculatePositionsRightToLeft(
         const offset = currentY - range.minY;
         const subtreeStack = [childNodeId];
         while (subtreeStack.length > 0) {
-            const sid = subtreeStack.pop()!;
-            const snode = layoutNodes.get(sid)!;
+            const sid = subtreeStack.pop();
+            if (!sid) continue;
+            const snode = layoutNodes.get(sid);
+            if (!snode) continue;
             snode.y += offset;
             subtreeStack.push(...snode.children);
         }
@@ -559,7 +562,8 @@ export function arrangeLayout(
         let subtreeMinY = Infinity;
         let subtreeMaxY = -Infinity;
         for (const id of subtreeNodes) {
-            const node = layoutNodes.get(id)!;
+            const node = layoutNodes.get(id);
+            if (!node) continue;
             subtreeMinY = Math.min(subtreeMinY, node.y);
             subtreeMaxY = Math.max(subtreeMaxY, node.y + node.height);
         }
@@ -569,7 +573,8 @@ export function arrangeLayout(
 
         let maxSubtreeBottom = -Infinity;
         for (const id of subtreeNodes) {
-            const node = layoutNodes.get(id)!;
+            const node = layoutNodes.get(id);
+            if (!node) continue;
             node.y += globalOffsetY;
             maxSubtreeBottom = Math.max(maxSubtreeBottom, node.y + node.height);
         }

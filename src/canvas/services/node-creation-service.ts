@@ -4,6 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
+import { CONSTANTS } from '../../constants';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager, EditorWithSelection, CanvasViewLike, PluginWithLastClicked } from '../types';
 
 export class NodeCreationService {
@@ -263,11 +264,11 @@ export class NodeCreationService {
             const manager = this.canvasManager;
             setTimeout(() => {
                 manager.adjustNodeHeightAfterRender(newNodeId);
-            }, 300);
+            }, CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
 
             setTimeout(() => {
                 manager.adjustNodeHeightAfterRender(newNodeId);
-            }, 800);
+            }, CONSTANTS.TIMING.HEIGHT_RECHECK_DELAY);
         }
     }
 
