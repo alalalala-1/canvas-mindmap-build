@@ -59,13 +59,13 @@ export class CanvasUIManager {
             return;
         }
 
-        const existingNodeEls = document.querySelectorAll('.canvas-node');
-        const domNodeMap = new Map<string, Element>();
-        
-        for (const nodeEl of Array.from(existingNodeEls)) {
-            const nodeId = this.getNodeIdFromElement(nodeEl, canvas);
-            if (nodeId) {
-                domNodeMap.set(nodeId, nodeEl);
+        const nodesWithChildren = new Set<string>();
+        for (const e of edges) {
+            const fromId = typeof e.from === 'string' 
+                ? e.from 
+                : e.from?.node?.id || e.fromNode;
+            if (fromId) {
+                nodesWithChildren.add(fromId);
             }
         }
 
@@ -73,17 +73,12 @@ export class CanvasUIManager {
             const nodeId = node.id;
             if (!nodeId) continue;
             
-            const nodeEl = domNodeMap.get(nodeId);
+            const nodeEl = node.nodeEl;
             if (!nodeEl) continue;
 
             nodeEl.setAttribute('data-node-id', nodeId);
 
-            const hasChildren = edges.some((e) => {
-                const fromId = typeof e.from === 'string' 
-                    ? e.from 
-                    : e.from?.node?.id || e.fromNode;
-                return fromId === nodeId;
-            });
+            const hasChildren = nodesWithChildren.has(nodeId);
 
             if (!hasChildren) {
                 const existingBtn = nodeEl.querySelector('.cmb-collapse-button');

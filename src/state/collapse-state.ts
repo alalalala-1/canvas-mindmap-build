@@ -4,6 +4,8 @@ import { CanvasEdgeLike } from '../canvas/types';
 
 export class CollapseStateManager {
     private collapsedNodes: Map<string, boolean> = new Map();
+    private childrenMap: Map<string, string[]> = new Map();
+    private cachedEdges: CanvasEdgeLike[] = [];
 
     markCollapsed(nodeId: string) {
         this.collapsedNodes.set(nodeId, true);
@@ -19,19 +21,25 @@ export class CollapseStateManager {
         return this.collapsedNodes.get(nodeId) === true;
     }
 
-    getChildNodes(nodeId: string, edges: CanvasEdgeLike[]): string[] {
-        const childIds: string[] = [];
-
+    private buildChildrenMap(edges: CanvasEdgeLike[]): void {
+        this.childrenMap.clear();
         for (const e of edges) {
             const fromId = getEdgeFromNodeId(e);
             const toId = getEdgeToNodeId(e);
-
-            if (fromId === nodeId && toId) {
-                childIds.push(toId);
+            if (fromId && toId) {
+                const children = this.childrenMap.get(fromId) || [];
+                children.push(toId);
+                this.childrenMap.set(fromId, children);
             }
         }
+        this.cachedEdges = edges;
+    }
 
-        return childIds;
+    getChildNodes(nodeId: string, edges: CanvasEdgeLike[]): string[] {
+        if (edges !== this.cachedEdges || edges.length !== this.cachedEdges.length) {
+            this.buildChildrenMap(edges);
+        }
+        return this.childrenMap.get(nodeId) || [];
     }
 
     private isDirection(value: unknown): value is 'left' | 'right' | 'top' | 'bottom' {
@@ -63,6 +71,8 @@ export class CollapseStateManager {
     }
 
     clearCache() {
+        this.childrenMap.clear();
+        this.cachedEdges = [];
         log('[State] 清除缓存');
     }
 

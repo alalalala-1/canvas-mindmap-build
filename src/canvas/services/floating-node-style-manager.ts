@@ -6,9 +6,11 @@ export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
     private canvas: CanvasLike | null = null;
     private pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+    private elementCache: Map<string, HTMLElement> = new Map();
 
     setCanvas(canvas: CanvasLike): void {
         this.canvas = canvas;
+        this.elementCache.clear();
     }
 
     cleanup(): void {
@@ -16,6 +18,7 @@ export class FloatingNodeStyleManager {
             clearTimeout(timeoutId);
         }
         this.pendingTimeouts.clear();
+        this.elementCache.clear();
     }
 
     private scheduleRetry(callback: () => void, delay: number): void {
@@ -116,54 +119,35 @@ export class FloatingNodeStyleManager {
     // =========================================================================
 
     /**
-     * 查找节点的 DOM 元素
+     * 查找节点的 DOM 元素（带缓存）
      */
     private findNodeElement(nodeId: string): HTMLElement | null {
-        const nodeEl = document.querySelector(`.canvas-node[data-node-id="${nodeId}"]`) as HTMLElement;
-        if (nodeEl) {
-            return nodeEl;
+        const cached = this.elementCache.get(nodeId);
+        if (cached && document.contains(cached)) {
+            return cached;
         }
+
+        let nodeEl: HTMLElement | null = null;
 
         if (this.canvas?.nodes) {
             if (this.canvas.nodes instanceof Map) {
                 const node = this.canvas.nodes.get(nodeId);
-                if (node?.nodeEl) {
-                    return node.nodeEl;
-                }
+                nodeEl = node?.nodeEl || null;
             } else if (typeof this.canvas.nodes === 'object') {
-                const node = (this.canvas.nodes as Record<string, any>)[nodeId];
-                if (node?.nodeEl) {
-                    return node.nodeEl;
-                }
+                const node = (this.canvas.nodes as Record<string, CanvasNodeLike>)[nodeId];
+                nodeEl = node?.nodeEl || null;
             }
         }
 
-        if (this.canvas?.nodes) {
-            const allNodeEls = document.querySelectorAll('.canvas-node');
-            for (const el of Array.from(allNodeEls)) {
-                const dataNodeId = el.getAttribute('data-node-id');
-                if (dataNodeId === nodeId) {
-                    return el as HTMLElement;
-                }
-                
-                let nodes: CanvasNodeLike[];
-                if (this.canvas.nodes instanceof Map) {
-                    nodes = Array.from(this.canvas.nodes.values());
-                } else {
-                    nodes = Object.values(this.canvas.nodes);
-                }
-                
-                for (const node of nodes) {
-                    if (node.nodeEl === el || (node.nodeEl && el.contains(node.nodeEl))) {
-                        if (node.id === nodeId) {
-                            return el as HTMLElement;
-                        }
-                    }
-                }
-            }
+        if (!nodeEl) {
+            nodeEl = document.querySelector(`.canvas-node[data-node-id="${nodeId}"]`) as HTMLElement;
         }
 
-        return null;
+        if (nodeEl) {
+            this.elementCache.set(nodeId, nodeEl);
+        }
+
+        return nodeEl;
     }
 
     /**
