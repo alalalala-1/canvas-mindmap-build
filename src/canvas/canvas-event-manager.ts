@@ -267,7 +267,7 @@ export class CanvasEventManager {
         const currentTime = Date.now();
         const lastClickTime = this.clickDebounceMap.get(nodeId) || 0;
         
-        if (currentTime - lastClickTime < 300) return;
+        if (currentTime - lastClickTime < CONSTANTS.TIMING.CLICK_DEBOUNCE) return;
         
         this.clickDebounceMap.set(nodeId, currentTime);
         event.preventDefault();
@@ -439,8 +439,7 @@ export class CanvasEventManager {
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
-                const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-                const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                const { fromId, toId } = this.extractEdgeNodeIds(edge);
                 log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -470,8 +469,7 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-delete', (edge: CanvasEdgeLike) => {
-                const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-                const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                const { fromId, toId } = this.extractEdgeNodeIds(edge);
                 log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -579,6 +577,12 @@ export class CanvasEventManager {
     // =========================================================================
     // 辅助方法
     // =========================================================================
+
+    private extractEdgeNodeIds(edge: CanvasEdgeLike): { fromId: string | null; toId: string | null } {
+        const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
+        const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+        return { fromId, toId };
+    }
 
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
