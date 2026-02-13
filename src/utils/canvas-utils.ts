@@ -264,11 +264,20 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const heightCache = new Map<string, number>();
+const HEIGHT_CACHE_MAX_SIZE = 100;
+
 /**
- * 估算文本节点高度
+ * 估算文本节点高度（带缓存）
  * 用于布局计算和节点高度调整
  */
 export function estimateTextNodeHeight(content: string, width: number, maxHeight: number = 800): number {
+    const cacheKey = `${width}:${maxHeight}:${content}`;
+    const cached = heightCache.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
+
     const contentWidth = width - 40;
     const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
     const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
@@ -302,7 +311,19 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
     }
 
     const calculatedHeight = Math.ceil(totalLines * lineHeight + CONSTANTS.TYPOGRAPHY.SAFETY_PADDING);
-    return Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
+    const result = Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
+    
+    if (heightCache.size >= HEIGHT_CACHE_MAX_SIZE) {
+        const firstKey = heightCache.keys().next().value;
+        if (firstKey) heightCache.delete(firstKey);
+    }
+    heightCache.set(cacheKey, result);
+    
+    return result;
+}
+
+export function clearHeightCache(): void {
+    heightCache.clear();
 }
 
 // ============================================================================

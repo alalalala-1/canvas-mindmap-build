@@ -19,6 +19,70 @@ interface LayoutEdge {
     toNode: string;
 }
 
+interface FloatingNodesInfo {
+    floatingNodes: Set<string>;
+    originalParents: Map<string, string>;
+}
+
+function filterValidFloatingNodes(
+    nodes: Map<string, CanvasNodeLike>,
+    floatingNodes: Set<string>,
+    originalParents: Map<string, string>
+): FloatingNodesInfo {
+    const validFloatingNodes = new Set<string>();
+    const validOriginalParents = new Map<string, string>();
+    
+    nodes.forEach((_, nodeId) => {
+        if (floatingNodes.has(nodeId)) {
+            validFloatingNodes.add(nodeId);
+            if (originalParents.has(nodeId)) {
+                validOriginalParents.set(nodeId, originalParents.get(nodeId)!);
+            }
+        }
+    });
+    
+    return { floatingNodes: validFloatingNodes, originalParents: validOriginalParents };
+}
+
+interface SubtreeBounds {
+    minY: number;
+    maxY: number;
+}
+
+function calculateSubtreeBounds(
+    subtreeNodes: string[],
+    layoutNodes: Map<string, LayoutNode>
+): SubtreeBounds {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    
+    for (const id of subtreeNodes) {
+        const node = layoutNodes.get(id);
+        if (!node) continue;
+        minY = Math.min(minY, node.y);
+        maxY = Math.max(maxY, node.y + node.height);
+    }
+    
+    return { minY, maxY };
+}
+
+function applyVerticalOffset(
+    subtreeNodes: string[],
+    layoutNodes: Map<string, LayoutNode>,
+    offsetY: number
+): number {
+    let maxBottom = -Infinity;
+    
+    for (const id of subtreeNodes) {
+        const node = layoutNodes.get(id);
+        if (!node) continue;
+        node.y += offsetY;
+        maxBottom = Math.max(maxBottom, node.y + node.height);
+    }
+    
+    return maxBottom;
+}
+
 interface LayoutContext {
     layoutNodes: Map<string, LayoutNode>;
     layoutParentMap: Map<string, string>;
@@ -503,20 +567,10 @@ export function arrangeLayout(
 ): Map<string, { x: number; y: number; width: number; height: number }> {
     log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
 
-    let { floatingNodes, originalParents } = getFloatingNodesInfo(canvasData);
-
-    const validFloatingNodes = new Set<string>();
-    const validOriginalParents = new Map<string, string>();
-    nodes.forEach((_, nodeId) => {
-        if (floatingNodes.has(nodeId)) {
-            validFloatingNodes.add(nodeId);
-            if (originalParents.has(nodeId)) {
-                validOriginalParents.set(nodeId, originalParents.get(nodeId)!);
-            }
-        }
-    });
-    floatingNodes = validFloatingNodes;
-    originalParents = validOriginalParents;
+    const floatingInfo = getFloatingNodesInfo(canvasData);
+    const { floatingNodes, originalParents } = filterValidFloatingNodes(
+        nodes, floatingInfo.floatingNodes, floatingInfo.originalParents
+    );
 
     const layoutNodes = initializeLayoutNodes(nodes, settings);
     const layoutParentMap = buildLayoutParentMap(edges, layoutNodes);
@@ -554,28 +608,12 @@ export function arrangeLayout(
         calculatePositionsRightToLeft(rootId, layoutNodes, settings);
 
         const subtreeNodes = collectSubtreeNodes(rootId, layoutNodes);
-
-        let subtreeMinY = Infinity;
-        let subtreeMaxY = -Infinity;
-        for (const id of subtreeNodes) {
-            const node = layoutNodes.get(id);
-            if (!node) continue;
-            subtreeMinY = Math.min(subtreeMinY, node.y);
-            subtreeMaxY = Math.max(subtreeMaxY, node.y + node.height);
-        }
+        const { minY: subtreeMinY } = calculateSubtreeBounds(subtreeNodes, layoutNodes);
         
         const verticalSpacing = currentGlobalBottomY === -settings.verticalSpacing ? 0 : settings.verticalSpacing;
         const globalOffsetY = (currentGlobalBottomY + verticalSpacing) - subtreeMinY;
 
-        let maxSubtreeBottom = -Infinity;
-        for (const id of subtreeNodes) {
-            const node = layoutNodes.get(id);
-            if (!node) continue;
-            node.y += globalOffsetY;
-            maxSubtreeBottom = Math.max(maxSubtreeBottom, node.y + node.height);
-        }
-
-        currentGlobalBottomY = maxSubtreeBottom;
+        currentGlobalBottomY = applyVerticalOffset(subtreeNodes, layoutNodes, globalOffsetY);
     }
 
     const columnX = calculateColumnX(columnWidths, settings);
