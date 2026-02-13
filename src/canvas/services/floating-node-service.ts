@@ -393,6 +393,7 @@ export class FloatingNodeService {
      * 因此只更新内存状态，不触发文件操作
      */
     async handleNewEdge(edge: CanvasEdgeLike, persistToFile: boolean = false): Promise<void> {
+        const edgeId = edge.id;
         const toNodeId = getEdgeToNodeIdUtil(edge);
         const fromNodeId = getEdgeFromNodeIdUtil(edge);
 
@@ -406,6 +407,25 @@ export class FloatingNodeService {
         if (!this.currentCanvasFilePath) {
             log(`[FloatingNode] 警告: currentCanvasFilePath 为空，无法处理连线`);
             return;
+        }
+
+        // 验证边是否存在于 Canvas 中（等待 Canvas 保存边数据）
+        if (edgeId && this.canvas) {
+            const canvasEdges = this.getEdgesFromCanvas();
+            const edgeExists = canvasEdges.some(e => e.id === edgeId);
+            if (!edgeExists) {
+                log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，等待...`);
+                // 边还没保存到 Canvas，等待一小段时间
+                await new Promise(resolve => setTimeout(resolve, 100));
+                // 再次验证
+                const canvasEdgesAfterWait = this.getEdgesFromCanvas();
+                const edgeExistsAfterWait = canvasEdgesAfterWait.some(e => e.id === edgeId);
+                if (!edgeExistsAfterWait) {
+                    log(`[FloatingNode] 边 ${edgeId} 仍然不存在，跳过处理`);
+                    return;
+                }
+                log(`[FloatingNode] 边 ${edgeId} 已保存到 Canvas`);
+            }
         }
 
         this.clearEdgeWatch(toNodeId);
