@@ -1,5 +1,5 @@
 import { log } from '../utils/logger';
-import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
 import { CONSTANTS } from '../constants';
 import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
 
