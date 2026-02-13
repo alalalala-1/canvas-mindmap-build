@@ -68,7 +68,7 @@ export class EdgeDeletionService {
             if (!canvasFilePath) return;
 
             let hasOtherIncomingEdges = false;
-            const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
+            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 if (!canvasData.edges) return false;
                 
                 const originalEdgeCount = canvasData.edges.length;

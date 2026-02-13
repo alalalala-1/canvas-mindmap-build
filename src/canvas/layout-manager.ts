@@ -538,14 +538,12 @@ export class LayoutManager {
 
             const floatingNodes = canvasData.metadata.floatingNodes;
             let hasStaleNodes = false;
-            let staleCount = 0;
 
             // 检查并删除不存在的浮动节点记录
             for (const nodeId of Object.keys(floatingNodes)) {
                 if (!currentNodeIds.has(nodeId)) {
                     delete floatingNodes[nodeId];
                     hasStaleNodes = true;
-                    staleCount++;
                 }
             }
 

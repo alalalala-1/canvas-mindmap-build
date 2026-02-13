@@ -1,7 +1,7 @@
 import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
 import { CONSTANTS } from '../constants';
-import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
+import { Canvas, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;

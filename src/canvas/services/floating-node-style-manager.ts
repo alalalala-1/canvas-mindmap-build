@@ -1,6 +1,6 @@
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
-import { CanvasLike, CanvasNodeLike } from '../types';
+import { CanvasLike } from '../types';
 
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';

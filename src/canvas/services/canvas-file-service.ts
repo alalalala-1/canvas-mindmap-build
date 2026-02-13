@@ -7,7 +7,6 @@ import {
     CanvasNodeLike, 
     CanvasEdgeLike, 
     FloatingNodesMetadata,
-    FloatingNodeRecord,
     CanvasViewLike
 } from '../types';
 
