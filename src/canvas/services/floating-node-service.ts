@@ -22,6 +22,7 @@ export class FloatingNodeService {
     private floatingNodeIds: Set<string> = new Set();
     private isClearingFloating: boolean = false;
     private pendingClearNodes: string[] = [];
+    private clearCompleteResolver: (() => void) | null = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
@@ -341,7 +342,13 @@ export class FloatingNodeService {
             log(`[FloatingNode] 清除浮动完成: ${nodesToClear.length} 个节点, success=${persistSuccess}`);
         } finally {
             this.isClearingFloating = false;
- 
+
+            // 通知等待的 Promise 完成
+            if (this.clearCompleteResolver) {
+                this.clearCompleteResolver();
+                this.clearCompleteResolver = null;
+            }
+
             // 处理队列中等待的节点
             if (this.pendingClearNodes.length > 0) {
                 const pending = [...this.pendingClearNodes];
@@ -358,6 +365,15 @@ export class FloatingNodeService {
         }
  
         return persistSuccess;
+    }
+
+    /**
+     * 等待清除操作完成
+     */
+    private waitForClearComplete(): Promise<void> {
+        return new Promise((resolve) => {
+            this.clearCompleteResolver = resolve;
+        });
     }
 
     async clearFloatingMarks(node: CanvasNodeLike): Promise<void> {
@@ -406,15 +422,17 @@ export class FloatingNodeService {
         if (isToNodeFloating) {
             // 如果正在处理清除操作，将节点加入队列等待处理
             if (this.isClearingFloating) {
-                log(`[FloatingNode] 正在处理清除操作，将节点 ${toNodeId} 加入队列等待`);
+                log(`[FloatingNode] 正在处理清除操作，将节点 ${toNodeId} 加入队列等待 (队列长度: ${this.pendingClearNodes.length})`);
                 if (!this.pendingClearNodes.includes(toNodeId)) {
                     this.pendingClearNodes.push(toNodeId);
                 }
-                return;
+                // 仍然等待清除完成
+                await this.waitForClearComplete();
+                log(`[FloatingNode] 等待完成，继续处理连线 ${fromNodeId} -> ${toNodeId}`);
+            } else {
+                log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
+                await this.executeClearFloating([toNodeId], persistToFile);
             }
-
-            log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
-            await this.executeClearFloating([toNodeId], persistToFile);
         }
 
         // 4. 检查源节点是否原本是浮动节点，如果是，保持其红框样式

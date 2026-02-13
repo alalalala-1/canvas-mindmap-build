@@ -40,12 +40,12 @@ describe('canvas-utils - 工具函数', () => {
 
 	describe('isTextNode', () => {
 		it('should return true for text node', () => {
-			const node = { type: 'text', text: { text: 'Hello' } };
+			const node = { id: 'test', type: 'text', text: { text: 'Hello' } };
 			expect(isTextNode(node)).toBe(true);
 		});
 
 		it('should return false for non-text node', () => {
-			const node = { type: 'file', path: '/test.md' };
+			const node = { id: 'test', type: 'file', path: '/test.md' };
 			expect(isTextNode(node)).toBe(false);
 		});
 
@@ -60,12 +60,12 @@ describe('canvas-utils - 工具函数', () => {
 
 	describe('isFileNode', () => {
 		it('should return true for file node', () => {
-			const node = { type: 'file', path: '/test.md' };
+			const node = { id: 'test', type: 'file', path: '/test.md' };
 			expect(isFileNode(node)).toBe(true);
 		});
 
 		it('should return false for non-file node', () => {
-			const node = { type: 'text', text: { text: 'Hello' } };
+			const node = { id: 'test', type: 'text', text: { text: 'Hello' } };
 			expect(isFileNode(node)).toBe(false);
 		});
 
