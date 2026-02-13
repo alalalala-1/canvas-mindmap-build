@@ -198,3 +198,75 @@ export type CanvasEventMap = {
 };
 
 export type CanvasEventType = keyof CanvasEventMap;
+
+// =========================================================================
+// 布局相关类型定义
+// =========================================================================
+
+export interface LayoutNode {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    children: string[];
+    _subtreeHeight: number;
+    originalParent?: string;
+}
+
+export interface LayoutEdge {
+    fromNode: string;
+    toNode: string;
+}
+
+export interface FloatingNodesInfo {
+    floatingNodes: Set<string>;
+    originalParents: Map<string, string>;
+}
+
+export interface SubtreeBounds {
+    minY: number;
+    maxY: number;
+}
+
+export interface LayoutContext {
+    layoutNodes: Map<string, LayoutNode>;
+    layoutParentMap: Map<string, string>;
+    completeParentMap: Map<string, string>;
+    completeChildrenMap: Map<string, string[]>;
+    floatingSubtreeRoots: Set<string>;
+    floatingSubtreeOriginalParents: Map<string, string>;
+    rootNodes: string[];
+    nodeColumn: Map<string, number>;
+    columnWidths: Map<number, number>;
+    nodeMaxDepth: Map<string, number>;
+    maxOverallDepth: number;
+}
+
+export interface CanvasArrangerSettings {
+    horizontalSpacing: number;
+    verticalSpacing: number;
+    textNodeWidth: number;
+    textNodeMaxHeight: number;
+    imageNodeWidth: number;
+    imageNodeHeight: number;
+    formulaNodeWidth: number;
+    formulaNodeHeight: number;
+}
+
+export interface LayoutPosition {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+export interface LayoutData {
+    visibleNodes: Map<string, CanvasNodeLike>;
+    allNodes: Map<string, CanvasNodeLike>;
+    edges: CanvasEdgeLike[];
+    originalEdges: CanvasEdgeLike[];
+    canvasData: CanvasDataLike | null;
+    floatingNodes: Set<string>;
+    canvasFilePath: string;
+}

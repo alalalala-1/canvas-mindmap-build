@@ -5,7 +5,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import { handleError } from '../utils/error-handler';
-import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
+import { arrangeLayout as originalArrangeLayout } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
 import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas, isRecord, parseFloatingNodeInfo } from '../utils/canvas-utils';
 import {
@@ -13,9 +13,9 @@ import {
     CanvasEdgeLike,
     CanvasLike,
     CanvasNodeLike,
-    FloatingNodeMetadata,
     FloatingNodeRecord,
-    CanvasManagerLike
+    CanvasManagerLike,
+    CanvasArrangerSettings
 } from './types';
 
 import { VisibilityService } from './services/visibility-service';

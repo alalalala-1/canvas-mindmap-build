@@ -1,29 +1,15 @@
 import { log } from '../utils/logger';
-import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint } from './types';
+import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
 import { CONSTANTS } from '../constants';
 import { estimateTextNodeHeight, parseFloatingNodeInfo } from '../utils/canvas-utils';
 
-interface LayoutNode {
-    id: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    children: string[];
-    _subtreeHeight: number;
-    originalParent?: string;
-}
-
-interface LayoutEdge {
-    fromNode: string;
-    toNode: string;
-}
-
-interface FloatingNodesInfo {
-    floatingNodes: Set<string>;
-    originalParents: Map<string, string>;
-}
-
+/**
+ * 过滤有效的浮动节点，只保留当前节点集合中存在的浮动节点
+ * @param nodes 当前所有节点的映射
+ * @param floatingNodes 浮动节点ID集合
+ * @param originalParents 浮动节点的原始父节点映射
+ * @returns 过滤后的浮动节点信息
+ */
 function filterValidFloatingNodes(
     nodes: Map<string, CanvasNodeLike>,
     floatingNodes: Set<string>,
@@ -44,11 +30,12 @@ function filterValidFloatingNodes(
     return { floatingNodes: validFloatingNodes, originalParents: validOriginalParents };
 }
 
-interface SubtreeBounds {
-    minY: number;
-    maxY: number;
-}
-
+/**
+ * 计算子树的垂直边界范围
+ * @param subtreeNodes 子树节点ID列表
+ * @param layoutNodes 布局节点映射
+ * @returns 子树的最小Y坐标和最大Y坐标
+ */
 function calculateSubtreeBounds(
     subtreeNodes: string[],
     layoutNodes: Map<string, LayoutNode>
@@ -66,6 +53,13 @@ function calculateSubtreeBounds(
     return { minY, maxY };
 }
 
+/**
+ * 对子树所有节点应用垂直偏移
+ * @param subtreeNodes 子树节点ID列表
+ * @param layoutNodes 布局节点映射
+ * @param offsetY 垂直偏移量
+ * @returns 子树底部的最大Y坐标
+ */
 function applyVerticalOffset(
     subtreeNodes: string[],
     layoutNodes: Map<string, LayoutNode>,
@@ -83,42 +77,22 @@ function applyVerticalOffset(
     return maxBottom;
 }
 
-interface LayoutContext {
-    layoutNodes: Map<string, LayoutNode>;
-    layoutParentMap: Map<string, string>;
-    completeParentMap: Map<string, string>;
-    completeChildrenMap: Map<string, string[]>;
-    floatingSubtreeRoots: Set<string>;
-    floatingSubtreeOriginalParents: Map<string, string>;
-    rootNodes: string[];
-    nodeColumn: Map<string, number>;
-    columnWidths: Map<number, number>;
-    nodeMaxDepth: Map<string, number>;
-    maxOverallDepth: number;
-}
-
-export interface CanvasArrangerSettings {
-    horizontalSpacing: number;
-    verticalSpacing: number;
-    textNodeWidth: number;
-    textNodeMaxHeight: number;
-    imageNodeWidth: number;
-    imageNodeHeight: number;
-    formulaNodeWidth: number;
-    formulaNodeHeight: number;
-}
-
 export const DEFAULT_ARRANGER_SETTINGS: CanvasArrangerSettings = {
-    horizontalSpacing: 200,
-    verticalSpacing: 40,
-    textNodeWidth: 400,
-    textNodeMaxHeight: 800,
-    imageNodeWidth: 400,
-    imageNodeHeight: 400,
-    formulaNodeWidth: 400,
-    formulaNodeHeight: 80,
+    horizontalSpacing: CONSTANTS.LAYOUT.HORIZONTAL_SPACING,
+    verticalSpacing: CONSTANTS.LAYOUT.VERTICAL_SPACING,
+    textNodeWidth: CONSTANTS.LAYOUT.TEXT_NODE_WIDTH,
+    textNodeMaxHeight: CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT,
+    imageNodeWidth: CONSTANTS.LAYOUT.IMAGE_NODE_WIDTH,
+    imageNodeHeight: CONSTANTS.LAYOUT.IMAGE_NODE_HEIGHT,
+    formulaNodeWidth: CONSTANTS.LAYOUT.FORMULA_NODE_WIDTH,
+    formulaNodeHeight: CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT,
 };
 
+/**
+ * 从边的端点获取节点ID
+ * @param endpoint 边的端点，可能是字符串或对象
+ * @returns 节点ID，如果无法解析则返回null
+ */
 function getNodeIdFromEndpoint(endpoint: EdgeEndpoint | undefined | null): string | null {
     if (!endpoint) return null;
     if (typeof endpoint === 'string') return endpoint;
@@ -127,6 +101,11 @@ function getNodeIdFromEndpoint(endpoint: EdgeEndpoint | undefined | null): strin
     return null;
 }
 
+/**
+ * 从Canvas数据中提取浮动节点信息
+ * @param canvasData Canvas数据对象
+ * @returns 浮动节点ID集合和原始父节点映射
+ */
 function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
     floatingNodes: Set<string>,
     originalParents: Map<string, string>
@@ -163,7 +142,7 @@ function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
 /**
  * 递归收集浮动子树的所有节点
  */
-function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[]>, floatingSubtree: Set<string>) {
+function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[]>, floatingSubtree: Set<string>): void {
     if (floatingSubtree.has(nodeId)) return;
     
     floatingSubtree.add(nodeId);
@@ -173,6 +152,12 @@ function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[
     }
 }
 
+/**
+ * 初始化布局节点，将Canvas节点转换为布局节点
+ * @param nodes Canvas节点映射
+ * @param settings 布局设置
+ * @returns 布局节点映射
+ */
 function initializeLayoutNodes(
     nodes: Map<string, CanvasNodeLike>,
     settings: CanvasArrangerSettings
@@ -185,10 +170,10 @@ function initializeLayoutNodes(
 
         let nodeHeight: number;
         if (isFormula) {
-            nodeHeight = settings.formulaNodeHeight || 80;
+            nodeHeight = settings.formulaNodeHeight || CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT;
         } else {
             const currentWidth = nodeData.width || settings.textNodeWidth;
-            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings.textNodeMaxHeight || 800);
+            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT);
             if (nodeData.height && nodeData.height > 0) {
                 nodeHeight = Math.max(nodeData.height, estimatedHeight);
             } else {
@@ -210,6 +195,12 @@ function initializeLayoutNodes(
     return layoutNodes;
 }
 
+/**
+ * 构建布局父子关系映射
+ * @param edges 边列表
+ * @param layoutNodes 布局节点映射
+ * @returns 子节点到父节点的映射
+ */
 function buildLayoutParentMap(
     edges: CanvasEdgeLike[],
     layoutNodes: Map<string, LayoutNode>
@@ -239,6 +230,12 @@ function buildLayoutParentMap(
     return layoutParentMap;
 }
 
+/**
+ * 构建完整的父子关系映射（包含所有边，用于浮动节点处理）
+ * @param edges 边列表
+ * @param nodesToCheck 需要检查的节点映射
+ * @returns 完整的父子关系映射和子节点列表映射
+ */
 function buildCompleteParentMap(
     edges: CanvasEdgeLike[],
     nodesToCheck: Map<string, LayoutNode | CanvasNodeLike>
@@ -540,6 +537,12 @@ function collectSubtreeNodes(
     return subtreeNodes;
 }
 
+/**
+ * 计算每列的X坐标位置
+ * @param columnWidths 每列的宽度映射
+ * @param settings 布局设置
+ * @returns 每列的X坐标映射
+ */
 function calculateColumnX(
     columnWidths: Map<number, number>,
     settings: CanvasArrangerSettings
@@ -557,6 +560,18 @@ function calculateColumnX(
     return columnX;
 }
 
+/**
+ * 执行Canvas布局算法
+ * 从右到左布局节点，处理浮动节点和折叠节点
+ * 
+ * @param nodes 需要布局的节点映射（通常是可见节点）
+ * @param edges 可见边列表
+ * @param settings 布局设置参数
+ * @param originalEdges 所有边列表（包含隐藏边），用于浮动节点处理
+ * @param allNodes 所有节点映射（包含隐藏节点），用于浮动节点处理
+ * @param canvasData Canvas数据对象，包含浮动节点元数据
+ * @returns 每个节点的布局位置（x, y, width, height）
+ */
 export function arrangeLayout(
     nodes: Map<string, CanvasNodeLike>,
     edges: CanvasEdgeLike[],
@@ -564,7 +579,7 @@ export function arrangeLayout(
     originalEdges?: CanvasEdgeLike[],
     allNodes?: Map<string, CanvasNodeLike>,
     canvasData?: CanvasDataLike
-): Map<string, { x: number; y: number; width: number; height: number }> {
+): Map<string, LayoutPosition> {
     log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
 
     const floatingInfo = getFloatingNodesInfo(canvasData);

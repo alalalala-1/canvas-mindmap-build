@@ -2,24 +2,15 @@ import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
+import { CONSTANTS } from '../../constants';
 import { getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, isRecord } from '../../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
     CanvasLike,
     CanvasNodeLike,
-    FloatingNodeMetadata
+    LayoutData
 } from '../types';
-
-export interface LayoutData {
-    visibleNodes: Map<string, CanvasNodeLike>;
-    allNodes: Map<string, CanvasNodeLike>;
-    edges: CanvasEdgeLike[];
-    originalEdges: CanvasEdgeLike[];
-    canvasData: CanvasDataLike | null;
-    floatingNodes: Set<string>;
-    canvasFilePath: string;
-}
 
 /**
  * 布局数据提供者 - 负责为布局引擎准备所需的所有数据
@@ -108,7 +99,7 @@ export class LayoutDataProvider {
                         const domHeight = rectHeight > 0 ? rectHeight : nodeEl.clientHeight;
                         if (domHeight && domHeight > 0) {
                             const dataHeight = typeof mergedNode.height === 'number' ? mergedNode.height : 0;
-                            if (!dataHeight || domHeight > dataHeight + 4) {
+                            if (!dataHeight || domHeight > dataHeight + CONSTANTS.LAYOUT.HEIGHT_TOLERANCE) {
                                 mergedNode.height = domHeight;
                                 domHeightAppliedCount++;
                                 if (domHeightDiffSamples.length < 5) {
@@ -127,7 +118,7 @@ export class LayoutDataProvider {
 
                 visibleNodes.set(id, mergedNode);
                 const finalHeight = typeof mergedNode.height === 'number' ? mergedNode.height : 0;
-                if (heightSamples.length < 20) {
+                if (heightSamples.length < CONSTANTS.LAYOUT.MAX_HEIGHT_SAMPLES) {
                     heightSamples.push({ id, height: finalHeight });
                 }
             }
