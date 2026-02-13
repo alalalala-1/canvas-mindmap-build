@@ -1,7 +1,7 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
 import { CONSTANTS } from '../constants';
-import { estimateTextNodeHeight, parseFloatingNodeInfo } from '../utils/canvas-utils';
+import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
 
 /**
  * 过滤有效的浮动节点，只保留当前节点集合中存在的浮动节点
@@ -92,19 +92,6 @@ export const DEFAULT_ARRANGER_SETTINGS: CanvasArrangerSettings = {
  * 从边的端点获取节点ID
  * @param endpoint 边的端点，可能是字符串或对象
  * @returns 节点ID，如果无法解析则返回null
- */
-function getNodeIdFromEndpoint(endpoint: EdgeEndpoint | undefined | null): string | null {
-    if (!endpoint) return null;
-    if (typeof endpoint === 'string') return endpoint;
-    if (typeof endpoint.nodeId === 'string') return endpoint.nodeId;
-    if (endpoint.node && typeof endpoint.node.id === 'string') return endpoint.node.id;
-    return null;
-}
-
-/**
- * 从Canvas数据中提取浮动节点信息
- * @param canvasData Canvas数据对象
- * @returns 浮动节点ID集合和原始父节点映射
  */
 function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
     floatingNodes: Set<string>,
@@ -209,8 +196,8 @@ function buildLayoutParentMap(
     const processedEdges = new Set<string>();
     
     for (const edge of edges) {
-        const fromId = getNodeIdFromEndpoint(edge.from);
-        const toId = getNodeIdFromEndpoint(edge.to);
+        const fromId = getNodeIdFromEdgeEndpoint(edge.from);
+        const toId = getNodeIdFromEdgeEndpoint(edge.to);
 
         if (!fromId || !toId) continue;
 
@@ -244,8 +231,8 @@ function buildCompleteParentMap(
     const completeChildrenMap = new Map<string, string[]>();
     
     for (const edge of edges) {
-        let fromId = getNodeIdFromEndpoint(edge.from);
-        let toId = getNodeIdFromEndpoint(edge.to);
+        let fromId = getNodeIdFromEdgeEndpoint(edge.from);
+        let toId = getNodeIdFromEdgeEndpoint(edge.to);
 
         if (!fromId && edge.fromNode) fromId = edge.fromNode;
         if (!toId && edge.toNode) toId = edge.toNode;
