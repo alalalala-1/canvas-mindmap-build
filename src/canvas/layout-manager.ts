@@ -198,22 +198,12 @@ export class LayoutManager {
                 if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
                 let changed = false;
 
-                for (const node of canvasData.nodes) {
-                    if (typeof node.id !== 'string') continue;
-                    const newPos = result.get(node.id);
-                    if (newPos && (node.x !== newPos.x || node.y !== newPos.y)) {
-                        node.x = newPos.x;
-                        node.y = newPos.y;
-                        changed = true;
-                    }
+                if (this.applyLayoutPositions(canvasData, result)) {
+                    changed = true;
                 }
 
-                const fileEdgeIds = new Set(canvasData.edges.map((e) => e.id).filter((id): id is string => typeof id === 'string'));
-                for (const memEdge of memoryEdges) {
-                    if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
-                        canvasData.edges.push(this.serializeEdge(memEdge) as CanvasEdgeLike);
-                        changed = true;
-                    }
+                if (this.mergeMemoryEdgesIntoFileData(canvasData, memoryEdges)) {
+                    changed = true;
                 }
 
                 return changed;
@@ -578,5 +568,38 @@ export class LayoutManager {
             color: memEdge.color,
             label: memEdge.label
         };
+    }
+
+    private applyLayoutPositions(
+        canvasData: CanvasDataLike,
+        result: Map<string, { x: number; y: number }>
+    ): boolean {
+        let changed = false;
+        for (const node of canvasData.nodes ?? []) {
+            if (typeof node.id !== 'string') continue;
+            const newPos = result.get(node.id);
+            if (newPos && (node.x !== newPos.x || node.y !== newPos.y)) {
+                node.x = newPos.x;
+                node.y = newPos.y;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private mergeMemoryEdgesIntoFileData(
+        canvasData: CanvasDataLike,
+        memoryEdges: CanvasEdgeLike[]
+    ): boolean {
+        if (!Array.isArray(canvasData.edges)) return false;
+        let changed = false;
+        const fileEdgeIds = new Set(canvasData.edges.map((e) => e.id).filter((id): id is string => typeof id === 'string'));
+        for (const memEdge of memoryEdges) {
+            if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
+                canvasData.edges.push(this.serializeEdge(memEdge) as CanvasEdgeLike);
+                changed = true;
+            }
+        }
+        return changed;
     }
 }

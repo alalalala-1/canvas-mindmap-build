@@ -5,7 +5,7 @@ import { CanvasLike, CanvasNodeLike } from '../types';
 export class FloatingNodeStyleManager {
     private readonly FLOATING_CLASS = 'cmb-floating-node';
     private canvas: CanvasLike | null = null;
-    private pendingTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
+    private pendingTimeouts: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
     private elementCache: Map<string, HTMLElement> = new Map();
 
     setCanvas(canvas: CanvasLike): void {
@@ -14,28 +14,51 @@ export class FloatingNodeStyleManager {
     }
 
     cleanup(): void {
-        for (const timeoutId of this.pendingTimeouts) {
-            clearTimeout(timeoutId);
+        for (const timeoutSet of this.pendingTimeouts.values()) {
+            for (const timeoutId of timeoutSet) {
+                clearTimeout(timeoutId);
+            }
         }
         this.pendingTimeouts.clear();
         this.elementCache.clear();
     }
 
-    private scheduleRetry(callback: () => void, delay: number): void {
+    private scheduleRetry(nodeId: string, callback: () => void, delay: number): void {
         const timeoutId = setTimeout(() => {
-            this.pendingTimeouts.delete(timeoutId);
+            const timeoutSet = this.pendingTimeouts.get(nodeId);
+            if (timeoutSet) {
+                timeoutSet.delete(timeoutId);
+                if (timeoutSet.size === 0) {
+                    this.pendingTimeouts.delete(nodeId);
+                }
+            }
             callback();
         }, delay);
-        this.pendingTimeouts.add(timeoutId);
+        let timeoutSet = this.pendingTimeouts.get(nodeId);
+        if (!timeoutSet) {
+            timeoutSet = new Set();
+            this.pendingTimeouts.set(nodeId, timeoutSet);
+        }
+        timeoutSet.add(timeoutId);
+    }
+
+    private clearPendingRetries(nodeId: string): void {
+        const timeoutSet = this.pendingTimeouts.get(nodeId);
+        if (!timeoutSet) return;
+        for (const timeoutId of timeoutSet) {
+            clearTimeout(timeoutId);
+        }
+        this.pendingTimeouts.delete(nodeId);
     }
 
     applyFloatingStyle(nodeId: string): boolean {
         try {
+            this.clearPendingRetries(nodeId);
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 找不到节点元素: ${nodeId}，将延迟重试`);
-                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
-                this.scheduleRetry(() => this.applyFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_LONG);
+                this.scheduleRetry(nodeId, () => this.applyFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
+                this.scheduleRetry(nodeId, () => this.applyFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_LONG);
                 return false;
             }
 
@@ -62,12 +85,13 @@ export class FloatingNodeStyleManager {
 
     clearFloatingStyle(nodeId: string): boolean {
         try {
+            this.clearPendingRetries(nodeId);
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
                 log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_MEDIUM);
-                this.scheduleRetry(() => this.clearFloatingStyleRetry(nodeId, 3), CONSTANTS.TIMING.RETRY_DELAY_LONG);
+                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
+                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_MEDIUM);
+                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 3), CONSTANTS.TIMING.RETRY_DELAY_LONG);
                 return false;
             }
 
