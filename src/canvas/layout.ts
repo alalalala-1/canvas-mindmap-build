@@ -368,29 +368,6 @@ function findRootNodes(
     return rootNodes;
 }
 
-function calculateSubtreeHeight(
-    nodeId: string,
-    layoutNodes: Map<string, LayoutNode>,
-    settings: CanvasArrangerSettings
-): number {
-    const node = layoutNodes.get(nodeId);
-    if (!node) return 0;
-
-    if (node.children.length === 0) {
-        node._subtreeHeight = node.height;
-        return node.height;
-    }
-
-    let childrenTotalHeight = 0;
-    for (const childId of node.children) {
-        childrenTotalHeight += calculateSubtreeHeight(childId, layoutNodes, settings);
-    }
-    childrenTotalHeight += Math.max(0, node.children.length - 1) * settings.verticalSpacing;
-
-    node._subtreeHeight = Math.max(node.height, childrenTotalHeight);
-    return node._subtreeHeight;
-}
-
 function calculateMaxDepth(
     nodeId: string,
     layoutNodes: Map<string, LayoutNode>,

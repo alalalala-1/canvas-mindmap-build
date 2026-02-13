@@ -85,9 +85,9 @@ export class CanvasEventManager {
                 if (this.canvasFileModifyTimeoutId !== null) {
                     window.clearTimeout(this.canvasFileModifyTimeoutId);
                 }
-                this.canvasFileModifyTimeoutId = window.setTimeout(async () => {
+                this.canvasFileModifyTimeoutId = window.setTimeout(() => {
                     this.canvasFileModifyTimeoutId = null;
-                    await this.handleCanvasFileModified(file.path);
+                    void this.handleCanvasFileModified(file.path);
                 }, CONSTANTS.TIMING.BUTTON_CHECK_DEBOUNCE);
             })
         );
@@ -128,7 +128,7 @@ export class CanvasEventManager {
                 event.stopPropagation();
                 event.stopImmediatePropagation();
                 
-                setTimeout(async () => {
+                setTimeout(() => {
                     const canvas = (canvasView as CanvasViewLike).canvas;
                     if (!canvas) return;
                     
@@ -137,18 +137,18 @@ export class CanvasEventManager {
                     if (selectedEdge) {
                         const modal = new DeleteEdgeConfirmationModal(this.app);
                         modal.open();
-                        const result = await modal.waitForResult();
-                        
-                        if (result.action === 'confirm') {
-                            await this.canvasManager.deleteSelectedEdge();
-                        }
+                        void modal.waitForResult().then(async (result) => {
+                            if (result.action === 'confirm') {
+                                await this.canvasManager.deleteSelectedEdge();
+                            }
+                        });
                         return;
                     }
                     
                     // 否则检查是否选中了节点
                     const selectedNode = this.getSelectedNodeFromCanvas(canvas);
                     if (selectedNode) {
-                        await this.executeDeleteOperation(selectedNode, canvas);
+                        void this.executeDeleteOperation(selectedNode, canvas);
                     }
                 }, 0);
                 return;
