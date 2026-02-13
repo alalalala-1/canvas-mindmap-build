@@ -36,6 +36,9 @@
   - 只查询内存缓存 `isNodeFloatingFromCache`，避免读取旧文件造成竞态
   - 若目标节点仍标记浮动 → 仅清除内存缓存与 Canvas 内存节点的 `data` 字段
   - 源节点为浮动时仅保持红框，不主动清除
+ - **竞态处理经验**:
+  - `edge-create` 早于文件落盘，不能在该阶段触发 `requestSave`，否则会覆盖新边导致“连线消失”
+  - 样式重放判断入边时优先使用 `fileData.edges`（当文件边数更多时），避免内存边滞后造成红框延迟消失
 
 #### 1.5 全量验证与样式重放
 - **方法**: `FloatingNodeService.reapplyAllFloatingStyles(canvas)`
