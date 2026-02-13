@@ -107,7 +107,7 @@ export class CanvasEventManager {
                         await this.setupCanvasEventListeners(canvasView);
                         // Canvas打开时立即检查并添加所有必要的DOM属性和按钮
                         setTimeout(() => {
-                            this.canvasManager.checkAndAddCollapseButtons();
+                            void this.canvasManager.checkAndAddCollapseButtons();
                         }, CONSTANTS.TIMING.RENDER_DELAY);
                     }
                 }
@@ -461,8 +461,8 @@ export class CanvasEventManager {
                 await this.canvasManager.checkAndAddCollapseButtons();
                 for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
                     setTimeout(() => {
-                        this.canvasManager.checkAndAddCollapseButtons();
-                        this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                        void this.canvasManager.checkAndAddCollapseButtons();
+                        void this.canvasManager.checkAndClearFloatingStateForNewEdges();
                     }, delay);
                 }
             })
@@ -475,7 +475,7 @@ export class CanvasEventManager {
                 log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
-                this.canvasManager.checkAndAddCollapseButtons();
+                void this.canvasManager.checkAndAddCollapseButtons();
             })
         );
 
@@ -489,8 +489,8 @@ export class CanvasEventManager {
                 this.canvasChangeTimeoutId = window.setTimeout(() => {
                     this.canvasChangeTimeoutId = null;
                     log(`[Event] Canvas:Change 防抖执行`);
-                    this.canvasManager.checkAndClearFloatingStateForNewEdges();
-                    this.canvasManager.checkAndAddCollapseButtons();
+                    void this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                    void this.canvasManager.checkAndAddCollapseButtons();
                 }, CONSTANTS.TIMING.BUTTON_CHECK_DEBOUNCE);
             })
         );
@@ -506,7 +506,7 @@ export class CanvasEventManager {
                     }
                     log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
                     setTimeout(() => {
-                        this.canvasManager.adjustNodeHeightAfterRender(nodeId);
+                        void this.canvasManager.adjustNodeHeightAfterRender(nodeId);
                     }, CONSTANTS.TIMING.SCROLL_DELAY);
                 } else {
                     log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
@@ -517,14 +517,14 @@ export class CanvasEventManager {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-delete', (node: CanvasNodeLike) => {
                 log(`[Event] Canvas:NodeDelete: ${node.id}`);
-                this.floatingNodeService.clearFloatingMarks(node);
-                this.canvasManager.checkAndAddCollapseButtons();
+                void this.floatingNodeService.clearFloatingMarks(node);
+                void this.canvasManager.checkAndAddCollapseButtons();
             })
         );
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
-                this.canvasManager.syncHiddenChildrenOnDrag(node);
+                void this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );
 
@@ -567,7 +567,7 @@ export class CanvasEventManager {
             }
 
             if (shouldCheckButtons) {
-                this.canvasManager.checkAndAddCollapseButtons();
+                void this.canvasManager.checkAndAddCollapseButtons();
             }
         });
 

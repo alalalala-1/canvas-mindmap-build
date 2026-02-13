@@ -80,7 +80,7 @@ export class CanvasManager implements ICanvasManager {
     // 初始化
     // =========================================================================
     initialize() {
-        this.eventManager.initialize();
+        void this.eventManager.initialize();
     }
 
     // =========================================================================

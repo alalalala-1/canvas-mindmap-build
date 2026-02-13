@@ -139,7 +139,7 @@ export class CanvasNodeManager {
                         }
                         if (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0) {
                             setTimeout(() => {
-                                this.adjustNodeHeightAfterRender(nodeId);
+                                void this.adjustNodeHeightAfterRender(nodeId);
                             }, CONSTANTS.TIMING.RETRY_DELAY);
                         }
                         if (typeof canvas.requestSave === 'function') {

@@ -98,7 +98,7 @@ export class NodeDeletionService {
 
             this.collapseStateManager.clearCache();
             reloadCanvas(canvas);
-            setTimeout(() => this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
+            setTimeout(() => void this.refreshCollapseButtons(), CONSTANTS.TIMING.BUTTON_REFRESH_DELAY);
 
             new Notice('节点已删除');
         } catch (err) {
