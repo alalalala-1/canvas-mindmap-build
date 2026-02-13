@@ -485,57 +485,6 @@ export class LayoutManager {
     }
 
     // =========================================================================
-    // 检查并清除已连接的浮动节点状态
-    // =========================================================================
-    private async checkAndClearConnectedFloatingNodes(canvas: CanvasLike): Promise<void> {
-        try {
-            // 获取当前 canvas 路径 - 使用多种方法尝试获取
-            const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
-            
-            if (!canvasFilePath) return;
-            
-            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-            if (!(canvasFile instanceof TFile)) return;
-
-            const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent) as CanvasDataLike;
-            const floatingNodes = canvasData.metadata?.floatingNodes || {};
-
-            // 获取当前所有边
-            const edges = this.getCanvasEdges(canvas);
-
-            // 检查每个浮动节点是否已经有连接
-            for (const nodeId of Object.keys(floatingNodes)) {
-                let isFloating = false;
-                if (typeof floatingNodes[nodeId] === 'boolean') {
-                    isFloating = floatingNodes[nodeId] === true;
-                } else if (typeof floatingNodes[nodeId] === 'object' && floatingNodes[nodeId] !== null) {
-                    const infoRecord = floatingNodes[nodeId] as FloatingNodeMetadata;
-                    isFloating = infoRecord.isFloating === true;
-                }
-                
-                if (isFloating) {
-                    let hasConnection = false;
-                    for (const edge of edges) {
-                        const fromNodeId = getNodeIdFromEdgeEndpoint(edge?.from);
-                        const toNodeId = getNodeIdFromEdgeEndpoint(edge?.to);
-                        if (fromNodeId === nodeId || toNodeId === nodeId) {
-                            hasConnection = true;
-                            break;
-                        }
-                    }
-                    
-                    if (hasConnection) {
-                        await this.clearFloatingNodeState(nodeId, canvas);
-                    }
-                }
-            }
-        } catch (err) {
-            handleError(err, { context: 'Layout', message: '检查浮动失败', showNotice: false });
-        }
-    }
-
-    // =========================================================================
     // 辅助方法：清除浮动节点状态
     // =========================================================================
     private async clearFloatingNodeState(nodeId: string, canvas?: CanvasLike): Promise<void> {

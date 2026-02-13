@@ -7,7 +7,7 @@ import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasLike, CanvasEdgeLike, CanvasNodeLike, ICanvasManager } from '../types';
-import { getNodeFromCanvas, getEdgesFromCanvas, getEdgeToNodeId as getEdgeToNodeIdUtil } from '../../utils/canvas-utils';
+import { getNodeFromCanvas, getEdgesFromCanvas, getEdgeToNodeId as getEdgeToNodeIdUtil, getEdgeFromNodeId as getEdgeFromNodeIdUtil } from '../../utils/canvas-utils';
 
 export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
@@ -272,24 +272,8 @@ export class FloatingNodeService {
      * 因此只更新内存状态，不触发文件操作
      */
     async handleNewEdge(edge: CanvasEdgeLike): Promise<void> {
-        let toNodeId: string | null = null;
-        let fromNodeId: string | null = null;
-        
-        if (typeof edge?.to === 'string') {
-            toNodeId = edge.to;
-        } else if (edge?.to?.node?.id) {
-            toNodeId = edge.to.node.id;
-        } else if (edge?.toNode) {
-            toNodeId = edge.toNode;
-        }
-        
-        if (typeof edge?.from === 'string') {
-            fromNodeId = edge.from;
-        } else if (edge?.from?.node?.id) {
-            fromNodeId = edge.from.node.id;
-        } else if (edge?.fromNode) {
-            fromNodeId = edge.fromNode;
-        }
+        const toNodeId = getEdgeToNodeIdUtil(edge);
+        const fromNodeId = getEdgeFromNodeIdUtil(edge);
 
         if (!toNodeId) {
             log(`[FloatingNode] 警告: 无法解析连线目标节点 ID`);

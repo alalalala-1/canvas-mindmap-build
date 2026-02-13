@@ -20,8 +20,6 @@ export class CollapseStateManager {
     }
 
     getChildNodes(nodeId: string, edges: CanvasEdgeLike[]): string[] {
-        // 不使用缓存，因为边的内容可能变化但数量相同
-        // 直接计算子节点
         const childIds: string[] = [];
 
         for (const e of edges) {
@@ -80,12 +78,11 @@ export class CollapseStateManager {
 
     /**
      * 递归添加所有后代节点到集合中
-     * 已通过 targetSet 检查防止循环引用导致的无限递归
+     * 注意：入口检查只跳过已处理的节点，子节点在递归前添加到集合
      */
     addAllDescendantsToSet(nodeId: string, edges: CanvasEdgeLike[], targetSet: Set<string>) {
-        if (targetSet.has(nodeId)) return;
-        
         const childNodeIds = this.getChildNodes(nodeId, edges);
+        
         for (const childId of childNodeIds) {
             if (!targetSet.has(childId)) {
                 targetSet.add(childId);
