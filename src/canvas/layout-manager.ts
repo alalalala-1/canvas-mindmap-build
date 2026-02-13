@@ -211,18 +211,7 @@ export class LayoutManager {
                 const fileEdgeIds = new Set(canvasData.edges.map((e) => e.id).filter((id): id is string => typeof id === 'string'));
                 for (const memEdge of memoryEdges) {
                     if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
-                        const serializableEdge = {
-                            id: memEdge.id,
-                            fromNode: this.toStringId(memEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.from)) || this.toStringId(memEdge.from),
-                            toNode: this.toStringId(memEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.to)) || this.toStringId(memEdge.to),
-                            fromSide: this.toStringId(memEdge.fromSide) || (isRecord(memEdge.from) ? this.toStringId(memEdge.from.side) : undefined),
-                            toSide: this.toStringId(memEdge.toSide) || (isRecord(memEdge.to) ? this.toStringId(memEdge.to.side) : undefined),
-                            fromEnd: memEdge.fromEnd,
-                            toEnd: memEdge.toEnd,
-                            color: memEdge.color,
-                            label: memEdge.label
-                        };
-                        canvasData.edges.push(serializableEdge);
+                        canvasData.edges.push(this.serializeEdge(memEdge) as CanvasEdgeLike);
                         changed = true;
                     }
                 }
@@ -614,5 +603,19 @@ export class LayoutManager {
 
     private toStringId(value: unknown): string | undefined {
         return typeof value === 'string' ? value : undefined;
+    }
+
+    private serializeEdge(memEdge: CanvasEdgeLike): Record<string, unknown> {
+        return {
+            id: memEdge.id,
+            fromNode: this.toStringId(memEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.from)) || this.toStringId(memEdge.from),
+            toNode: this.toStringId(memEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.to)) || this.toStringId(memEdge.to),
+            fromSide: this.toStringId(memEdge.fromSide) || (isRecord(memEdge.from) ? this.toStringId(memEdge.from.side) : undefined),
+            toSide: this.toStringId(memEdge.toSide) || (isRecord(memEdge.to) ? this.toStringId(memEdge.to.side) : undefined),
+            fromEnd: memEdge.fromEnd,
+            toEnd: memEdge.toEnd,
+            color: memEdge.color,
+            label: memEdge.label
+        };
     }
 }

@@ -1,7 +1,7 @@
 import { App, ItemView } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
-import { getCanvasView } from '../utils/canvas-utils';
+import { getCanvasView, getEdgeFromNodeId } from '../utils/canvas-utils';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike } from './types';
@@ -61,9 +61,7 @@ export class CanvasUIManager {
 
         const nodesWithChildren = new Set<string>();
         for (const e of edges) {
-            const fromId = typeof e.from === 'string' 
-                ? e.from 
-                : e.from?.node?.id || e.fromNode;
+            const fromId = getEdgeFromNodeId(e);
             if (fromId) {
                 nodesWithChildren.add(fromId);
             }
@@ -102,10 +100,7 @@ export class CanvasUIManager {
         const existingBtn = nodeEl.querySelector('.cmb-collapse-button');
         
         const hasChildren = edges.some((e) => {
-            const fromId = typeof e.from === 'string' 
-                ? e.from 
-                : e.from?.node?.id || e.fromNode;
-            return fromId === nodeId;
+            return getEdgeFromNodeId(e) === nodeId;
         });
 
         if (!hasChildren) {
