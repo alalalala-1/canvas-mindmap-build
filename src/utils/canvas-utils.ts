@@ -331,6 +331,9 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
     return result;
 }
 
+/**
+ * 清除高度缓存
+ */
 export function clearHeightCache(): void {
     heightCache.clear();
 }
@@ -648,6 +651,11 @@ export type ParsedFloatingInfo = {
     originalParent: string;
 };
 
+/**
+ * 解析浮动节点信息
+ * @param info 浮动节点信息，可能是布尔值或对象
+ * @returns 解析后的浮动节点信息
+ */
 export function parseFloatingNodeInfo(info: boolean | FloatingNodeRecord | undefined): ParsedFloatingInfo {
     if (typeof info === 'boolean') {
         return { isFloating: info, originalParent: '' };

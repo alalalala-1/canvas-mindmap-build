@@ -96,6 +96,13 @@ export class LayoutManager {
         };
     }
 
+    /**
+     * 更新节点位置到Canvas
+     * @param result 布局结果映射
+     * @param allNodes 所有节点映射
+     * @param canvas Canvas对象
+     * @returns 更新的节点数量
+     */
     private async updateNodePositions(
         result: Map<string, { x: number; y: number }>,
         allNodes: Map<string, CanvasNodeLike>,
@@ -120,6 +127,10 @@ export class LayoutManager {
         return updatedCount;
     }
 
+    /**
+     * 触发节点高度调整
+     * @param skipAdjust 是否跳过调整
+     */
     private async triggerHeightAdjustment(skipAdjust: boolean): Promise<void> {
         if (skipAdjust) return;
 
@@ -154,6 +165,10 @@ export class LayoutManager {
         setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL);
     }
 
+    /**
+     * 执行布局整理
+     * @param skipAdjust 是否跳过高度调整
+     */
     private async performArrange(skipAdjust: boolean = false) {
         const activeView = getCanvasView(this.app);
 
@@ -227,6 +242,13 @@ export class LayoutManager {
         }
     }
 
+    /**
+     * 收集需要隐藏的节点ID
+     * @param nodes 节点映射
+     * @param edges 边列表
+     * @param canvasData Canvas数据
+     * @returns 隐藏节点ID集合
+     */
     private collectHiddenNodeIds(
         nodes: Map<string, CanvasNodeLike>,
         edges: CanvasEdgeLike[],
@@ -253,6 +275,11 @@ export class LayoutManager {
         return allHiddenNodeIds;
     }
 
+    /**
+     * 应用节点可见性
+     * @param nodes 节点映射
+     * @param hiddenIds 隐藏节点ID集合
+     */
     private applyVisibilityToNodes(nodes: Map<string, CanvasNodeLike>, hiddenIds: Set<string>): void {
         nodes.forEach((node, id) => {
             if (node?.nodeEl) {
@@ -262,6 +289,11 @@ export class LayoutManager {
         });
     }
 
+    /**
+     * 应用边可见性
+     * @param edges 边列表
+     * @param hiddenIds 隐藏节点ID集合
+     */
     private applyVisibilityToEdges(edges: CanvasEdgeLike[], hiddenIds: Set<string>): void {
         for (const edge of edges) {
             const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
@@ -272,6 +304,13 @@ export class LayoutManager {
         }
     }
 
+    /**
+     * 计算锚点偏移量
+     * @param nodeId 锚点节点ID
+     * @param nodes 节点映射
+     * @param newLayout 新布局映射
+     * @returns 偏移量
+     */
     private calculateAnchorOffset(
         nodeId: string,
         nodes: Map<string, CanvasNodeLike>,
@@ -287,6 +326,14 @@ export class LayoutManager {
         };
     }
 
+    /**
+     * 带偏移量更新节点位置
+     * @param newLayout 新布局映射
+     * @param nodes 节点映射
+     * @param offsetX X偏移量
+     * @param offsetY Y偏移量
+     * @returns 更新的节点数量
+     */
     private async updateNodePositionsWithOffset(
         newLayout: Map<string, { x: number; y: number }>,
         nodes: Map<string, CanvasNodeLike>,
@@ -323,6 +370,13 @@ export class LayoutManager {
         return updatedCount;
     }
 
+    /**
+     * 应用折叠/展开时的可见性
+     * @param nodeId 当前操作的节点ID
+     * @param nodes 节点映射
+     * @param edges 边列表
+     * @param canvasData Canvas数据
+     */
     private applyToggleVisibility(
         nodeId: string,
         nodes: Map<string, CanvasNodeLike>,
