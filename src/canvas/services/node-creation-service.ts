@@ -193,7 +193,7 @@ export class NodeCreationService {
         if (canvasView) {
             const canvas = (canvasView as CanvasViewLike).canvas;
             if (canvas?.selection) {
-                const selectedNodes = Array.from(canvas.selection.values()) as CanvasNodeLike[];
+                const selectedNodes = Array.from(canvas.selection.values());
                 const firstSelected = selectedNodes[0];
                 if (firstSelected?.id) {
                     const selectedNodeId = firstSelected.id;

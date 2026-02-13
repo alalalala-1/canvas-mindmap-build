@@ -152,7 +152,7 @@ export class FloatingNodeStyleManager {
                 const node = this.canvas.nodes.get(nodeId);
                 nodeEl = node?.nodeEl || null;
             } else if (typeof this.canvas.nodes === 'object') {
-                const node = (this.canvas.nodes as Record<string, CanvasNodeLike>)[nodeId];
+                const node = this.canvas.nodes[nodeId];
                 nodeEl = node?.nodeEl || null;
             }
         }

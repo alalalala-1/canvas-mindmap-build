@@ -35,7 +35,7 @@ export class CanvasFileService {
         const metadata = canvasData.metadata?.floatingNodes as FloatingNodesMetadata | undefined;
         if (metadata) {
             for (const [nodeId, info] of Object.entries(metadata)) {
-                const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
+                const { isFloating, originalParent } = parseFloatingNodeInfo(info);
                 if (isFloating) {
                     floatingNodes.add(nodeId);
                     if (originalParent) {

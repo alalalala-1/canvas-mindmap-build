@@ -45,7 +45,7 @@ export class FloatingNodeService {
     private getEdgesFromCanvas(): CanvasEdgeLike[] {
         if (!this.canvas) return [];
         let edges = getEdgesFromCanvas(this.canvas);
-        const fileEdges = this.canvas.fileData?.edges as CanvasEdgeLike[] | undefined;
+        const fileEdges = this.canvas.fileData?.edges;
         if (fileEdges && fileEdges.length > edges.length) {
             edges = fileEdges;
         }

@@ -211,7 +211,7 @@ export class CanvasUIManager {
                         return node.nodeEl;
                     }
                 } else if (typeof canvas.nodes === 'object') {
-                    const node = (canvas.nodes as Record<string, CanvasNodeLike>)[nodeId];
+                    const node = canvas.nodes[nodeId];
                     if (node?.nodeEl) {
                         return node.nodeEl;
                     }

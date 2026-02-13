@@ -209,7 +209,7 @@ export class LayoutManager {
             const memoryEdges = this.getCanvasEdges(canvas);
 
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
-                const canvasData = data as CanvasDataLike;
+                const canvasData = data;
                 if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
                 let changed = false;
 
@@ -284,7 +284,7 @@ export class LayoutManager {
         nodes.forEach((node, id) => {
             if (node?.nodeEl) {
                 const shouldHide = hiddenIds.has(id);
-                (node.nodeEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+                node.nodeEl.style.display = shouldHide ? 'none' : '';
             }
         });
     }
@@ -299,8 +299,8 @@ export class LayoutManager {
             const fromId = getNodeIdFromEdgeEndpoint(edge?.from);
             const toId = getNodeIdFromEdgeEndpoint(edge?.to);
             const shouldHide = (fromId && hiddenIds.has(fromId)) || (toId && hiddenIds.has(toId));
-            if (edge.lineGroupEl) (edge.lineGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
-            if (edge.lineEndGroupEl) (edge.lineEndGroupEl as HTMLElement).style.display = shouldHide ? 'none' : '';
+            if (edge.lineGroupEl) edge.lineGroupEl.style.display = shouldHide ? 'none' : '';
+            if (edge.lineEndGroupEl) edge.lineEndGroupEl.style.display = shouldHide ? 'none' : '';
         }
     }
 

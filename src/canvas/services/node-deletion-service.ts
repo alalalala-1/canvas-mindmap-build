@@ -154,7 +154,7 @@ export class NodeDeletionService {
     }
 
     private getEdgesFromCanvas(canvas: CanvasLike): CanvasEdgeLike[] {
-        if (canvas.fileData?.edges) return canvas.fileData.edges as CanvasEdgeLike[];
+        if (canvas.fileData?.edges) return canvas.fileData.edges;
         return getEdgesFromCanvas(canvas);
     }
 

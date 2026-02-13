@@ -214,7 +214,7 @@ export class LayoutDataProvider {
             return canvas.nodes;
         }
         if (canvas.nodes && isRecord(canvas.nodes)) {
-            return new Map(Object.entries(canvas.nodes) as Array<[string, CanvasNodeLike]>);
+            return new Map(Object.entries(canvas.nodes));
         }
         return new Map();
     }
