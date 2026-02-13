@@ -37,8 +37,9 @@
   - 若目标节点仍标记浮动 → 仅清除内存缓存与 Canvas 内存节点的 `data` 字段
   - 源节点为浮动时仅保持红框，不主动清除
  - **竞态处理经验**:
-  - `edge-create` 早于文件落盘，不能在该阶段触发 `requestSave`，否则会覆盖新边导致“连线消失”
+  - `edge-create` 早于文件落盘，不能在该阶段触发 `requestSave`，否则会覆盖新边导致"连线消失"
   - 样式重放判断入边时优先使用 `fileData.edges`（当文件边数更多时），避免内存边滞后造成红框延迟消失
+  - **快速连线处理**: 在 `handleNewEdge` 开始时验证边是否存在于 Canvas，若不存在则等待 100ms 后再处理，防止第二条连线消失
 
 #### 1.5 全量验证与样式重放
 - **方法**: `FloatingNodeService.reapplyAllFloatingStyles(canvas)`
@@ -61,6 +62,17 @@
 - **方法**: `EdgeChangeDetector.startDetection(canvas, onNewEdges, { interval: 500, maxChecks: 0 })`
 - **去重**: `processedEdgeIds` 防止重复处理
 - **ID 生成**: `fromId -> toId` 或 `edge.id`
+
+#### 1.8 并发处理机制
+- **标志位**: `isClearingFloating` 防止同时执行多个清除操作
+- **队列**: `pendingClearNodes` 存储等待处理的节点
+- **等待**: `waitForClearComplete()` 返回 Promise，由 `clearCompleteResolver` 通知完成
+- **流程**:
+  1. 第二个请求检测到 `isClearingFloating = true`
+  2. 将节点加入 `pendingClearNodes` 队列
+  3. 调用 `await waitForClearComplete()` 等待
+  4. 第一个请求完成后触发 `finally` 块，调用 `clearCompleteResolver()` 通知等待者
+  5. 然后处理队列中的待清除节点
 
 ### 踩坑记录
 1. **不要在布局时过滤浮动节点** - 会导致布局错乱
