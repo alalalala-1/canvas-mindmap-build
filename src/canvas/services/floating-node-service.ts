@@ -243,8 +243,11 @@ export class FloatingNodeService {
 
     /**
      * 清除Canvas节点数据中的浮动状态
+     * @param nodeIds 节点ID列表
+     * @param requestSave 是否请求保存文件
+     * @param delay 保存延迟（毫秒），用于确保边数据已写入后再保存
      */
-    private clearFloatingCanvasData(nodeIds: string[], requestSave: boolean = true): void {
+    private clearFloatingCanvasData(nodeIds: string[], requestSave: boolean = true, delay: number = 0): void {
         if (!this.canvas) return;
         for (const id of nodeIds) {
             const node = this.getNodeFromCanvas(id);
@@ -256,7 +259,15 @@ export class FloatingNodeService {
             }
         }
         if (requestSave && typeof this.canvas.requestSave === 'function') {
-            this.canvas.requestSave();
+            if (delay > 0) {
+                setTimeout(() => {
+                    if (typeof this.canvas?.requestSave === 'function') {
+                        this.canvas.requestSave();
+                    }
+                }, delay);
+            } else {
+                this.canvas.requestSave();
+            }
         }
     }
 
@@ -350,7 +361,8 @@ export class FloatingNodeService {
         if (isToNodeFloating) {
             log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
             this.clearFloatingMemory(this.currentCanvasFilePath, [toNodeId]);
-            this.clearFloatingCanvasData([toNodeId], persistToFile);
+            // 当 persistToFile=true 时，延迟保存以确保边数据已写入
+            this.clearFloatingCanvasData([toNodeId], persistToFile, persistToFile ? CONSTANTS.TIMING.RETRY_DELAY : 0);
             this.removeFloatingNodeIds([toNodeId]);
             if (persistToFile) {
                 await this.persistClearFloatingState(toNodeId, false);
