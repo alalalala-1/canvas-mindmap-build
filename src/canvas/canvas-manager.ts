@@ -16,7 +16,7 @@ import {
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
-import { ICanvasManager, CanvasViewLike, CanvasNodeLike } from './types';
+import { ICanvasManager, CanvasViewLike, CanvasNodeLike, CanvasLike } from './types';
 
 export class CanvasManager implements ICanvasManager {
     private plugin: Plugin;
@@ -158,6 +158,14 @@ export class CanvasManager implements ICanvasManager {
 
     public getFloatingNodeService(): FloatingNodeService {
         return this.floatingNodeService;
+    }
+
+    public async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
+        await this.nodeManager.handleSingleDelete(node, canvas);
+    }
+
+    public async handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
+        await this.nodeManager.handleCascadeDelete(node, canvas);
     }
 
     // =========================================================================

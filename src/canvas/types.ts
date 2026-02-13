@@ -11,6 +11,8 @@ export interface ICanvasManager {
     syncHiddenChildrenOnDrag(node: CanvasNodeLike): Promise<void>;
     calculateTextNodeHeight(content: string, nodeEl?: Element): number;
     readonly collapseStateManager: CollapseStateManager;
+    handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
+    handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
 }
 
 export interface FromLink {

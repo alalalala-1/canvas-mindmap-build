@@ -231,9 +231,9 @@ export class CanvasEventManager {
         this.collapseStateManager.clearCache();
         log(`[Event] UI: 删除 ${nodeId} (${result.action})`);
         if (result.action === 'confirm' || result.action === 'single') {
-            await this.canvasManager['nodeManager'].handleSingleDelete(selectedNode, canvas);
+            await this.canvasManager.handleSingleDelete(selectedNode, canvas);
         } else if (result.action === 'cascade') {
-            await this.canvasManager['nodeManager'].handleCascadeDelete(selectedNode, canvas);
+            await this.canvasManager.handleCascadeDelete(selectedNode, canvas);
         }
     }
 
