@@ -210,6 +210,15 @@ export function getEdgesFromCanvas(canvas: CanvasLike | null | undefined): Canva
 }
 
 /**
+ * 检查节点是否有子节点
+ */
+export function hasChildNodes(nodeId: string, edges: CanvasEdgeLike[]): boolean {
+    return edges.some((edge) => {
+        return getEdgeFromNodeId(edge) === nodeId;
+    });
+}
+
+/**
  * 刷新 Canvas 视图
  * 尝试调用 reload、requestUpdate 或 requestSave 方法
  */

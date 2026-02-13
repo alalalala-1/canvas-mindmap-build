@@ -464,45 +464,6 @@ export class LayoutManager {
     }
 
     // =========================================================================
-    // 辅助方法：清除浮动节点状态
-    // =========================================================================
-    private async clearFloatingNodeState(nodeId: string, canvas?: CanvasLike): Promise<void> {
-        try {
-            const activeView = getCanvasView(this.app);
-            if (!activeView || activeView.getViewType() !== 'canvas') return;
-
-            const canvasObj = this.getCanvasFromView(activeView);
-            if (!canvasObj) return;
-
-            const canvasFilePath = canvasObj.file?.path || getCurrentCanvasFilePath(this.app);
-            if (!canvasFilePath) return;
-
-            const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
-            if (!(canvasFile instanceof TFile)) return;
-
-            const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent) as CanvasDataLike;
-
-            if (canvasData.metadata?.floatingNodes?.[nodeId]) {
-                delete canvasData.metadata.floatingNodes[nodeId];
-                if (Object.keys(canvasData.metadata.floatingNodes).length === 0) {
-                    delete canvasData.metadata.floatingNodes;
-                }
-                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, 2));
-            }
-
-            const node = canvas ? this.getCanvasNodes(canvas).get(nodeId) : undefined;
-            if (node?.nodeEl) {
-                (node.nodeEl as HTMLElement).style.border = '';
-                (node.nodeEl as HTMLElement).style.borderRadius = '';
-                (node.nodeEl as HTMLElement).classList.remove('cmb-floating-node');
-            }
-        } catch (err) {
-            handleError(err, { context: 'Layout', message: `清除浮动失败: ${nodeId}`, showNotice: false });
-        }
-    }
-
-    // =========================================================================
     // 清理残留的浮动节点数据（不存在的节点）
     // =========================================================================
     private async cleanupStaleFloatingNodes(canvas: CanvasLike, currentNodes: Map<string, CanvasNodeLike>): Promise<void> {

@@ -1,7 +1,6 @@
 import { App } from 'obsidian';
 import { FloatingNodeStateManager } from './floating-node-state-manager';
 import { FloatingNodeStyleManager } from './floating-node-style-manager';
-import { EdgeChangeDetector, NewEdgeCallback } from './edge-change-detector';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
@@ -13,7 +12,6 @@ export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
     private stateManager: FloatingNodeStateManager;
     private styleManager: FloatingNodeStyleManager;
-    private edgeDetector: EdgeChangeDetector;
     private currentCanvasFilePath: string | null = null;
     private canvas: CanvasLike | null = null;
     private canvasManager: ICanvasManager | null = null;
@@ -22,7 +20,6 @@ export class FloatingNodeService {
         this.canvasFileService = new CanvasFileService(app, settings);
         this.stateManager = new FloatingNodeStateManager(app, this.canvasFileService);
         this.styleManager = new FloatingNodeStyleManager();
-        this.edgeDetector = new EdgeChangeDetector();
     }
 
     setCanvasManager(canvasManager: ICanvasManager): void {
@@ -132,7 +129,6 @@ export class FloatingNodeService {
      * 清理资源
      */
     cleanup(): void {
-        this.edgeDetector.stopDetection();
         this.currentCanvasFilePath = null;
     }
 
@@ -338,19 +334,33 @@ export class FloatingNodeService {
      * 启动边变化检测
      */
     private startEdgeDetection(canvas: CanvasLike): void {
-        const callback: NewEdgeCallback = async (newEdges) => {
-            for (const edge of newEdges) {
-                await this.handleNewEdge(edge);
-            }
-        };
-        this.edgeDetector.startDetection(canvas, callback, { interval: 500, maxChecks: 0 });
+        log(`[FloatingNode] 边检测已启用（事件驱动模式）`);
     }
 
     /**
      * 手动触发边变化检测
      */
     forceEdgeDetection(canvas: CanvasLike): void {
-        this.edgeDetector.forceCheck(canvas);
+        log(`[FloatingNode] 手动边检测触发`);
+        const edges = this.getEdgesFromCanvas();
+        log(`[FloatingNode] 当前边数: ${edges.length}`);
+        
+        // 检查所有边，确保折叠按钮状态正确
+        this.canvasManager?.checkAndAddCollapseButtons();
+        
+        // 检查是否有新边需要处理
+        for (const edge of edges) {
+            const toNodeId = getEdgeToNodeIdUtil(edge);
+            const fromNodeId = getEdgeFromNodeIdUtil(edge);
+            if (toNodeId && this.currentCanvasFilePath) {
+                // 检查目标节点是否是浮动节点
+                const isFloating = this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
+                if (isFloating) {
+                    log(`[FloatingNode] 检测到浮动节点的新入边: ${toNodeId}`);
+                    this.handleNewEdge(edge);
+                }
+            }
+        }
     }
 
     // =========================================================================
