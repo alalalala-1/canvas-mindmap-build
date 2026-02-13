@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Plugin, TFile } from 'obsidian';
+import { App, ItemView, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { LayoutManager } from './layout-manager';

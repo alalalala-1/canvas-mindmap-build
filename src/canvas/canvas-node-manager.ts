@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Plugin, TFile } from 'obsidian';
+import { App, Notice, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { NodeCreationService } from './services/node-creation-service';
@@ -12,7 +12,7 @@ import {
     getCurrentCanvasFilePath,
     estimateTextNodeHeight
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasDataLike, ICanvasManager, CanvasViewLike } from './types';
+import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike } from './types';
 
 export class CanvasNodeManager {
     private app: App;

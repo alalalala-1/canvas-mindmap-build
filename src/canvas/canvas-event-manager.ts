@@ -10,13 +10,12 @@ import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
-    getNodeIdFromEdgeEndpoint,
     getSelectedEdge,
     getEdgeFromNodeId,
     getEdgeToNodeId,
     getEdgesFromCanvas
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, CanvasEventType, MarkdownViewLike } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 
 type FromLinkInfo = {
     file: string;

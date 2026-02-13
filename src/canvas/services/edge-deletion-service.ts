@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Plugin } from 'obsidian';
+import { App, Notice, Plugin } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
