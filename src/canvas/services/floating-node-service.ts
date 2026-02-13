@@ -2,6 +2,7 @@ import { App } from 'obsidian';
 import { FloatingNodeStateManager } from './floating-node-state-manager';
 import { FloatingNodeStyleManager } from './floating-node-style-manager';
 import { CanvasFileService } from './canvas-file-service';
+import { EdgeChangeDetector } from './edge-change-detector';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
@@ -12,14 +13,19 @@ export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
     private stateManager: FloatingNodeStateManager;
     private styleManager: FloatingNodeStyleManager;
+    private edgeDetector: EdgeChangeDetector;
     private currentCanvasFilePath: string | null = null;
     private canvas: CanvasLike | null = null;
     private canvasManager: ICanvasManager | null = null;
+    private recentConnectedNodes: Map<string, number> = new Map();
+    private edgeWatchTimeouts: Map<string, Set<number>> = new Map();
+    private floatingNodeIds: Set<string> = new Set();
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
         this.stateManager = new FloatingNodeStateManager(app, this.canvasFileService);
         this.styleManager = new FloatingNodeStyleManager();
+        this.edgeDetector = new EdgeChangeDetector();
     }
 
     setCanvasManager(canvasManager: ICanvasManager): void {
@@ -89,7 +95,6 @@ export class FloatingNodeService {
             log(`[FloatingNode] 相同路径，重新初始化缓存并应用样式: ${canvasFilePath}`);
             await this.stateManager.initializeCache(canvasFilePath, true);
             await this.reapplyAllFloatingStyles(canvas);
-            this.startEdgeDetection(canvas);
             return;
         }
 
@@ -104,7 +109,6 @@ export class FloatingNodeService {
         await this.reapplyAllFloatingStyles(canvas);
         log(`[FloatingNode] 样式应用完成`);
 
-        this.startEdgeDetection(canvas);
         log(`[FloatingNode] 初始化完成: ${canvasFilePath}`);
         
         // 如果 canvas 节点数为0，延迟重试（canvas可能还没加载完）
@@ -155,6 +159,8 @@ export class FloatingNodeService {
         canvasFilePath?: string,
         subtreeIds: string[] = []
     ): Promise<boolean> {
+        this.recentConnectedNodes.delete(nodeId);
+        this.clearEdgeWatch(nodeId);
         log(`[FloatingNode] 标记浮动: ${nodeId} (子树: ${subtreeIds.length} 个)`);
         
         const filePath = canvasFilePath || this.currentCanvasFilePath;
@@ -196,6 +202,8 @@ export class FloatingNodeService {
 
         // 应用样式
         this.styleManager.applyFloatingStyle(nodeId);
+        this.addFloatingNodeId(nodeId);
+        this.scheduleEdgeWatch(nodeId);
 
         return persistSuccess;
     }
@@ -257,6 +265,7 @@ export class FloatingNodeService {
             log(`[FloatingNode] 清除: ${nodeId} (共 ${nodesToClear.length} 个)`);
         }
 
+        this.removeFloatingNodeIds(nodesToClear);
         this.clearFloatingStyles(nodesToClear);
         this.clearFloatingMemory(this.currentCanvasFilePath, nodesToClear);
 
@@ -273,6 +282,7 @@ export class FloatingNodeService {
         
         const nodeId = node.id;
         
+        this.removeFloatingNodeIds([nodeId]);
         this.clearFloatingStyles([nodeId]);
         this.clearFloatingMemory(this.currentCanvasFilePath, [nodeId]);
         await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath);
@@ -299,6 +309,9 @@ export class FloatingNodeService {
             return;
         }
 
+        this.clearEdgeWatch(toNodeId);
+        this.recentConnectedNodes.set(toNodeId, Date.now());
+
         // 1. 立即清除目标节点的视觉样式（入边消除红框）
         this.styleManager.clearFloatingStyle(toNodeId);
 
@@ -311,6 +324,7 @@ export class FloatingNodeService {
             log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
             this.clearFloatingMemory(this.currentCanvasFilePath, [toNodeId]);
             this.clearFloatingCanvasData([toNodeId], persistToFile);
+            this.removeFloatingNodeIds([toNodeId]);
             if (persistToFile) {
                 await this.persistClearFloatingState(toNodeId, false);
             }
@@ -338,13 +352,6 @@ export class FloatingNodeService {
     // =========================================================================
 
     /**
-     * 启动边变化检测
-     */
-    private startEdgeDetection(canvas: CanvasLike): void {
-        log(`[FloatingNode] 边检测已启用（事件驱动模式）`);
-    }
-
-    /**
      * 手动触发边变化检测
      */
     forceEdgeDetection(canvas: CanvasLike): void {
@@ -361,7 +368,7 @@ export class FloatingNodeService {
             const fromNodeId = getEdgeFromNodeIdUtil(edge);
             if (toNodeId && this.currentCanvasFilePath) {
                 // 检查目标节点是否是浮动节点
-                const isFloating = this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
+                const isFloating = this.floatingNodeIds.has(toNodeId) || this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
                 if (isFloating) {
                     log(`[FloatingNode] 检测到浮动节点的新入边: ${fromNodeId || 'unknown'} -> ${toNodeId}`);
                     void this.handleNewEdge(edge, false);
@@ -418,6 +425,9 @@ export class FloatingNodeService {
         for (const nodeId of floatingNodes.keys()) {
             // 检查节点是否在当前 Canvas 中
             if (!canvas || canvasNodeIds.has(nodeId)) {
+                if (this.shouldSkipStyleApply(nodeId)) {
+                    continue;
+                }
                 // 检查节点是否真的有入边
                 if (this.hasIncomingEdge(nodeId, edges)) {
                     connectedFloatingNodes.push(nodeId);
@@ -439,6 +449,9 @@ export class FloatingNodeService {
             
             for (const node of nodes) {
                 if (node?.data?.isFloating && !validFloatingNodes.includes(node.id)) {
+                    if (this.shouldSkipStyleApply(node.id)) {
+                        continue;
+                    }
                     if (!this.hasIncomingEdge(node.id, edges)) {
                         validFloatingNodes.push(node.id);
                     } else {
@@ -452,6 +465,8 @@ export class FloatingNodeService {
 
 
         log(`[FloatingNode] 有效浮动节点: ${validFloatingNodes.length}, 有入边: ${connectedFloatingNodes.length}, 无效: ${invalidFloatingNodes.length}`);
+
+        this.setFloatingNodeIds(validFloatingNodes);
 
         // 应用有效节点的样式
         for (const nodeId of validFloatingNodes) {
@@ -538,6 +553,109 @@ export class FloatingNodeService {
         if (!this.currentCanvasFilePath) return new Map();
         return await this.stateManager.getAllFloatingNodes(
             this.currentCanvasFilePath
+        );
+    }
+
+    private shouldSkipStyleApply(nodeId: string): boolean {
+        const timestamp = this.recentConnectedNodes.get(nodeId);
+        if (!timestamp) return false;
+        const now = Date.now();
+        if (now - timestamp > 3000) {
+            this.recentConnectedNodes.delete(nodeId);
+            return false;
+        }
+        return true;
+    }
+
+    private clearEdgeWatch(nodeId: string): void {
+        const timeouts = this.edgeWatchTimeouts.get(nodeId);
+        if (!timeouts) return;
+        for (const timeoutId of timeouts) {
+            window.clearTimeout(timeoutId);
+        }
+        this.edgeWatchTimeouts.delete(nodeId);
+    }
+
+    private scheduleEdgeWatch(nodeId: string): void {
+        if (!this.canvas) return;
+        if (this.edgeWatchTimeouts.has(nodeId)) return;
+        const timeoutSet = new Set<number>();
+        this.edgeWatchTimeouts.set(nodeId, timeoutSet);
+        for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+            const timeoutId = window.setTimeout(() => {
+                const activeSet = this.edgeWatchTimeouts.get(nodeId);
+                if (!activeSet || !activeSet.has(timeoutId)) return;
+                activeSet.delete(timeoutId);
+                if (activeSet.size === 0) {
+                    this.edgeWatchTimeouts.delete(nodeId);
+                }
+                const edges = this.getEdgesFromCanvas();
+                const matchedEdge = edges.find((edgeItem) => this.getEdgeToNodeId(edgeItem) === nodeId);
+                if (matchedEdge) {
+                    this.clearEdgeWatch(nodeId);
+                    void this.handleNewEdge(matchedEdge, false);
+                }
+            }, delay);
+            timeoutSet.add(timeoutId);
+        }
+    }
+
+    private addFloatingNodeId(nodeId: string): void {
+        this.floatingNodeIds.add(nodeId);
+        this.updateEdgeDetection();
+    }
+
+    private removeFloatingNodeIds(nodeIds: string[]): void {
+        let changed = false;
+        for (const nodeId of nodeIds) {
+            if (this.floatingNodeIds.delete(nodeId)) {
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.updateEdgeDetection();
+        }
+    }
+
+    private setFloatingNodeIds(nodeIds: string[]): void {
+        this.floatingNodeIds = new Set(nodeIds);
+        this.updateEdgeDetection();
+    }
+
+    private updateEdgeDetection(canvasOverride?: CanvasLike): void {
+        if (canvasOverride) {
+            this.canvas = canvasOverride;
+        }
+        if (!this.canvas) return;
+        if (this.floatingNodeIds.size === 0) {
+            if (this.edgeDetector.isRunning()) {
+                this.edgeDetector.stopDetection();
+                log(`[FloatingNode] 边检测已停止（无浮动节点）`);
+            }
+            return;
+        }
+    }
+
+    startEdgeDetectionWindow(canvas: CanvasLike): void {
+        if (!canvas) return;
+        this.canvas = canvas;
+        if (this.floatingNodeIds.size === 0) return;
+        if (this.edgeDetector.isRunning()) return;
+        log(`[FloatingNode] 边检测已启动（窗口模式）`);
+        this.edgeDetector.startDetection(
+            canvas,
+            (newEdges) => {
+                for (const edge of newEdges) {
+                    const toNodeId = getEdgeToNodeIdUtil(edge);
+                    if (toNodeId && this.floatingNodeIds.has(toNodeId)) {
+                        void this.handleNewEdge(edge, false);
+                    }
+                }
+            },
+            {
+                interval: CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL,
+                maxChecks: 6
+            }
         );
     }
 

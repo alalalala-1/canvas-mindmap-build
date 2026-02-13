@@ -445,6 +445,13 @@ export class CanvasEventManager {
                 log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
+                const activeCanvasView = this.getActiveCanvasView();
+                if (activeCanvasView) {
+                    const activeCanvas = (activeCanvasView as CanvasViewLike).canvas;
+                    if (activeCanvas && activeCanvas === canvas) {
+                        this.floatingNodeService.startEdgeDetectionWindow(activeCanvas);
+                    }
+                }
                 requestAnimationFrame(async () => {
                     try {
                         await this.floatingNodeService.handleNewEdge(edge, false);
@@ -576,6 +583,14 @@ export class CanvasEventManager {
 
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
+    }
+
+    private getActiveCanvasView(): ItemView | null {
+        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
+        if (activeView?.getViewType() === 'canvas') {
+            return activeView;
+        }
+        return null;
     }
 
     // =========================================================================

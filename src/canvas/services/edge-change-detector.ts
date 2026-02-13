@@ -7,6 +7,7 @@ export type NewEdgeCallback = (newEdges: CanvasEdgeLike[]) => void;
 export interface DetectionOptions {
     interval?: number;
     maxChecks?: number;
+    continuous?: boolean;
 }
 
 export class EdgeChangeDetector {
@@ -21,8 +22,9 @@ export class EdgeChangeDetector {
     ): void {
         this.stopDetection();
 
-        const interval = options.interval || 500;
-        const maxChecks = options.maxChecks || 60;
+        const interval = options.interval ?? 500;
+        const maxChecks = options.maxChecks ?? 60;
+        const continuous = options.continuous === true;
 
         this.processedEdgeIds = this.getEdgeIds(canvas);
         this.onNewEdgesCallback = onNewEdges;
@@ -50,7 +52,7 @@ export class EdgeChangeDetector {
                 if (this.onNewEdgesCallback) {
                     this.onNewEdgesCallback(newEdges);
                 }
-            } else if (currentEdgeIds.size === this.processedEdgeIds.size) {
+            } else if (!continuous && currentEdgeIds.size === this.processedEdgeIds.size) {
                 stableCount++;
                 if (stableCount >= 3) {
                     log(`[Detector] 边数据稳定，停止检测`);
@@ -59,7 +61,7 @@ export class EdgeChangeDetector {
                 }
             }
 
-            if (maxChecks > 0 && checkCount >= maxChecks) {
+            if (!continuous && maxChecks > 0 && checkCount >= maxChecks) {
                 log(`[Detector] 达到最大检测次数，停止检测`);
                 this.stopDetection();
             }

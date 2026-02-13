@@ -86,20 +86,15 @@ export class FloatingNodeStyleManager {
     clearFloatingStyle(nodeId: string): boolean {
         try {
             this.clearPendingRetries(nodeId);
-            const nodeEl = this.findNodeElement(nodeId);
-            if (!nodeEl) {
+            const cleared = this.removeFloatingClass(nodeId);
+            if (!cleared) {
                 log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
-                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_MEDIUM);
-                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 3), CONSTANTS.TIMING.RETRY_DELAY_LONG);
+                let retryIndex = 1;
+                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+                    this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, retryIndex), delay);
+                    retryIndex += 1;
+                }
                 return false;
-            }
-
-            log(`[Style] 清除红框: ${nodeId}, hasClass=${nodeEl.classList.contains(this.FLOATING_CLASS)}`);
-            if (nodeEl.classList.contains(this.FLOATING_CLASS)) {
-                nodeEl.classList.remove(this.FLOATING_CLASS);
-
-                void nodeEl.offsetHeight;
             }
             return true;
         } catch (err) {
@@ -109,10 +104,9 @@ export class FloatingNodeStyleManager {
     }
 
     private clearFloatingStyleRetry(nodeId: string, retryNum: number): void {
-        const nodeEl = this.findNodeElement(nodeId);
-        if (nodeEl) {
+        const cleared = this.removeFloatingClass(nodeId);
+        if (cleared) {
             log(`[Style] 清除红框 (重试 #${retryNum}): ${nodeId}`);
-            this.clearFloatingStyle(nodeId);
         }
     }
 
@@ -172,6 +166,30 @@ export class FloatingNodeStyleManager {
         }
 
         return nodeEl;
+    }
+
+    private removeFloatingClass(nodeId: string): boolean {
+        let cleared = false;
+        const nodeEl = this.findNodeElement(nodeId);
+        if (nodeEl) {
+            const hasClass = nodeEl.classList.contains(this.FLOATING_CLASS);
+            log(`[Style] 清除红框: ${nodeId}, hasClass=${hasClass}`);
+            if (hasClass) {
+                nodeEl.classList.remove(this.FLOATING_CLASS);
+                void nodeEl.offsetHeight;
+                cleared = true;
+            }
+        }
+        const nodes = document.querySelectorAll(`.canvas-node[data-node-id="${nodeId}"]`);
+        if (nodes.length > 1) {
+            nodes.forEach((node) => {
+                if (node.classList.contains(this.FLOATING_CLASS)) {
+                    node.classList.remove(this.FLOATING_CLASS);
+                    cleared = true;
+                }
+            });
+        }
+        return cleared;
     }
 
     /**

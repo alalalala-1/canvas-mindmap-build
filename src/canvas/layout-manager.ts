@@ -323,6 +323,21 @@ export class LayoutManager {
         return updatedCount;
     }
 
+    private applyToggleVisibility(
+        nodeId: string,
+        nodes: Map<string, CanvasNodeLike>,
+        edges: CanvasEdgeLike[],
+        canvasData: CanvasDataLike
+    ): void {
+        log(`[Layout] Toggle: 当前操作=${nodeId}, 已折叠=${Array.from(this.collapseStateManager.getAllCollapsedNodes()).join(',')}`);
+
+        const allHiddenNodeIds = this.collectHiddenNodeIds(nodes, edges, canvasData);
+        log(`[Layout] Toggle: 需要隐藏 ${allHiddenNodeIds.size} 个节点`);
+
+        this.applyVisibilityToNodes(nodes, allHiddenNodeIds);
+        this.applyVisibilityToEdges(edges, allHiddenNodeIds);
+    }
+
     /**
      * 在折叠/展开节点后自动整理布局
      * 修复：考虑所有已折叠的节点，而不仅仅是当前操作的节点
@@ -336,15 +351,8 @@ export class LayoutManager {
         if (!nodes || nodes.size === 0) return;
 
         try {
-            log(`[Layout] Toggle: 当前操作=${nodeId}, 已折叠=${Array.from(this.collapseStateManager.getAllCollapsedNodes()).join(',')}`);
-
             const canvasData = (canvas.fileData || canvas) as CanvasDataLike;
-            const allHiddenNodeIds = this.collectHiddenNodeIds(nodes, edges, canvasData);
-            
-            log(`[Layout] Toggle: 需要隐藏 ${allHiddenNodeIds.size} 个节点`);
-
-            this.applyVisibilityToNodes(nodes, allHiddenNodeIds);
-            this.applyVisibilityToEdges(edges, allHiddenNodeIds);
+            this.applyToggleVisibility(nodeId, nodes, edges, canvasData);
 
             const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
             if (!layoutData) {
