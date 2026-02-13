@@ -1,7 +1,7 @@
 import { App, ItemView, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { log } from '../../utils/logger';
-import { getCurrentCanvasFilePath } from '../../utils/canvas-utils';
+import { getCurrentCanvasFilePath, parseFloatingNodeInfo } from '../../utils/canvas-utils';
 import { 
     CanvasDataLike, 
     CanvasNodeLike, 
@@ -35,15 +35,11 @@ export class CanvasFileService {
         const metadata = canvasData.metadata?.floatingNodes as FloatingNodesMetadata | undefined;
         if (metadata) {
             for (const [nodeId, info] of Object.entries(metadata)) {
-                if (typeof info === 'boolean' && info === true) {
+                const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
+                if (isFloating) {
                     floatingNodes.add(nodeId);
-                } else if (typeof info === 'object' && info !== null) {
-                    const nodeInfo = info as FloatingNodeRecord;
-                    if (nodeInfo.isFloating) {
-                        floatingNodes.add(nodeId);
-                        if (nodeInfo.originalParent) {
-                            originalParents.set(nodeId, nodeInfo.originalParent);
-                        }
+                    if (originalParent) {
+                        originalParents.set(nodeId, originalParent);
                     }
                 }
             }

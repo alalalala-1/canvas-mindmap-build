@@ -7,21 +7,19 @@ import { CONSTANTS } from '../constants';
 import { handleError } from '../utils/error-handler';
 import { arrangeLayout as originalArrangeLayout, CanvasArrangerSettings } from './layout';
 import { FloatingNodeService } from './services/floating-node-service';
-import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas, isRecord } from '../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, getNodesFromCanvas, getEdgesFromCanvas, isRecord, parseFloatingNodeInfo } from '../utils/canvas-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
     CanvasLike,
     CanvasNodeLike,
-    FloatingNodeMetadata
+    FloatingNodeMetadata,
+    FloatingNodeRecord,
+    CanvasManagerLike
 } from './types';
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
-
-type CanvasManagerLike = {
-    adjustAllTextNodeHeights: () => Promise<number>;
-};
 
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
@@ -265,15 +263,7 @@ export class LayoutManager {
         
         if (canvasData?.metadata?.floatingNodes) {
             for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
-                let isFloating = false;
-                let originalParent = '';
-                if (typeof info === 'boolean') {
-                    isFloating = info;
-                } else if (typeof info === 'object' && info !== null) {
-                    const infoRecord = info as FloatingNodeMetadata;
-                    isFloating = infoRecord.isFloating === true;
-                    originalParent = infoRecord.originalParent || '';
-                }
+                const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
                 
                 if (isFloating && originalParent && allCollapsedNodes.has(originalParent)) {
                     allHiddenNodeIds.add(floatingNodeId);

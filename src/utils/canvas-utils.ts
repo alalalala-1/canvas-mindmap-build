@@ -1,7 +1,7 @@
 import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
 import { CONSTANTS } from '../constants';
-import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint } from '../canvas/types';
+import { Canvas, CanvasEdge, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;
@@ -597,15 +597,7 @@ export function collectAllDescendants(
     // 同时检查浮动子节点
     if (canvasData?.metadata?.floatingNodes) {
         for (const [nodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
-            let isFloating = false;
-            let originalParent = '';
-            
-            if (typeof info === 'boolean') {
-                isFloating = info;
-            } else if (typeof info === 'object' && info !== null) {
-                isFloating = info.isFloating === true;
-                originalParent = info.originalParent || '';
-            }
+            const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
             
             if (isFloating && originalParent === parentId && !result.has(nodeId)) {
                 result.add(nodeId);
@@ -615,6 +607,28 @@ export function collectAllDescendants(
     }
     
     return result;
+}
+
+// ============================================================================
+// 浮动节点辅助函数
+// ============================================================================
+
+export type ParsedFloatingInfo = {
+    isFloating: boolean;
+    originalParent: string;
+};
+
+export function parseFloatingNodeInfo(info: boolean | FloatingNodeRecord | undefined): ParsedFloatingInfo {
+    if (typeof info === 'boolean') {
+        return { isFloating: info, originalParent: '' };
+    }
+    if (typeof info === 'object' && info !== null) {
+        return {
+            isFloating: info.isFloating === true,
+            originalParent: info.originalParent || ''
+        };
+    }
+    return { isFloating: false, originalParent: '' };
 }
 
 // ============================================================================

@@ -182,6 +182,10 @@ export type PluginWithLastClicked = {
     lastClickedNodeId?: string;
 };
 
+export type CanvasManagerLike = {
+    adjustAllTextNodeHeights: () => Promise<number>;
+};
+
 export type CanvasEventMap = {
     'canvas:edge-create': CanvasEdgeLike;
     'canvas:edge-delete': CanvasEdgeLike;

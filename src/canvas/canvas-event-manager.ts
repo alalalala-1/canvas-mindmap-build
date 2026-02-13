@@ -364,16 +364,15 @@ export class CanvasEventManager {
 
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:edge-create' as any, async (edge: unknown) => {
-                const typedEdge = edge as CanvasEdgeLike;
-                const fromId = (typedEdge.from as { node?: { id?: string } })?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
-                const toId = (typedEdge.to as { node?: { id?: string } })?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
-                log(`[Event] Canvas:EdgeCreate: ${typedEdge.id} (${fromId} -> ${toId})`);
+            this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
+                const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
+                const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
                 requestAnimationFrame(async () => {
                     try {
-                        await this.floatingNodeService.handleNewEdge(typedEdge);
+                        await this.floatingNodeService.handleNewEdge(edge);
                     } catch (err) {
                         log(`[EdgeCreate] 异常: ${err}`);
                     }
@@ -383,11 +382,10 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:edge-delete' as any, (edge: unknown) => {
-                const typedEdge = edge as CanvasEdgeLike;
-                const fromId = (typedEdge.from as { node?: { id?: string } })?.node?.id || typedEdge.fromNode || (typeof typedEdge.from === 'string' ? typedEdge.from : null);
-                const toId = (typedEdge.to as { node?: { id?: string } })?.node?.id || typedEdge.toNode || (typeof typedEdge.to === 'string' ? typedEdge.to : null);
-                log(`[Event] Canvas:EdgeDelete: ${typedEdge.id} (${fromId} -> ${toId})`);
+            this.app.workspace.on('canvas:edge-delete', (edge: CanvasEdgeLike) => {
+                const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
+                const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
+                log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
                 this.canvasManager.checkAndAddCollapseButtons();
@@ -395,9 +393,8 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-create' as any, async (node: unknown) => {
-                const typedNode = node as CanvasNodeLike;
-                const nodeId = typedNode?.id;
+            this.app.workspace.on('canvas:node-create', async (node: CanvasNodeLike) => {
+                const nodeId = node?.id;
                 log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(nodeId || node)}`);
                 if (nodeId) {
                     const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
@@ -415,22 +412,21 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-delete' as any, (node: unknown) => {
-                const typedNode = node as CanvasNodeLike;
-                log(`[Event] Canvas:NodeDelete: ${typedNode.id}`);
-                this.floatingNodeService.clearFloatingMarks(typedNode);
+            this.app.workspace.on('canvas:node-delete', (node: CanvasNodeLike) => {
+                log(`[Event] Canvas:NodeDelete: ${node.id}`);
+                this.floatingNodeService.clearFloatingMarks(node);
                 this.canvasManager.checkAndAddCollapseButtons();
             })
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-move' as any, (node: unknown) => {
-                this.canvasManager.syncHiddenChildrenOnDrag(node as CanvasNodeLike);
+            this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
+                this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:change' as any, async () => {
+            this.app.workspace.on('canvas:change', async () => {
                 this.collapseStateManager.clearCache();
                 await this.canvasManager.checkAndAddCollapseButtons();
             })

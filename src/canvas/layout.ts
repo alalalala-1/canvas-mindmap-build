@@ -1,7 +1,7 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, EdgeEndpoint } from './types';
 import { CONSTANTS } from '../constants';
-import { estimateTextNodeHeight } from '../utils/canvas-utils';
+import { estimateTextNodeHeight, parseFloatingNodeInfo } from '../utils/canvas-utils';
 
 interface LayoutNode {
     id: string;
@@ -72,15 +72,11 @@ function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
 
     if (canvasData?.metadata?.floatingNodes) {
         for (const [nodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
-            if (typeof info === 'boolean' && info === true) {
+            const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
+            if (isFloating) {
                 floatingNodes.add(nodeId);
-            } else if (typeof info === 'object' && info !== null) {
-                const nodeInfo = info as FloatingNodeRecord;
-                if (nodeInfo.isFloating) {
-                    floatingNodes.add(nodeId);
-                    if (nodeInfo.originalParent) {
-                        originalParents.set(nodeId, nodeInfo.originalParent);
-                    }
+                if (originalParent) {
+                    originalParents.set(nodeId, originalParent);
                 }
             }
         }
