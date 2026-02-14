@@ -788,6 +788,25 @@ export class FloatingNodeService {
         }
         log(`[FloatingNode] 样式应用完成，共 ${validFloatingNodes.length} 个节点`);
 
+        // 关键修复：设置延迟重试，确保 Canvas 节点完全渲染后再次应用样式
+        if (validFloatingNodes.length > 0) {
+            log(`[FloatingNode] 设置延迟重试样式应用，确保节点完全渲染`);
+            const retryDelays = [300, 600, 1000];
+            for (const delay of retryDelays) {
+                setTimeout(() => {
+                    if (this.canvas) {
+                        log(`[FloatingNode] 延迟 ${delay}ms 重试应用样式`);
+                        for (const nodeId of validFloatingNodes) {
+                            if (!this.styleManager.hasFloatingStyle(nodeId)) {
+                                log(`[FloatingNode] 重试应用样式到节点: ${nodeId}`);
+                                this.styleManager.applyFloatingStyle(nodeId);
+                            }
+                        }
+                    }
+                }, delay);
+            }
+        }
+
         // 清理有入边的浮动节点状态（异步执行，不阻塞）
         if (connectedFloatingNodes.length > 0) {
             log(`[FloatingNode] 清理有入边的浮动节点: ${connectedFloatingNodes.join(', ')}`);
