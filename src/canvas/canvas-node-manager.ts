@@ -103,7 +103,13 @@ export class CanvasNodeManager {
                             const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
                             const maxHeight = this.settings.textNodeMaxHeight || 800;
                             newHeight = Math.min(calculatedHeight, maxHeight);
-                            log(`[Node] 计算高度: calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${node.height}`);
+                            const currentHeight = node.height ?? 0;
+                            const delta = newHeight - currentHeight;
+                            if (newHeight >= maxHeight || Math.abs(delta) > 80) {
+                                log(`[Node] 高度异常: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}, delta=${delta.toFixed(1)}, textLen=${node.text.length}`);
+                            } else {
+                                log(`[Node] 计算高度: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}`);
+                            }
                         }
 
                         if (node.height !== newHeight) {
@@ -164,6 +170,13 @@ export class CanvasNodeManager {
             log(`[Node] 开始批量调整高度: ${canvasFilePath}`);
             
             let adjustedCount = 0;
+            let increasedCount = 0;
+            let decreasedCount = 0;
+            let cappedCount = 0;
+            let formulaCount = 0;
+            let maxIncrease = 0;
+            let maxDecrease = 0;
+            let missingDomCount = 0;
 
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 if (!canvasData.nodes) return false;
@@ -192,6 +205,7 @@ export class CanvasNodeManager {
 
                             let newHeight: number;
                             if (isFormula) {
+                                formulaCount++;
                                 newHeight = this.settings.formulaNodeHeight || 80;
                                 node.width = this.settings.formulaNodeWidth || 400;
                             } else {
@@ -199,9 +213,24 @@ export class CanvasNodeManager {
                                 const nodeEl = nodeData?.nodeEl;
                                 const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
                                 newHeight = Math.min(calculatedHeight, maxHeight);
+                                if (!nodeData?.nodeEl) {
+                                    missingDomCount++;
+                                }
                             }
 
-                            if (node.height !== newHeight) {
+                            const previousHeight = node.height ?? 0;
+                            const delta = newHeight - previousHeight;
+                            if (delta > 0) {
+                                increasedCount++;
+                                if (delta > maxIncrease) maxIncrease = delta;
+                            } else if (delta < 0) {
+                                decreasedCount++;
+                                const absDelta = Math.abs(delta);
+                                if (absDelta > maxDecrease) maxDecrease = absDelta;
+                            }
+                            if (newHeight >= maxHeight) cappedCount++;
+
+                            if (previousHeight !== newHeight) {
                                 node.height = newHeight;
                                 adjustedCount++;
                                 changed = true;
@@ -241,6 +270,7 @@ export class CanvasNodeManager {
             } else {
                 log(`[Node] 批量调整完成: 无需更新节点高度`);
             }
+            log(`[Node] 批量调整统计: 增加=${increasedCount}, 减少=${decreasedCount}, maxIncrease=${maxIncrease.toFixed(1)}, maxDecrease=${maxDecrease.toFixed(1)}, capped=${cappedCount}, formula=${formulaCount}, missingDom=${missingDomCount}`);
             return adjustedCount;
         } catch (err) {
             log(`[Node] 批量调整失败:`, err);

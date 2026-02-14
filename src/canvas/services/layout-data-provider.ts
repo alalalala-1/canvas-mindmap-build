@@ -39,6 +39,26 @@ export class LayoutDataProvider {
 
         if (!allNodes || allNodes.size === 0) return null;
 
+        let edgeMissingFrom = 0;
+        let edgeMissingTo = 0;
+        let edgeMissingFromNode = 0;
+        let edgeMissingToNode = 0;
+        const edgeSample: Array<{ id?: string; fromId?: string | null; toId?: string | null }> = [];
+        for (const edge of edges) {
+            const fromId = getNodeIdFromEdgeEndpoint(edge.from);
+            const toId = getNodeIdFromEdgeEndpoint(edge.to);
+            if (!fromId) edgeMissingFrom++;
+            if (!toId) edgeMissingTo++;
+            if (fromId && !allNodes.has(fromId)) edgeMissingFromNode++;
+            if (toId && !allNodes.has(toId)) edgeMissingToNode++;
+            if (edgeSample.length < 5 && ( !fromId || !toId || (fromId && !allNodes.has(fromId)) || (toId && !allNodes.has(toId)) )) {
+                edgeSample.push({ id: edge.id, fromId, toId });
+            }
+        }
+        if (edgeMissingFrom || edgeMissingTo || edgeMissingFromNode || edgeMissingToNode) {
+            log(`[LayoutData] 边端点异常: total=${edges.length}, missingFrom=${edgeMissingFrom}, missingTo=${edgeMissingTo}, missingFromNode=${edgeMissingFromNode}, missingToNode=${edgeMissingToNode}, sample=${edgeSample.map(s => `${s.id || 'unknown'}:${s.fromId || 'null'}->${s.toId || 'null'}`).join('|')}`);
+        }
+
         const visibleNodeIds = this.visibilityService.getVisibleNodeIds(allNodes, edges);
         if (visibleNodeIds.size === 0) return null;
 

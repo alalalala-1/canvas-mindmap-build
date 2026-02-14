@@ -160,10 +160,18 @@ function initializeLayoutNodes(
             nodeHeight = settings.formulaNodeHeight || CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT;
         } else {
             const currentWidth = nodeData.width || settings.textNodeWidth;
-            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT);
+            const maxHeight = settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT;
+            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, maxHeight);
             if (nodeData.height && nodeData.height > 0) {
+                const heightDelta = nodeData.height - estimatedHeight;
+                if (heightDelta > 80 || nodeData.height > maxHeight) {
+                    log(`[Layout] HeightOverride: node=${nodeId}, current=${nodeData.height}, estimated=${estimatedHeight}, max=${maxHeight}, width=${currentWidth}, len=${nodeText.length}`);
+                }
                 nodeHeight = Math.max(nodeData.height, estimatedHeight);
             } else {
+                if (estimatedHeight >= maxHeight) {
+                    log(`[Layout] HeightCapped: node=${nodeId}, estimated=${estimatedHeight}, max=${maxHeight}, width=${currentWidth}, len=${nodeText.length}`);
+                }
                 nodeHeight = estimatedHeight;
             }
         }

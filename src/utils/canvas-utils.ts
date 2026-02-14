@@ -67,6 +67,14 @@ export function getCanvasView(app: App): ItemView | null {
     return null;
 }
 
+export function getActiveCanvasView(app: App): ItemView | null {
+    const activeView = app.workspace.getActiveViewOfType(ItemView);
+    if (isCanvasView(activeView)) {
+        return activeView;
+    }
+    return null;
+}
+
 /**
  * 获取当前打开的 Canvas 文件路径
  * 尝试多种方式获取，确保兼容性
@@ -238,6 +246,41 @@ export function getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | 
     return null;
 }
 
+export function withTemporaryCanvasSelection(
+    canvas: CanvasLike,
+    nodes: CanvasNodeLike[],
+    action: () => boolean
+): boolean {
+    const canvasWithSelection = canvas as CanvasLike & {
+        selection?: Set<CanvasNodeLike>;
+        selectedNodes?: CanvasNodeLike[];
+    };
+
+    const prevSelection = canvasWithSelection.selection ? new Set(canvasWithSelection.selection) : null;
+    const prevSelectedNodes = canvasWithSelection.selectedNodes ? [...canvasWithSelection.selectedNodes] : null;
+
+    canvasWithSelection.selection = new Set(nodes);
+    canvasWithSelection.selectedNodes = nodes;
+
+    const handled = action();
+
+    window.setTimeout(() => {
+        if (prevSelection) {
+            canvasWithSelection.selection = prevSelection;
+        } else if (canvasWithSelection.selection) {
+            canvasWithSelection.selection.clear();
+        }
+
+        if (prevSelectedNodes) {
+            canvasWithSelection.selectedNodes = prevSelectedNodes;
+        } else if (canvasWithSelection.selectedNodes) {
+            canvasWithSelection.selectedNodes = [];
+        }
+    }, 60);
+
+    return handled;
+}
+
 // ============================================================================
 // 边数据解析
 // ============================================================================
@@ -297,6 +340,18 @@ export function buildEdgeIdSet(edges: CanvasEdgeLike[]): Set<string> {
         if (edgeId) ids.add(edgeId);
     }
     return ids;
+}
+
+export function detectNewEdges(
+    edges: CanvasEdgeLike[],
+    previousEdgeIds: Set<string>
+): { newEdges: CanvasEdgeLike[]; edgeIds: Set<string> } {
+    const edgeIds = buildEdgeIdSet(edges);
+    const newEdges = edges.filter(edge => {
+        const edgeId = getEdgeId(edge);
+        return edgeId ? !previousEdgeIds.has(edgeId) : false;
+    });
+    return { newEdges, edgeIds };
 }
 
 /**

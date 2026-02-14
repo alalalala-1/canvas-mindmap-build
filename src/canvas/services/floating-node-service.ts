@@ -22,6 +22,7 @@ export class FloatingNodeService {
     private floatingNodeIds: Set<string> = new Set();
     private isClearingFloating: boolean = false;
     private pendingClearNodes: string[] = [];
+    private pendingClearOptions: Map<string, { persistToFile: boolean; requestCanvasSave: boolean }> = new Map();
     private clearCompleteResolver: (() => void) | null = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
@@ -306,7 +307,7 @@ export class FloatingNodeService {
             log(`[FloatingNode] 清除: ${nodeId} (共 ${nodesToClear.length} 个)`);
         }
 
-        return await this.executeClearFloating(nodesToClear, true);
+        return await this.executeClearFloating(nodesToClear, true, true);
     }
 
     /**
@@ -314,7 +315,11 @@ export class FloatingNodeService {
      * @param nodesToClear 要清除的节点列表
      * @param persistToFile 是否持久化到文件
      */
-    private async executeClearFloating(nodesToClear: string[], persistToFile: boolean): Promise<boolean> {
+    private async executeClearFloating(
+        nodesToClear: string[],
+        persistToFile: boolean,
+        requestCanvasSave: boolean = true
+    ): Promise<boolean> {
         if (!this.currentCanvasFilePath || nodesToClear.length === 0) {
             return false;
         }
@@ -334,9 +339,13 @@ export class FloatingNodeService {
 
             if (persistToFile) {
                 persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
-                this.clearFloatingCanvasData(nodesToClear, true, CONSTANTS.TIMING.RETRY_DELAY);
+                if (requestCanvasSave) {
+                    this.clearFloatingCanvasData(nodesToClear, true, CONSTANTS.TIMING.RETRY_DELAY);
+                } else {
+                    this.clearFloatingCanvasData(nodesToClear, false);
+                }
             } else {
-                this.clearFloatingCanvasData(nodesToClear, false);
+                this.clearFloatingCanvasData(nodesToClear, requestCanvasSave);
             }
  
             log(`[FloatingNode] 清除浮动完成: ${nodesToClear.length} 个节点, success=${persistSuccess}`);
@@ -358,7 +367,13 @@ export class FloatingNodeService {
                 for (const nodeId of pending) {
                     const isStillFloating = await this.stateManager.isNodeFloatingFromCache(nodeId, this.currentCanvasFilePath);
                     if (isStillFloating) {
-                        await this.executeClearFloating([nodeId], persistToFile);
+                        const options = this.pendingClearOptions.get(nodeId);
+                        this.pendingClearOptions.delete(nodeId);
+                        await this.executeClearFloating(
+                            [nodeId],
+                            options?.persistToFile ?? persistToFile,
+                            options?.requestCanvasSave ?? requestCanvasSave
+                        );
                     }
                 }
             }
@@ -374,6 +389,23 @@ export class FloatingNodeService {
         return new Promise((resolve) => {
             this.clearCompleteResolver = resolve;
         });
+    }
+
+    private async isEdgePersistedInFile(toNodeId: string, edgeId?: string): Promise<boolean> {
+        if (!this.currentCanvasFilePath) return false;
+        const attempts = 3;
+        for (let attempt = 0; attempt < attempts; attempt++) {
+            const data = await this.canvasFileService.readCanvasData(this.currentCanvasFilePath);
+            const edges = data?.edges ?? [];
+            const edgeFound = edgeId
+                ? edges.some(edge => edge.id === edgeId)
+                : edges.some(edge => getEdgeToNodeIdUtil(edge) === toNodeId);
+            if (edgeFound) return true;
+            if (attempt < attempts - 1) {
+                await new Promise(resolve => setTimeout(resolve, CONSTANTS.TIMING.RETRY_DELAY));
+            }
+        }
+        return false;
     }
 
     async clearFloatingMarks(node: CanvasNodeLike): Promise<void> {
@@ -440,18 +472,31 @@ export class FloatingNodeService {
 
         // 3. 如果目标节点是浮动节点，清除其浮动状态
         if (isToNodeFloating) {
+            let shouldPersistToFile = persistToFile;
+            if (persistToFile) {
+                const edgePersisted = await this.isEdgePersistedInFile(toNodeId, edgeId);
+                if (!edgePersisted) {
+                    log(`[FloatingNode] 目标节点 ${toNodeId} 新边尚未持久化，跳过文件清除`);
+                    shouldPersistToFile = false;
+                }
+            }
+
             // 如果正在处理清除操作，将节点加入队列等待处理
             if (this.isClearingFloating) {
                 log(`[FloatingNode] 正在处理清除操作，将节点 ${toNodeId} 加入队列等待 (队列长度: ${this.pendingClearNodes.length})`);
                 if (!this.pendingClearNodes.includes(toNodeId)) {
                     this.pendingClearNodes.push(toNodeId);
                 }
+                this.pendingClearOptions.set(toNodeId, {
+                    persistToFile: shouldPersistToFile,
+                    requestCanvasSave: false
+                });
                 // 仍然等待清除完成
                 await this.waitForClearComplete();
                 log(`[FloatingNode] 等待完成，继续处理连线 ${fromNodeId} -> ${toNodeId}`);
             } else {
                 log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
-                await this.executeClearFloating([toNodeId], persistToFile);
+                await this.executeClearFloating([toNodeId], shouldPersistToFile, false);
             }
         }
 

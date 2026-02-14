@@ -106,21 +106,39 @@ export class LayoutManager {
     private async updateNodePositions(
         result: Map<string, { x: number; y: number }>,
         allNodes: Map<string, CanvasNodeLike>,
-        canvas: CanvasLike
+        canvas: CanvasLike,
+        contextId?: string
     ): Promise<number> {
         let updatedCount = 0;
+        let movedCount = 0;
+        let missingCount = 0;
+        let maxDelta = 0;
+        let totalDelta = 0;
         for (const [nodeId, newPosition] of result.entries()) {
             const node = allNodes.get(nodeId);
             if (this.canSetData(node)) {
                 const currentData = node.getData ? node.getData() : {};
+                const prevX = typeof currentData.x === 'number' ? currentData.x : 0;
+                const prevY = typeof currentData.y === 'number' ? currentData.y : 0;
+                const dx = Math.abs(prevX - newPosition.x);
+                const dy = Math.abs(prevY - newPosition.y);
+                const delta = Math.hypot(dx, dy);
+                if (delta > 0.5) movedCount++;
+                if (delta > maxDelta) maxDelta = delta;
+                totalDelta += delta;
                 node.setData({
                     ...currentData,
                     x: newPosition.x,
                     y: newPosition.y,
                 });
                 updatedCount++;
+            } else {
+                missingCount++;
             }
         }
+
+        const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
+        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
 
         if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
         if (typeof canvas.requestSave === 'function') canvas.requestSave();
@@ -185,6 +203,7 @@ export class LayoutManager {
         }
 
         try {
+            const arrangeId = `arrange-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
             const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
             if (!layoutData) {
                 new Notice("Failed to gather canvas data.");
@@ -193,7 +212,8 @@ export class LayoutManager {
 
             const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
 
-            log(`[Layout] 整理: ${visibleNodes.size} 节点, ${edges.length} 边`);
+            log(`[Layout] ArrangeStart: id=${arrangeId}, visible=${visibleNodes.size}, all=${allNodes.size}, edges=${edges.length}, originalEdges=${originalEdges.length}, file=${canvasFilePath || 'unknown'}`);
+            log(`[Layout] ArrangeData: id=${arrangeId}, canvasNodes=${canvasData?.nodes?.length || 0}, canvasEdges=${canvasData?.edges?.length || 0}`);
 
             const result = originalArrangeLayout(
                 visibleNodes,
@@ -204,20 +224,28 @@ export class LayoutManager {
                 canvasData || undefined
             );
 
+            let missingInResult = 0;
+            for (const nodeId of visibleNodes.keys()) {
+                if (!result.has(nodeId)) missingInResult++;
+            }
+            const extraInResult = Math.max(0, result.size - (visibleNodes.size - missingInResult));
+            log(`[Layout] ArrangeResult: id=${arrangeId}, layoutNodes=${result.size}, missing=${missingInResult}, extra=${extraInResult}`);
+
             if (!canvasFilePath) throw new Error('找不到路径');
 
             const memoryEdges = this.getCanvasEdges(canvas);
+            log(`[Layout] ArrangeMemoryEdges: id=${arrangeId}, count=${memoryEdges.length}`);
 
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 const canvasData = data;
                 if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
                 let changed = false;
 
-                if (this.applyLayoutPositions(canvasData, result)) {
+                if (this.applyLayoutPositions(canvasData, result, arrangeId)) {
                     changed = true;
                 }
 
-                if (this.mergeMemoryEdgesIntoFileData(canvasData, memoryEdges)) {
+                if (this.mergeMemoryEdgesIntoFileData(canvasData, memoryEdges, arrangeId)) {
                     changed = true;
                 }
 
@@ -226,7 +254,7 @@ export class LayoutManager {
 
             let updatedCount = 0;
             if (success) {
-                updatedCount = await this.updateNodePositions(result, allNodes, canvas);
+                updatedCount = await this.updateNodePositions(result, allNodes, canvas, arrangeId);
             }
 
             await this.triggerHeightAdjustment(skipAdjust);
@@ -341,6 +369,10 @@ export class LayoutManager {
         offsetY: number
     ): Promise<number> {
         let updatedCount = 0;
+        let movedCount = 0;
+        let missingCount = 0;
+        let maxDelta = 0;
+        let totalDelta = 0;
         for (const [targetNodeId, newPosition] of newLayout.entries()) {
             const node = nodes.get(targetNodeId);
             if (node) {
@@ -349,6 +381,12 @@ export class LayoutManager {
 
                 const nodeX = typeof node.x === 'number' ? node.x : 0;
                 const nodeY = typeof node.y === 'number' ? node.y : 0;
+                const dx = Math.abs(nodeX - targetX);
+                const dy = Math.abs(nodeY - targetY);
+                const delta = Math.hypot(dx, dy);
+                if (delta > 0.5) movedCount++;
+                if (delta > maxDelta) maxDelta = delta;
+                totalDelta += delta;
                 if (Math.abs(nodeX - targetX) > 0.5 || Math.abs(nodeY - targetY) > 0.5) {
                     if (typeof node.setData === 'function') {
                         const currentData = node.getData ? node.getData() : {};
@@ -365,8 +403,12 @@ export class LayoutManager {
                         updatedCount++;
                     }
                 }
+            } else {
+                missingCount++;
             }
         }
+        const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
+        log(`[Layout] TogglePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, offset=(${offsetX.toFixed(1)},${offsetY.toFixed(1)})`);
         return updatedCount;
     }
 
@@ -632,33 +674,58 @@ export class LayoutManager {
 
     private applyLayoutPositions(
         canvasData: CanvasDataLike,
-        result: Map<string, { x: number; y: number }>
+        result: Map<string, { x: number; y: number }>,
+        contextId?: string
     ): boolean {
         let changed = false;
+        let changedCount = 0;
+        let missingCount = 0;
+        let maxDelta = 0;
+        let totalDelta = 0;
         for (const node of canvasData.nodes ?? []) {
             if (typeof node.id !== 'string') continue;
             const newPos = result.get(node.id);
-            if (newPos && (node.x !== newPos.x || node.y !== newPos.y)) {
+            if (!newPos) {
+                missingCount++;
+                continue;
+            }
+            const prevX = typeof node.x === 'number' ? node.x : 0;
+            const prevY = typeof node.y === 'number' ? node.y : 0;
+            const dx = Math.abs(prevX - newPos.x);
+            const dy = Math.abs(prevY - newPos.y);
+            const delta = Math.hypot(dx, dy);
+            if (delta > maxDelta) maxDelta = delta;
+            totalDelta += delta;
+            if (node.x !== newPos.x || node.y !== newPos.y) {
                 node.x = newPos.x;
                 node.y = newPos.y;
                 changed = true;
+                changedCount++;
             }
         }
+        const avgDelta = changedCount > 0 ? totalDelta / changedCount : 0;
+        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
         return changed;
     }
 
     private mergeMemoryEdgesIntoFileData(
         canvasData: CanvasDataLike,
-        memoryEdges: CanvasEdgeLike[]
+        memoryEdges: CanvasEdgeLike[],
+        contextId?: string
     ): boolean {
         if (!Array.isArray(canvasData.edges)) return false;
         let changed = false;
+        let addedCount = 0;
         const fileEdgeIds = new Set(canvasData.edges.map((e) => e.id).filter((id): id is string => typeof id === 'string'));
         for (const memEdge of memoryEdges) {
             if (memEdge.id && !fileEdgeIds.has(memEdge.id)) {
                 canvasData.edges.push(this.serializeEdge(memEdge) as CanvasEdgeLike);
                 changed = true;
+                addedCount++;
             }
+        }
+        if (addedCount > 0) {
+            log(`[Layout] MergeEdges: added=${addedCount}, memory=${memoryEdges.length}, file=${canvasData.edges.length}, ctx=${contextId || 'none'}`);
         }
         return changed;
     }

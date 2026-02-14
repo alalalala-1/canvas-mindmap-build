@@ -10,11 +10,11 @@ import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
+    getActiveCanvasView,
     getSelectedEdge,
-    getEdgeFromNodeId,
-    getEdgeToNodeId,
     extractEdgeNodeIds,
     buildEdgeIdSet,
+    detectNewEdges,
     getEdgesFromCanvas,
     getNodesFromCanvas,
     findZoomToFitButton,
@@ -23,7 +23,8 @@ import {
     findDeleteButton,
     findCanvasNodeElementFromTarget,
     getCanvasNodeByElement,
-    parseFromLink
+    parseFromLink,
+    withTemporaryCanvasSelection
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 import { VisibilityService } from './services/visibility-service';
@@ -77,7 +78,7 @@ export class CanvasEventManager {
         this.registerEventListeners();
         
         // 如果当前已经有 canvas 打开，立即启动 observer 和事件监听器
-        const canvasView = this.getCanvasView();
+        const canvasView = getCanvasView(this.app);
         log(`[Event] getCanvasView() 返回: ${canvasView ? 'exists' : 'null'}`);
         if (canvasView) {
             log(`[Event] 立即设置 canvas 事件监听器`);
@@ -127,7 +128,7 @@ export class CanvasEventManager {
 
         // 节点点击处理
         const handleNodeClick = async (event: MouseEvent) => {
-            const canvasView = this.getCanvasView();
+            const canvasView = getCanvasView(this.app);
             if (!canvasView) return;
 
             const targetEl = event.target as HTMLElement;
@@ -197,7 +198,7 @@ export class CanvasEventManager {
     }
 
     private async handleZoomToFitVisibleNodes(): Promise<boolean> {
-        const canvasView = this.getCanvasView();
+        const canvasView = getCanvasView(this.app);
         if (!canvasView) return false;
 
         const canvas = (canvasView as CanvasViewLike).canvas;
@@ -212,34 +213,9 @@ export class CanvasEventManager {
         const visibleNodes = nodes.filter(node => node.id && visibleNodeIds.has(node.id));
         if (visibleNodes.length === 0) return false;
 
-        const canvasWithSelection = canvas as CanvasLike & {
-            selection?: Set<CanvasNodeLike>;
-            selectedNodes?: CanvasNodeLike[];
-        };
-
-        const prevSelection = canvasWithSelection.selection ? new Set(canvasWithSelection.selection) : null;
-        const prevSelectedNodes = canvasWithSelection.selectedNodes ? [...canvasWithSelection.selectedNodes] : null;
-
-        canvasWithSelection.selection = new Set(visibleNodes);
-        canvasWithSelection.selectedNodes = visibleNodes;
-
-        const handled = tryZoomToSelection(this.app, canvasView, canvas);
-
-        window.setTimeout(() => {
-            if (prevSelection) {
-                canvasWithSelection.selection = prevSelection;
-            } else if (canvasWithSelection.selection) {
-                canvasWithSelection.selection.clear();
-            }
-
-            if (prevSelectedNodes) {
-                canvasWithSelection.selectedNodes = prevSelectedNodes;
-            } else if (canvasWithSelection.selectedNodes) {
-                canvasWithSelection.selectedNodes = [];
-            }
-        }, 60);
-
-        return handled;
+        return withTemporaryCanvasSelection(canvas, visibleNodes, () => {
+            return tryZoomToSelection(this.app, canvasView, canvas);
+        });
     }
 
     // =========================================================================
@@ -391,17 +367,7 @@ export class CanvasEventManager {
             return;
         }
         const edges = data.edges || [];
-        const newEdgeIds = buildEdgeIdSet(edges);
-        const newEdges: CanvasEdgeLike[] = [];
-
-        for (const edge of edges) {
-            const fromId = getEdgeFromNodeId(edge);
-            const toId = getEdgeToNodeId(edge);
-            const edgeId = fromId && toId ? `${fromId}->${toId}` : edge.id;
-            if (edgeId && !this.lastEdgeIds.has(edgeId)) {
-                newEdges.push(edge);
-            }
-        }
+        const { newEdges, edgeIds: newEdgeIds } = detectNewEdges(edges, this.lastEdgeIds);
 
         if (newEdges.length > 0) {
             log(`[Event] Canvas 文件检测到新边: ${newEdges.length}`);
@@ -421,7 +387,7 @@ export class CanvasEventManager {
                 log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
-                const activeCanvasView = this.getActiveCanvasView();
+                const activeCanvasView = getActiveCanvasView(this.app);
                 if (activeCanvasView) {
                     const activeCanvas = (activeCanvasView as CanvasViewLike).canvas;
                     if (activeCanvas && activeCanvas === canvas) {
@@ -513,7 +479,7 @@ export class CanvasEventManager {
     private setupMutationObserver() {
         if (this.isObserverSetup) return;
 
-        const canvasView = this.getCanvasView();
+        const canvasView = getCanvasView(this.app);
         if (!canvasView) return;
 
         const canvasWrapper = document.querySelector('.canvas-wrapper') || 
@@ -556,18 +522,6 @@ export class CanvasEventManager {
     // 辅助方法
     // =========================================================================
 
-
-    private getCanvasView(): ItemView | null {
-        return getCanvasView(this.app);
-    }
-
-    private getActiveCanvasView(): ItemView | null {
-        const activeView = this.app.workspace.getActiveViewOfType(ItemView);
-        if (activeView?.getViewType() === 'canvas') {
-            return activeView;
-        }
-        return null;
-    }
 
     // =========================================================================
     // 卸载
