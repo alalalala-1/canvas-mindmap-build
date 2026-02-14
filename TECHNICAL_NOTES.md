@@ -30,16 +30,18 @@
   - 若无入边：`FloatingNodeService.markNodeAsFloating(childId, parentId, canvasFilePath, subtreeIds)`
 
 #### 1.4 新连线清理与一致性
-- **触发**: `CanvasEventManager` 监听 `canvas:edge-create`
+- **触发**: `CanvasEventManager` 监听 `canvas:edge-create` 和 `handleCanvasFileModified`
 - **核心方法**: `FloatingNodeService.handleNewEdge(edge)`
   - 立即清除目标节点红框
   - 只查询内存缓存 `isNodeFloatingFromCache`，避免读取旧文件造成竞态
   - 若目标节点仍标记浮动 → 仅清除内存缓存与 Canvas 内存节点的 `data` 字段
   - 源节点为浮动时仅保持红框，不主动清除
- - **竞态处理经验**:
+- **竞态处理经验**:
   - `edge-create` 早于文件落盘，不能在该阶段触发 `requestSave`，否则会覆盖新边导致"连线消失"
   - 样式重放判断入边时优先使用 `fileData.edges`（当文件边数更多时），避免内存边滞后造成红框延迟消失
   - **快速连线处理**: 在 `handleNewEdge` 开始时验证边是否存在于 Canvas，若不存在则等待 100ms 后再处理，防止第二条连线消失
+  - **保护期机制**: 延迟持久化完成后 500ms 内，延迟处理新边，避免与 Obsidian 保存操作冲突
+  - **边数一致性检查**: 延迟持久化执行前比较 Canvas 内存边数与文件边数，不一致则延迟执行
 
 #### 1.5 全量验证与样式重放
 - **方法**: `FloatingNodeService.reapplyAllFloatingStyles(canvas)`
@@ -74,11 +76,46 @@
   4. 第一个请求完成后触发 `finally` 块，调用 `clearCompleteResolver()` 通知等待者
   5. 然后处理队列中的待清除节点
 
+#### 1.9 延迟持久化机制
+- **目的**: 避免与 Obsidian 的保存操作冲突
+- **触发时机**: 处理新边后，延迟 3 秒执行持久化
+- **核心变量**:
+  - `pendingPersistNodeIds`: 待持久化的节点集合
+  - `delayedPersistTimeout`: 延迟定时器
+  - `lastFileModifyTime`: 文件最后修改时间
+  - `persistCompleteTime`: 持久化完成时间
+- **执行流程**:
+  1. `scheduleDelayedPersist(nodeId)` 安排延迟持久化
+  2. 3 秒后执行 `executeDelayedPersist()`
+  3. 检查文件最近是否被修改（500ms 内），如果是则延迟
+  4. **关键检查**: 比较 Canvas 内存边数与文件边数，不一致则延迟
+  5. 执行 `persistClearFloatingState` 写入文件
+  6. 设置保护期（500ms）
+
+#### 1.10 文件锁机制
+- **目的**: 防止并发文件修改导致数据丢失
+- **实现**: `CanvasFileService` 中的 `fileLocks` 和 `pendingOperations`
+- **方法**:
+  - `acquireLock(filePath)`: 获取文件锁，失败返回 false
+  - `releaseLock(filePath)`: 释放文件锁，执行等待的操作
+  - `waitForLock(filePath, callback)`: 将操作加入等待队列
+- **注意**: 文件锁只能保护我们自己的代码，无法阻止 Obsidian 的保存操作
+
+#### 1.11 保护期机制
+- **目的**: 延迟持久化完成后，防止立即处理新边
+- **实现**: `isInProtectionPeriod()` 检查是否在保护期内
+- **时长**: 500ms
+- **触发**: 在 `handleNewEdge` 开始时检查，如果在保护期内则延迟 500ms 处理
+
 ### 踩坑记录
 1. **不要在布局时过滤浮动节点** - 会导致布局错乱
 2. **不要整体平移所有节点** - 会破坏相对位置
 3. **边端点格式多样** - 需要统一使用 `getNodeIdFromEdgeEndpoint`
 4. **浮动节点定义** - 没有入边（没有父节点）的节点，可以有出边
+5. **延迟持久化时 Canvas 内存边数与文件边数可能不一致** - Obsidian 可能还没来得及将新边保存到文件，需要检查边数一致性
+6. **文件锁无法阻止 Obsidian 的保存操作** - 只能保护我们自己的代码
+7. **延迟持久化完成后有保护期** - 500ms 内不应处理新边，避免冲突
+8. **不要在 `handleNewEdge` 中触发 `requestSave`** - 会覆盖 Obsidian 正在保存的新边
 
 ---
 
@@ -409,6 +446,8 @@ await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data: any) 
 2. **JSON 解析要 try-catch** - 防止格式错误导致崩溃
 3. **修改后要 requestSave** - 触发 Obsidian 保存机制
 4. **优先使用内存数据** - 避免读取可能被覆盖的文件
+5. **原子修改时边数可能不一致** - Canvas 内存中的边数可能与文件不一致，需要检查
+6. **文件锁机制** - 使用 `modifyCanvasDataAtomic` 时会自动获取和释放文件锁
 
 ---
 
@@ -604,6 +643,17 @@ this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true })
 - 移除 getChildNodes 缓存
 - 立即清除内存中的浮动标记
 
+### 13.7 快速连线导致边消失
+**原因**: 
+- 延迟持久化执行时，Canvas 内存边数与文件边数不一致
+- Obsidian 还没来得及将新边保存到文件，延迟持久化就读取旧文件并覆盖
+- 文件修改操作与 Obsidian 的保存操作冲突
+**解决**:
+- 在延迟持久化执行前检查 Canvas 内存边数与文件边数是否一致
+- 添加保护期机制，延迟持久化完成后 500ms 内延迟处理新边
+- 添加文件锁机制，防止并发文件修改
+- 不要在 `handleNewEdge` 中触发 `requestSave`
+
 ---
 
 ## 14. 重构注意事项
@@ -691,5 +741,5 @@ private debounce<T extends (...args: any[]) => void>(
 
 ---
 
-*最后更新: 2026-02-11*
-*版本: 1.2.0*
+*最后更新: 2026-02-14*
+*版本: 1.3.0*
