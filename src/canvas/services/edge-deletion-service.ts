@@ -134,6 +134,7 @@ export class EdgeDeletionService {
                     collectSubtree(childNodeId);
                 }
 
+                this.floatingNodeService.removeFromRecentConnected(childNodeId);
                 await this.floatingNodeService.initialize(canvasFilePath, canvas);
                 await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds);
             }

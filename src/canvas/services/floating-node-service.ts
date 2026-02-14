@@ -37,6 +37,14 @@ export class FloatingNodeService {
     }
 
     /**
+     * 从刚连接节点列表中移除节点（当边被删除时调用）
+     */
+    removeFromRecentConnected(nodeId: string): void {
+        this.recentConnectedNodes.delete(nodeId);
+        log(`[FloatingNode] 从 recentConnectedNodes 移除: ${nodeId}`);
+    }
+
+    /**
      * 从Canvas获取指定节点
      */
     private getNodeFromCanvas(nodeId: string): CanvasNodeLike | null {
