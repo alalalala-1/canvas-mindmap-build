@@ -17,7 +17,8 @@ import {
     getNodesFromCanvas,
     findZoomToFitButton,
     tryZoomToSelection,
-    getSelectedNodeFromCanvas
+    getSelectedNodeFromCanvas,
+    findDeleteButton
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 import { VisibilityService } from './services/visibility-service';
@@ -138,7 +139,7 @@ export class CanvasEventManager {
             }
 
             // 检查是否点击了删除按钮
-            const deleteBtn = this.findDeleteButton(targetEl);
+            const deleteBtn = findDeleteButton(targetEl);
             if (deleteBtn) {
                 event.preventDefault();
                 event.stopPropagation();
@@ -239,27 +240,6 @@ export class CanvasEventManager {
     // =========================================================================
     // 删除按钮相关
     // =========================================================================
-    private findDeleteButton(targetEl: HTMLElement): HTMLElement | null {
-        // 方法1: 直接匹配 data-type="trash"
-        let deleteBtn = targetEl.closest('[data-type="trash"]') as HTMLElement;
-        
-        // 方法2: 检查 clickable-icon 类
-        if (!deleteBtn) {
-            deleteBtn = targetEl.closest('.clickable-icon') as HTMLElement;
-            if (deleteBtn) {
-                const isTrashButton = deleteBtn.getAttribute('data-type') === 'trash' ||
-                                    deleteBtn.classList.contains('trash') ||
-                                    deleteBtn.querySelector('svg')?.outerHTML.toLowerCase().includes('trash') ||
-                                    deleteBtn.title?.toLowerCase().includes('delete') ||
-                                    deleteBtn.title?.toLowerCase().includes('trash') ||
-                                    deleteBtn.getAttribute('aria-label') === 'Remove';
-                if (!isTrashButton) deleteBtn = null as unknown as HTMLElement;
-            }
-        }
-        
-        return deleteBtn;
-    }
-
     private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
         let edges: CanvasEdgeLike[] = [];
         if (canvas.fileData?.edges) edges = canvas.fileData.edges;

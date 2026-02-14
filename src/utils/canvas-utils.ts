@@ -134,6 +134,23 @@ export function tryZoomToSelection(app: App, canvasView: ItemView, canvas: Canva
     return false;
 }
 
+export function findDeleteButton(targetEl: HTMLElement): HTMLElement | null {
+    let deleteBtn = targetEl.closest('[data-type="trash"]');
+    if (deleteBtn instanceof HTMLElement) return deleteBtn;
+
+    deleteBtn = targetEl.closest('.clickable-icon');
+    if (!(deleteBtn instanceof HTMLElement)) return null;
+
+    const isTrashButton = deleteBtn.getAttribute('data-type') === 'trash' ||
+        deleteBtn.classList.contains('trash') ||
+        deleteBtn.querySelector('svg')?.outerHTML.toLowerCase().includes('trash') ||
+        deleteBtn.title?.toLowerCase().includes('delete') ||
+        deleteBtn.title?.toLowerCase().includes('trash') ||
+        deleteBtn.getAttribute('aria-label') === 'Remove';
+
+    return isTrashButton ? deleteBtn : null;
+}
+
 function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as CanvasNodeLike;
