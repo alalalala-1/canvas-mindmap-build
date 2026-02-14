@@ -275,6 +275,30 @@ export function getEdgeToNodeId(edge: CanvasEdgeLike | null | undefined): string
     return getNodeIdFromEdgeEndpoint(edge.to);
 }
 
+export function extractEdgeNodeIds(edge: CanvasEdgeLike): { fromId: string | null; toId: string | null } {
+    return {
+        fromId: getEdgeFromNodeId(edge),
+        toId: getEdgeToNodeId(edge)
+    };
+}
+
+export function getEdgeId(edge: CanvasEdgeLike | null | undefined): string | null {
+    if (!edge) return null;
+    const fromId = getEdgeFromNodeId(edge);
+    const toId = getEdgeToNodeId(edge);
+    if (fromId && toId) return `${fromId}->${toId}`;
+    return edge.id || null;
+}
+
+export function buildEdgeIdSet(edges: CanvasEdgeLike[]): Set<string> {
+    const ids = new Set<string>();
+    for (const edge of edges) {
+        const edgeId = getEdgeId(edge);
+        if (edgeId) ids.add(edgeId);
+    }
+    return ids;
+}
+
 /**
  * 生成随机 ID (8位 36进制字符串)
  */

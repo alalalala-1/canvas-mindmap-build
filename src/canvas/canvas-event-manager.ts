@@ -13,6 +13,8 @@ import {
     getSelectedEdge,
     getEdgeFromNodeId,
     getEdgeToNodeId,
+    extractEdgeNodeIds,
+    buildEdgeIdSet,
     getEdgesFromCanvas,
     getNodesFromCanvas,
     findZoomToFitButton,
@@ -366,7 +368,7 @@ export class CanvasEventManager {
         this.currentCanvasFilePath = canvasFilePath || null;
         if (canvas) {
             const edges = getEdgesFromCanvas(canvas);
-            this.lastEdgeIds = this.buildEdgeIdSet(edges);
+            this.lastEdgeIds = buildEdgeIdSet(edges);
             log(`[Event] 初始化边快照: edges=${edges.length}`);
         }
         
@@ -381,20 +383,6 @@ export class CanvasEventManager {
         this.registerCanvasWorkspaceEvents(canvas);
     }
 
-    private buildEdgeIdSet(edges: CanvasEdgeLike[]): Set<string> {
-        const ids = new Set<string>();
-        for (const edge of edges) {
-            const fromId = getEdgeFromNodeId(edge);
-            const toId = getEdgeToNodeId(edge);
-            if (fromId && toId) {
-                ids.add(`${fromId}->${toId}`);
-            } else if (edge.id) {
-                ids.add(edge.id);
-            }
-        }
-        return ids;
-    }
-
     private async handleCanvasFileModified(filePath: string): Promise<void> {
         log(`[Event] Canvas 文件变更: ${filePath}`);
         const data = await this.canvasFileService.readCanvasData(filePath);
@@ -403,7 +391,7 @@ export class CanvasEventManager {
             return;
         }
         const edges = data.edges || [];
-        const newEdgeIds = this.buildEdgeIdSet(edges);
+        const newEdgeIds = buildEdgeIdSet(edges);
         const newEdges: CanvasEdgeLike[] = [];
 
         for (const edge of edges) {
@@ -429,7 +417,7 @@ export class CanvasEventManager {
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
-                const { fromId, toId } = this.extractEdgeNodeIds(edge);
+                const { fromId, toId } = extractEdgeNodeIds(edge);
                 log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -459,7 +447,7 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-delete', (edge: CanvasEdgeLike) => {
-                const { fromId, toId } = this.extractEdgeNodeIds(edge);
+                const { fromId, toId } = extractEdgeNodeIds(edge);
                 log(`[Event] Canvas:EdgeDelete: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -568,11 +556,6 @@ export class CanvasEventManager {
     // 辅助方法
     // =========================================================================
 
-    private extractEdgeNodeIds(edge: CanvasEdgeLike): { fromId: string | null; toId: string | null } {
-        const fromId = (edge.from as { node?: { id?: string } })?.node?.id || edge.fromNode || (typeof edge.from === 'string' ? edge.from : null);
-        const toId = (edge.to as { node?: { id?: string } })?.node?.id || edge.toNode || (typeof edge.to === 'string' ? edge.to : null);
-        return { fromId, toId };
-    }
 
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
