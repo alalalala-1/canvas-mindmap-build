@@ -2,6 +2,7 @@ import { App, Notice, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { CanvasFileService } from './services/canvas-file-service';
+import { NodeTypeService } from './services/node-type-service';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import { handleError } from '../utils/error-handler';
@@ -30,6 +31,7 @@ export class LayoutManager {
     private settings: CanvasMindmapBuildSettings;
     private collapseStateManager: CollapseStateManager;
     private canvasFileService: CanvasFileService;
+    private nodeTypeService: NodeTypeService;
     private visibilityService: VisibilityService;
     private layoutDataProvider: LayoutDataProvider;
     private floatingNodeService: FloatingNodeService | null = null;
@@ -42,13 +44,15 @@ export class LayoutManager {
         collapseStateManager: CollapseStateManager,
         canvasFileService: CanvasFileService,
         visibilityService: VisibilityService,
-        layoutDataProvider: LayoutDataProvider
+        layoutDataProvider: LayoutDataProvider,
+        nodeTypeService: NodeTypeService
     ) {
         this.plugin = plugin;
         this.app = app;
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
         this.canvasFileService = canvasFileService;
+        this.nodeTypeService = nodeTypeService;
         this.visibilityService = visibilityService;
         this.layoutDataProvider = layoutDataProvider;
     }
@@ -84,15 +88,19 @@ export class LayoutManager {
     }
 
     private getLayoutSettings(): CanvasArrangerSettings {
+        const textDimensions = this.nodeTypeService.getTextDimensions();
+        const imageDimensions = this.nodeTypeService.getImageDimensions();
+        const formulaDimensions = this.nodeTypeService.getFormulaDimensions();
+
         return {
             horizontalSpacing: this.settings.horizontalSpacing,
             verticalSpacing: this.settings.verticalSpacing,
-            textNodeWidth: this.settings.textNodeWidth,
-            textNodeMaxHeight: this.settings.textNodeMaxHeight,
-            imageNodeWidth: this.settings.imageNodeWidth,
-            imageNodeHeight: this.settings.imageNodeHeight,
-            formulaNodeWidth: this.settings.formulaNodeWidth,
-            formulaNodeHeight: this.settings.formulaNodeHeight,
+            textNodeWidth: textDimensions.width,
+            textNodeMaxHeight: textDimensions.maxHeight,
+            imageNodeWidth: imageDimensions.width,
+            imageNodeHeight: imageDimensions.height,
+            formulaNodeWidth: formulaDimensions.width,
+            formulaNodeHeight: formulaDimensions.height,
         };
     }
 

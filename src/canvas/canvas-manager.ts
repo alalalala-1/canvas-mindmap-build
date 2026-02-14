@@ -8,6 +8,7 @@ import { CanvasUIManager } from './canvas-ui-manager';
 import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasFileService } from './services/canvas-file-service';
 import { EdgeDeletionService } from './services/edge-deletion-service';
+import { NodeTypeService } from './services/node-type-service';
 import { log } from '../utils/logger';
 import {
     getCanvasView,
@@ -47,6 +48,7 @@ export class CanvasManager implements ICanvasManager {
 
         // 1. 初始化底层服务
         this.canvasFileService = new CanvasFileService(app, settings);
+        const nodeTypeService = new NodeTypeService(settings);
         this.visibilityService = new VisibilityService(collapseStateManager);
         this.layoutDataProvider = new LayoutDataProvider(app, this.canvasFileService, this.visibilityService);
 
@@ -58,7 +60,8 @@ export class CanvasManager implements ICanvasManager {
             collapseStateManager,
             this.canvasFileService,
             this.visibilityService,
-            this.layoutDataProvider
+            this.layoutDataProvider,
+            nodeTypeService
         );
         this.floatingNodeService = new FloatingNodeService(app, settings);
         this.floatingNodeService.setCanvasManager(this);
