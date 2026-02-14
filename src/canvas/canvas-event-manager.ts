@@ -16,6 +16,7 @@ import {
     buildEdgeIdSet,
     detectNewEdges,
     getEdgesFromCanvas,
+    getEdgesFromCanvasOrFileData,
     getNodesFromCanvas,
     findZoomToFitButton,
     tryZoomToSelection,
@@ -152,27 +153,7 @@ export class CanvasEventManager {
                 event.stopImmediatePropagation();
                 
                 setTimeout(() => {
-                    const canvas = (canvasView as CanvasViewLike).canvas;
-                    if (!canvas) return;
-                    
-                    // 先检查是否选中了边
-                    const selectedEdge = getSelectedEdge(canvas);
-                    if (selectedEdge) {
-                        const modal = new DeleteEdgeConfirmationModal(this.app);
-                        modal.open();
-                        void modal.waitForResult().then(async (result) => {
-                            if (result.action === 'confirm') {
-                                await this.canvasManager.deleteSelectedEdge();
-                            }
-                        });
-                        return;
-                    }
-                    
-                    // 否则检查是否选中了节点
-                    const selectedNode = getSelectedNodeFromCanvas(canvas);
-                    if (selectedNode) {
-                        void this.executeDeleteOperation(selectedNode, canvas);
-                    }
+                    void this.handleDeleteButtonClick(canvasView);
                 }, 0);
                 return;
             }
@@ -201,7 +182,7 @@ export class CanvasEventManager {
         const canvasView = getCanvasView(this.app);
         if (!canvasView) return false;
 
-        const canvas = (canvasView as CanvasViewLike).canvas;
+        const canvas = this.getCanvasFromView(canvasView);
         if (!canvas) return false;
 
         const nodes = getNodesFromCanvas(canvas);
@@ -218,19 +199,33 @@ export class CanvasEventManager {
         });
     }
 
+    private async handleDeleteButtonClick(canvasView: ItemView): Promise<void> {
+        const canvas = this.getCanvasFromView(canvasView);
+        if (!canvas) return;
+        
+        const selectedEdge = getSelectedEdge(canvas);
+        if (selectedEdge) {
+            const modal = new DeleteEdgeConfirmationModal(this.app);
+            modal.open();
+            void modal.waitForResult().then(async (result) => {
+                if (result.action === 'confirm') {
+                    await this.canvasManager.deleteSelectedEdge();
+                }
+            });
+            return;
+        }
+        
+        const selectedNode = getSelectedNodeFromCanvas(canvas);
+        if (selectedNode) {
+            void this.executeDeleteOperation(selectedNode, canvas);
+        }
+    }
+
     // =========================================================================
     // 删除按钮相关
     // =========================================================================
     private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
-        let edges: CanvasEdgeLike[] = [];
-        if (canvas.fileData?.edges) edges = canvas.fileData.edges;
-        if (canvas.edges) {
-            edges = canvas.edges instanceof Map 
-                ? Array.from(canvas.edges.values()) 
-                : Array.isArray(canvas.edges) 
-                    ? canvas.edges 
-                    : [];
-        }
+        const edges = getEdgesFromCanvasOrFileData(canvas);
         
         const nodeId = selectedNode.id!;
         const hasChildren = this.collapseStateManager.getChildNodes(nodeId, edges).length > 0;
@@ -283,7 +278,7 @@ export class CanvasEventManager {
         const nodeEl = findCanvasNodeElementFromTarget(targetEl);
         if (!nodeEl) return;
 
-        const canvas = (canvasView as CanvasViewLike).canvas;
+        const canvas = this.getCanvasFromView(canvasView);
         if (!canvas?.nodes) return;
 
         const clickedNode = getCanvasNodeByElement(canvas, nodeEl);
@@ -331,7 +326,7 @@ export class CanvasEventManager {
     // Canvas 事件监听（使用 Obsidian 官方事件系统）
     // =========================================================================
     async setupCanvasEventListeners(canvasView: ItemView) {
-        const canvas = (canvasView as CanvasViewLike).canvas;
+        const canvas = this.getCanvasFromView(canvasView);
         log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
         
         if (!canvas) {
@@ -522,6 +517,10 @@ export class CanvasEventManager {
     // 辅助方法
     // =========================================================================
 
+
+    private getCanvasFromView(view: ItemView): CanvasLike | null {
+        return (view as CanvasViewLike).canvas || null;
+    }
 
     // =========================================================================
     // 卸载

@@ -427,6 +427,13 @@ export function getEdgesFromCanvas(canvas: CanvasLike | null | undefined): Canva
     return [];
 }
 
+export function getEdgesFromCanvasOrFileData(canvas: CanvasLike | null | undefined): CanvasEdgeLike[] {
+    if (!canvas) return [];
+    if (canvas.edges) return getEdgesFromCanvas(canvas);
+    if (canvas.fileData?.edges) return canvas.fileData.edges;
+    return [];
+}
+
 /**
  * 检查节点是否有子节点
  */

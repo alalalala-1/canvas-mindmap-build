@@ -446,17 +446,21 @@ export class FloatingNodeService {
             const canvasEdges = this.getEdgesFromCanvas();
             const edgeExists = canvasEdges.some(e => e.id === edgeId);
             if (!edgeExists) {
-                log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，等待...`);
-                // 边还没保存到 Canvas，等待一小段时间
-                await new Promise(resolve => setTimeout(resolve, 100));
-                // 再次验证
-                const canvasEdgesAfterWait = this.getEdgesFromCanvas();
-                const edgeExistsAfterWait = canvasEdgesAfterWait.some(e => e.id === edgeId);
-                if (!edgeExistsAfterWait) {
-                    log(`[FloatingNode] 边 ${edgeId} 仍然不存在，跳过处理`);
-                    return;
+                if (persistToFile) {
+                    log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，但已在文件中，继续处理`);
+                } else {
+                    log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，等待...`);
+                    // 边还没保存到 Canvas，等待一小段时间
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    // 再次验证
+                    const canvasEdgesAfterWait = this.getEdgesFromCanvas();
+                    const edgeExistsAfterWait = canvasEdgesAfterWait.some(e => e.id === edgeId);
+                    if (!edgeExistsAfterWait) {
+                        log(`[FloatingNode] 边 ${edgeId} 仍然不存在，跳过处理`);
+                        return;
+                    }
+                    log(`[FloatingNode] 边 ${edgeId} 已保存到 Canvas`);
                 }
-                log(`[FloatingNode] 边 ${edgeId} 已保存到 Canvas`);
             }
         }
 
