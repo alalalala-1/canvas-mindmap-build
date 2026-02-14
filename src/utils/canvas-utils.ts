@@ -99,6 +99,41 @@ export function getCurrentCanvasFilePath(app: App): string | undefined {
     return undefined;
 }
 
+export function findZoomToFitButton(targetEl: HTMLElement): HTMLElement | null {
+    const controlItem = targetEl.closest('.canvas-control-item') as HTMLElement | null;
+    if (!controlItem) return null;
+
+    const ariaLabel = controlItem.getAttribute('aria-label')?.toLowerCase() || '';
+    if (ariaLabel.includes('zoom to fit')) return controlItem;
+
+    const hasMaximizeIcon = !!controlItem.querySelector('svg.lucide-maximize');
+    return hasMaximizeIcon ? controlItem : null;
+}
+
+export function tryZoomToSelection(app: App, canvasView: ItemView, canvas: CanvasLike): boolean {
+    const canvasAny = canvas as CanvasLike & { zoomToSelection?: () => void };
+    if (typeof canvasAny.zoomToSelection === 'function') {
+        canvasAny.zoomToSelection();
+        return true;
+    }
+
+    const viewAny = canvasView as ItemView & { zoomToSelection?: () => void };
+    if (typeof viewAny.zoomToSelection === 'function') {
+        viewAny.zoomToSelection();
+        return true;
+    }
+
+    const appWithCommands = app as App & {
+        commands?: { executeCommandById?: (id: string) => boolean | void };
+    };
+    if (appWithCommands.commands && typeof appWithCommands.commands.executeCommandById === 'function') {
+        const result = appWithCommands.commands.executeCommandById('canvas:zoom-to-selection');
+        if (result !== false) return true;
+    }
+
+    return false;
+}
+
 // ============================================================================
 // 边数据解析
 // ============================================================================

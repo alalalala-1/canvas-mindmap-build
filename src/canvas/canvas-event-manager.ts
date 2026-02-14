@@ -14,7 +14,9 @@ import {
     getEdgeFromNodeId,
     getEdgeToNodeId,
     getEdgesFromCanvas,
-    getNodesFromCanvas
+    getNodesFromCanvas,
+    findZoomToFitButton,
+    tryZoomToSelection
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 import { VisibilityService } from './services/visibility-service';
@@ -123,7 +125,7 @@ export class CanvasEventManager {
 
             const targetEl = event.target as HTMLElement;
             
-            const zoomToFitBtn = this.findZoomToFitButton(targetEl);
+            const zoomToFitBtn = findZoomToFitButton(targetEl);
             if (zoomToFitBtn) {
                 const handled = await this.handleZoomToFitVisibleNodes();
                 if (handled) {
@@ -187,17 +189,6 @@ export class CanvasEventManager {
         this.plugin.registerDomEvent(document, 'click', handleNodeClick, { capture: true });
     }
 
-    private findZoomToFitButton(targetEl: HTMLElement): HTMLElement | null {
-        const controlItem = targetEl.closest('.canvas-control-item') as HTMLElement | null;
-        if (!controlItem) return null;
-
-        const ariaLabel = controlItem.getAttribute('aria-label')?.toLowerCase() || '';
-        if (ariaLabel.includes('zoom to fit')) return controlItem;
-
-        const hasMaximizeIcon = !!controlItem.querySelector('svg.lucide-maximize');
-        return hasMaximizeIcon ? controlItem : null;
-    }
-
     private async handleZoomToFitVisibleNodes(): Promise<boolean> {
         const canvasView = this.getCanvasView();
         if (!canvasView) return false;
@@ -225,7 +216,7 @@ export class CanvasEventManager {
         canvasWithSelection.selection = new Set(visibleNodes);
         canvasWithSelection.selectedNodes = visibleNodes;
 
-        const handled = this.tryZoomToSelection(canvasView, canvas);
+        const handled = tryZoomToSelection(this.app, canvasView, canvas);
 
         window.setTimeout(() => {
             if (prevSelection) {
@@ -242,30 +233,6 @@ export class CanvasEventManager {
         }, 60);
 
         return handled;
-    }
-
-    private tryZoomToSelection(canvasView: ItemView, canvas: CanvasLike): boolean {
-        const canvasAny = canvas as CanvasLike & { zoomToSelection?: () => void };
-        if (typeof canvasAny.zoomToSelection === 'function') {
-            canvasAny.zoomToSelection();
-            return true;
-        }
-
-        const viewAny = canvasView as ItemView & { zoomToSelection?: () => void };
-        if (typeof viewAny.zoomToSelection === 'function') {
-            viewAny.zoomToSelection();
-            return true;
-        }
-
-        const appWithCommands = this.app as App & {
-            commands?: { executeCommandById?: (id: string) => boolean | void };
-        };
-        if (appWithCommands.commands && typeof appWithCommands.commands.executeCommandById === 'function') {
-            const result = appWithCommands.commands.executeCommandById('canvas:zoom-to-selection');
-            if (result !== false) return true;
-        }
-
-        return false;
     }
 
     // =========================================================================
