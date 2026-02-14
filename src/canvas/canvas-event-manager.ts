@@ -18,7 +18,10 @@ import {
     findZoomToFitButton,
     tryZoomToSelection,
     getSelectedNodeFromCanvas,
-    findDeleteButton
+    findDeleteButton,
+    findCanvasNodeElementFromTarget,
+    getCanvasNodeByElement,
+    parseFromLink
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 import { VisibilityService } from './services/visibility-service';
@@ -299,47 +302,25 @@ export class CanvasEventManager {
     // fromLink 点击处理
     // =========================================================================
     private async handleFromLinkClick(targetEl: HTMLElement, canvasView: ItemView) {
-        let nodeEl = targetEl.closest('.canvas-node');
-        if (!nodeEl && targetEl.classList.contains('canvas-node-content-blocker')) {
-            nodeEl = targetEl.parentElement?.closest('.canvas-node') || null;
-        }
+        const nodeEl = findCanvasNodeElementFromTarget(targetEl);
         if (!nodeEl) return;
 
         const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas?.nodes) return;
-        
-        const nodes = canvas.nodes instanceof Map 
-            ? Array.from(canvas.nodes.values()) 
-            : Array.isArray(canvas.nodes) 
-                ? canvas.nodes 
-                : [];
-        const clickedNode = nodes.find(node => node.nodeEl === nodeEl);
+
+        const clickedNode = getCanvasNodeByElement(canvas, nodeEl);
         if (!clickedNode) return;
 
-        let fromLink: FromLinkInfo | null = null;
-        
-        if (clickedNode.text) {
-            const match = clickedNode.text.match(/<!-- fromLink:(.*?) -->/);
-            if (match?.[1]) {
-                try {
-                    fromLink = JSON.parse(match[1]) as FromLinkInfo;
-                } catch (e) {
-                    log(`[Event] fromLink 解析失败: ${e}`);
-                }
+        const fromLink = parseFromLink(clickedNode.text, clickedNode.color) as FromLinkInfo | null;
+        if (!fromLink) {
+            if (clickedNode.text?.includes('fromLink:')) {
+                log(`[Event] fromLink 解析失败: text`);
+            } else if (clickedNode.color?.startsWith('fromLink:')) {
+                log(`[Event] fromLink (color) 解析失败`);
             }
+            return;
         }
         
-        if (!fromLink && clickedNode.color?.startsWith('fromLink:')) {
-            try {
-                const fromLinkJson = clickedNode.color.substring('fromLink:'.length);
-                fromLink = JSON.parse(fromLinkJson) as FromLinkInfo;
-            } catch (e) {
-                log(`[Event] fromLink (color) 解析失败: ${e}`);
-            }
-        }
-        
-        if (!fromLink) return;
-
         log(`[Event] UI: 跳转 fromLink -> ${fromLink.file}`);
         try {
             const sourceFile = this.app.vault.getAbstractFileByPath(fromLink.file);

@@ -151,6 +151,55 @@ export function findDeleteButton(targetEl: HTMLElement): HTMLElement | null {
     return isTrashButton ? deleteBtn : null;
 }
 
+export function findCanvasNodeElementFromTarget(targetEl: HTMLElement): HTMLElement | null {
+    let nodeEl = targetEl.closest('.canvas-node');
+    if (!nodeEl && targetEl.classList.contains('canvas-node-content-blocker')) {
+        nodeEl = targetEl.parentElement?.closest('.canvas-node') || null;
+    }
+    return nodeEl instanceof HTMLElement ? nodeEl : null;
+}
+
+export function getCanvasNodeByElement(canvas: CanvasLike, nodeEl: HTMLElement): CanvasNodeLike | null {
+    const nodes = getNodesFromCanvas(canvas);
+    return nodes.find(node => node.nodeEl === nodeEl) || null;
+}
+
+export function parseFromLink(text?: string, color?: string): {
+    file: string;
+    from: { line: number; ch: number };
+    to: { line: number; ch: number };
+} | null {
+    if (text) {
+        const match = text.match(/<!-- fromLink:(.*?) -->/);
+        if (match?.[1]) {
+            try {
+                return JSON.parse(match[1]) as {
+                    file: string;
+                    from: { line: number; ch: number };
+                    to: { line: number; ch: number };
+                };
+            } catch {
+                return null;
+            }
+        }
+    }
+
+    if (color?.startsWith('fromLink:')) {
+        try {
+            const fromLinkJson = color.substring('fromLink:'.length);
+            return JSON.parse(fromLinkJson) as {
+                file: string;
+                from: { line: number; ch: number };
+                to: { line: number; ch: number };
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    return null;
+}
+
 function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as CanvasNodeLike;
