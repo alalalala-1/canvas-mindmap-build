@@ -13,9 +13,11 @@ import {
     getSelectedEdge,
     getEdgeFromNodeId,
     getEdgeToNodeId,
-    getEdgesFromCanvas
+    getEdgesFromCanvas,
+    getNodesFromCanvas
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
+import { VisibilityService } from './services/visibility-service';
 
 type FromLinkInfo = {
     file: string;
@@ -121,6 +123,17 @@ export class CanvasEventManager {
 
             const targetEl = event.target as HTMLElement;
             
+            const zoomToFitBtn = this.findZoomToFitButton(targetEl);
+            if (zoomToFitBtn) {
+                const handled = await this.handleZoomToFitVisibleNodes();
+                if (handled) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation();
+                }
+                return;
+            }
+
             // 检查是否点击了删除按钮
             const deleteBtn = this.findDeleteButton(targetEl);
             if (deleteBtn) {
@@ -172,6 +185,87 @@ export class CanvasEventManager {
         };
 
         this.plugin.registerDomEvent(document, 'click', handleNodeClick, { capture: true });
+    }
+
+    private findZoomToFitButton(targetEl: HTMLElement): HTMLElement | null {
+        const controlItem = targetEl.closest('.canvas-control-item') as HTMLElement | null;
+        if (!controlItem) return null;
+
+        const ariaLabel = controlItem.getAttribute('aria-label')?.toLowerCase() || '';
+        if (ariaLabel.includes('zoom to fit')) return controlItem;
+
+        const hasMaximizeIcon = !!controlItem.querySelector('svg.lucide-maximize');
+        return hasMaximizeIcon ? controlItem : null;
+    }
+
+    private async handleZoomToFitVisibleNodes(): Promise<boolean> {
+        const canvasView = this.getCanvasView();
+        if (!canvasView) return false;
+
+        const canvas = (canvasView as CanvasViewLike).canvas;
+        if (!canvas) return false;
+
+        const nodes = getNodesFromCanvas(canvas);
+        const edges = getEdgesFromCanvas(canvas);
+        if (nodes.length === 0) return false;
+
+        const visibilityService = new VisibilityService(this.collapseStateManager);
+        const visibleNodeIds = visibilityService.getVisibleNodeIds(nodes, edges);
+        const visibleNodes = nodes.filter(node => node.id && visibleNodeIds.has(node.id));
+        if (visibleNodes.length === 0) return false;
+
+        const canvasWithSelection = canvas as CanvasLike & {
+            selection?: Set<CanvasNodeLike>;
+            selectedNodes?: CanvasNodeLike[];
+        };
+
+        const prevSelection = canvasWithSelection.selection ? new Set(canvasWithSelection.selection) : null;
+        const prevSelectedNodes = canvasWithSelection.selectedNodes ? [...canvasWithSelection.selectedNodes] : null;
+
+        canvasWithSelection.selection = new Set(visibleNodes);
+        canvasWithSelection.selectedNodes = visibleNodes;
+
+        const handled = this.tryZoomToSelection(canvasView, canvas);
+
+        window.setTimeout(() => {
+            if (prevSelection) {
+                canvasWithSelection.selection = prevSelection;
+            } else if (canvasWithSelection.selection) {
+                canvasWithSelection.selection.clear();
+            }
+
+            if (prevSelectedNodes) {
+                canvasWithSelection.selectedNodes = prevSelectedNodes;
+            } else if (canvasWithSelection.selectedNodes) {
+                canvasWithSelection.selectedNodes = [];
+            }
+        }, 60);
+
+        return handled;
+    }
+
+    private tryZoomToSelection(canvasView: ItemView, canvas: CanvasLike): boolean {
+        const canvasAny = canvas as CanvasLike & { zoomToSelection?: () => void };
+        if (typeof canvasAny.zoomToSelection === 'function') {
+            canvasAny.zoomToSelection();
+            return true;
+        }
+
+        const viewAny = canvasView as ItemView & { zoomToSelection?: () => void };
+        if (typeof viewAny.zoomToSelection === 'function') {
+            viewAny.zoomToSelection();
+            return true;
+        }
+
+        const appWithCommands = this.app as App & {
+            commands?: { executeCommandById?: (id: string) => boolean | void };
+        };
+        if (appWithCommands.commands && typeof appWithCommands.commands.executeCommandById === 'function') {
+            const result = appWithCommands.commands.executeCommandById('canvas:zoom-to-selection');
+            if (result !== false) return true;
+        }
+
+        return false;
     }
 
     // =========================================================================
