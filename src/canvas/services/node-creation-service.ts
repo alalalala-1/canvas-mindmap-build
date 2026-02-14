@@ -1,6 +1,7 @@
 import { App, ItemView, Notice, TFile, Plugin } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
+import { NodeTypeService } from './node-type-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
@@ -12,6 +13,7 @@ export class NodeCreationService {
     private plugin: Plugin;
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
+    private nodeTypeService: NodeTypeService;
     private positionCalculator: NodePositionCalculator;
     private canvasManager: ICanvasManager | null = null;
 
@@ -26,6 +28,7 @@ export class NodeCreationService {
         this.plugin = plugin;
         this.settings = settings;
         this.canvasFileService = canvasFileService;
+        this.nodeTypeService = new NodeTypeService(settings);
         this.positionCalculator = new NodePositionCalculator(settings);
         this.canvasManager = canvasManager || null;
     }
@@ -109,17 +112,14 @@ export class NodeCreationService {
         const newNode: CanvasNodeLike = { id: nodeId };
         const trimmedContent = content.trim();
 
-        const isFormula = this.settings.enableFormulaDetection &&
-            trimmedContent.startsWith('$$') &&
-            trimmedContent.endsWith('$$') &&
-            trimmedContent.length > 4;
+        const dimensions = this.nodeTypeService.getNodeDimensions(trimmedContent);
 
-        if (isFormula) {
+        if (dimensions.type === 'formula') {
             newNode.type = 'text';
             newNode.text = content;
-            newNode.width = this.settings.formulaNodeWidth || 600;
-            newNode.height = this.settings.formulaNodeHeight || 200;
-        } else {
+            newNode.width = dimensions.width;
+            newNode.height = dimensions.height;
+        } else if (dimensions.type === 'image') {
             const imageRegex = /!\[\[(.*?)\]\]|!\[.*?\]\((.*?)\)/;
             const imageMatch = content.match(imageRegex);
 
@@ -127,18 +127,18 @@ export class NodeCreationService {
                 const imagePath = imageMatch[1] || imageMatch[2];
                 newNode.type = 'file';
                 newNode.file = imagePath;
-                newNode.width = this.settings.imageNodeWidth || 400;
-                newNode.height = this.settings.imageNodeHeight || 300;
+                newNode.width = dimensions.width;
+                newNode.height = dimensions.height;
+            }
+        } else {
+            newNode.type = 'text';
+            newNode.text = content;
+            newNode.width = dimensions.width;
+            
+            if (this.canvasManager) {
+                newNode.height = this.canvasManager.calculateTextNodeHeight(content);
             } else {
-                newNode.type = 'text';
-                newNode.text = content;
-                newNode.width = this.settings.textNodeWidth || 250;
-                
-                if (this.canvasManager) {
-                    newNode.height = this.canvasManager.calculateTextNodeHeight(content);
-                } else {
-                    newNode.height = 100;
-                }
+                newNode.height = 100;
             }
         }
 

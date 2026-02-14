@@ -4,13 +4,14 @@ import { CollapseStateManager } from '../state/collapse-state';
 import { NodeCreationService } from './services/node-creation-service';
 import { NodeDeletionService } from './services/node-deletion-service';
 import { CanvasFileService } from './services/canvas-file-service';
+import { NodeTypeService } from './services/node-type-service';
+import { NodeHeightService } from './services/node-height-service';
 import { EditTextModal } from '../ui/edit-modal';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     getCanvasView,
-    getCurrentCanvasFilePath,
-    estimateTextNodeHeight
+    getCurrentCanvasFilePath
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike } from './types';
 
@@ -24,6 +25,8 @@ export class CanvasNodeManager {
     private canvasFileService: CanvasFileService;
     private nodeCreationService: NodeCreationService;
     private nodeDeletionService: NodeDeletionService;
+    private nodeTypeService: NodeTypeService;
+    private nodeHeightService: NodeHeightService;
 
     constructor(
         app: App,
@@ -37,6 +40,9 @@ export class CanvasNodeManager {
         this.settings = settings;
         this.collapseStateManager = collapseStateManager;
         this.canvasFileService = canvasFileService;
+
+        this.nodeTypeService = new NodeTypeService(settings);
+        this.nodeHeightService = new NodeHeightService(app, settings, canvasFileService);
 
         this.nodeCreationService = new NodeCreationService(
             app,
@@ -65,93 +71,16 @@ export class CanvasNodeManager {
     async adjustNodeHeightAfterRender(nodeId: string): Promise<void> {
         log(`[Node] adjustNodeHeightAfterRender 被调用, nodeId=${nodeId}`);
         try {
-            const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
-            log(`[Node] canvasFilePath=${canvasFilePath || 'null'}`);
-            if (!canvasFilePath) return;
+            const newHeightValue = await this.nodeHeightService.adjustNodeHeight(nodeId);
 
-            let newHeightValue: number | null = null;
+            if (newHeightValue !== null) {
+                this.nodeHeightService.syncMemoryNodeHeight(nodeId, newHeightValue);
 
-            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
-                if (!canvasData.nodes) return false;
-
-                const node = canvasData.nodes.find(n => n.id === nodeId);
-                log(`[Node] 查找节点: ${nodeId}, 找到=${node ? 'yes' : 'no'}`);
-                if (!node) return false;
-
-                if (!node.type || node.type === 'text') {
-                    log(`[Node] 节点类型=text, text长度=${node.text?.length || 0}`);
-                    if (node.text) {
-                        const isFormula = this.settings.enableFormulaDetection && 
-                            node.text.trim().startsWith('$$') && 
-                            node.text.trim().endsWith('$$');
-
-                        let newHeight: number;
-                        if (isFormula) {
-                            newHeight = this.settings.formulaNodeHeight || 80;
-                            node.width = this.settings.formulaNodeWidth || 400;
-                            log(`[Node] 公式节点, newHeight=${newHeight}`);
-                        } else {
-                            const canvasView = getCanvasView(this.app);
-                            const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
-                            let nodeEl: Element | undefined;
-                            if (canvas?.nodes && canvas.nodes instanceof Map) {
-                                const nodeData = canvas.nodes.get(nodeId);
-                                if (nodeData?.nodeEl) {
-                                    nodeEl = nodeData.nodeEl;
-                                }
-                            }
-                            const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
-                            const maxHeight = this.settings.textNodeMaxHeight || 800;
-                            newHeight = Math.min(calculatedHeight, maxHeight);
-                            const currentHeight = node.height ?? 0;
-                            const delta = newHeight - currentHeight;
-                            if (newHeight >= maxHeight || Math.abs(delta) > 80) {
-                                log(`[Node] 高度异常: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}, delta=${delta.toFixed(1)}, textLen=${node.text.length}`);
-                            } else {
-                                log(`[Node] 计算高度: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}`);
-                            }
-                        }
-
-                        if (node.height !== newHeight) {
-                            log(`[Node] 更新高度: ${node.height} -> ${newHeight}`);
-                            node.height = newHeight;
-                            newHeightValue = newHeight;
-                            return true;
-                        } else {
-                            log(`[Node] 高度未变化，跳过更新`);
-                            newHeightValue = node.height || null;
-                            return false;
-                        }
-                    }
-                }
-                return false;
-            });
-
-            const currentHeight = newHeightValue;
-            if (currentHeight !== null) {
-                const canvasView = getCanvasView(this.app);
-                const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
-                if (canvas?.nodes && canvas.nodes instanceof Map) {
-                    const nodeData = canvas.nodes.get(nodeId);
-                    if (nodeData) {
-                        log(`[Node] 同步更新内存节点高度: ${currentHeight}`);
-                        nodeData.height = currentHeight;
-                        if (nodeData.nodeEl) {
-                            nodeData.nodeEl.style.height = `${currentHeight}px`;
-                        }
-                        const nodeWithRender = nodeData as CanvasNodeLike & { render?: () => void };
-                        if (typeof nodeWithRender.render === 'function') {
-                            nodeWithRender.render();
-                        }
-                        if (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0) {
-                            setTimeout(() => {
-                                void this.adjustNodeHeightAfterRender(nodeId);
-                            }, CONSTANTS.TIMING.RETRY_DELAY);
-                        }
-                        if (typeof canvas.requestSave === 'function') {
-                            canvas.requestSave();
-                        }
-                    }
+                const nodeData = this.nodeHeightService.getCanvasNodeElement(nodeId);
+                if (nodeData && (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0)) {
+                    setTimeout(() => {
+                        void this.adjustNodeHeightAfterRender(nodeId);
+                    }, CONSTANTS.TIMING.RETRY_DELAY);
                 }
             }
         } catch (err) {
@@ -178,10 +107,13 @@ export class CanvasNodeManager {
             let maxDecrease = 0;
             let missingDomCount = 0;
 
+            const textDimensions = this.nodeTypeService.getTextDimensions();
+            const maxHeight = textDimensions.maxHeight;
+            const formulaDimensions = this.nodeTypeService.getFormulaDimensions();
+
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 if (!canvasData.nodes) return false;
 
-                const maxHeight = this.settings.textNodeMaxHeight || 800;
                 let changed = false;
 
                 const canvasView = getCanvasView(this.app);
@@ -199,19 +131,17 @@ export class CanvasNodeManager {
                 for (const node of canvasData.nodes) {
                     if (!node.type || node.type === 'text') {
                         if (node.text) {
-                            const isFormula = this.settings.enableFormulaDetection && 
-                                node.text.trim().startsWith('$$') && 
-                                node.text.trim().endsWith('$$');
+                            const isFormula = this.nodeTypeService.isFormula(node.text);
 
                             let newHeight: number;
                             if (isFormula) {
                                 formulaCount++;
-                                newHeight = this.settings.formulaNodeHeight || 80;
-                                node.width = this.settings.formulaNodeWidth || 400;
+                                newHeight = formulaDimensions.height;
+                                node.width = formulaDimensions.width;
                             } else {
                                 const nodeData = node.id ? nodeDomMap.get(node.id) : undefined;
                                 const nodeEl = nodeData?.nodeEl;
-                                const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
+                                const calculatedHeight = this.nodeHeightService.calculateTextNodeHeight(node.text, nodeEl);
                                 newHeight = Math.min(calculatedHeight, maxHeight);
                                 if (!nodeData?.nodeEl) {
                                     missingDomCount++;
@@ -360,84 +290,6 @@ export class CanvasNodeManager {
     }
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element): number {
-        const maxHeight = this.settings.textNodeMaxHeight || 800;
-        const nodeWidth = this.settings.textNodeWidth || 400;
-
-        if (nodeEl) {
-            const measuredHeight = this.measureActualContentHeight(nodeEl, content);
-            if (measuredHeight > 0) {
-                return Math.min(measuredHeight, maxHeight);
-            }
-        }
-
-        const computedHeight = this.calculateTextNodeHeightComputed(content, nodeWidth);
-        return computedHeight;
-    }
-
-    private measureActualContentHeight(nodeEl: Element, content: string): number {
-        try {
-            const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
-            const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
-
-            if (sizerEl) {
-                const sizerMinHeightStyle = sizerEl.style.minHeight;
-                if (sizerMinHeightStyle) {
-                    const parsedMinHeight = parseFloat(sizerMinHeightStyle);
-                    if (!isNaN(parsedMinHeight) && parsedMinHeight > 0) {
-                        return Math.ceil(parsedMinHeight + 24);
-                    }
-                }
-            }
-
-            if (contentEl) {
-                const pElement = contentEl.querySelector('p');
-                if (pElement) {
-                    const pRect = pElement.getBoundingClientRect();
-                    const pStyles = window.getComputedStyle(pElement);
-                    const lineHeight = parseFloat(pStyles.lineHeight) || 24;
-                    
-                    const actualLines = Math.max(1, Math.round(pRect.height / lineHeight));
-                    
-                    const styles = window.getComputedStyle(contentEl);
-                    const paddingTop = parseFloat(styles.paddingTop) || 8;
-                    const paddingBottom = parseFloat(styles.paddingBottom) || 8;
-
-                    return Math.ceil(actualLines * lineHeight + paddingTop + paddingBottom + 20);
-                }
-            }
-
-            if (sizerEl) {
-                const scrollHeight = sizerEl.scrollHeight;
-                if (scrollHeight > 20) {
-                    return Math.ceil(scrollHeight + 24);
-                }
-
-                const rect = sizerEl.getBoundingClientRect();
-                if (rect.height > 0) {
-                    return Math.ceil(rect.height + 24);
-                }
-            }
-
-            if (contentEl) {
-                const styles = window.getComputedStyle(contentEl);
-                const paddingTop = parseFloat(styles.paddingTop) || 8;
-                const paddingBottom = parseFloat(styles.paddingBottom) || 8;
-                const scrollHeight = contentEl.scrollHeight;
-                if (scrollHeight > 20) {
-                    return Math.ceil(scrollHeight + paddingTop + paddingBottom);
-                }
-            }
-
-            const nodeWidth = nodeEl.clientWidth || 400;
-            return this.calculateTextNodeHeightComputed(content, nodeWidth);
-        } catch (e) {
-            log(`[Node] 测量高度异常: ${e}`);
-        }
-        return 0;
-    }
-
-    private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
-        const maxHeight = this.settings.textNodeMaxHeight || 800;
-        return estimateTextNodeHeight(content, nodeWidth, maxHeight);
+        return this.nodeHeightService.calculateTextNodeHeight(content, nodeEl);
     }
 }

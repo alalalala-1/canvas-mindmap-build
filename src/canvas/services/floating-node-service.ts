@@ -111,6 +111,14 @@ export class FloatingNodeService {
         this.styleManager.setCanvas(canvas);
 
         if (this.currentCanvasFilePath === canvasFilePath) {
+            log(`[FloatingNode] 相同路径，检查是否有刚连接的节点需要跳过重新初始化`);
+            
+            const hasRecentConnectedNodes = this.recentConnectedNodes.size > 0;
+            if (hasRecentConnectedNodes) {
+                log(`[FloatingNode] 有刚连接的节点 (${Array.from(this.recentConnectedNodes.keys()).join(', ')}), 跳过重新初始化缓存和样式`);
+                return;
+            }
+            
             log(`[FloatingNode] 相同路径，重新初始化缓存并应用样式: ${canvasFilePath}`);
             await this.stateManager.initializeCache(canvasFilePath, true);
             await this.reapplyAllFloatingStyles(canvas);
@@ -599,7 +607,9 @@ export class FloatingNodeService {
         for (const nodeId of floatingNodes.keys()) {
             // 检查节点是否在当前 Canvas 中
             if (!canvas || canvasNodeIds.has(nodeId)) {
+                // 如果节点刚被连接过，跳过处理，不加入任何列表
                 if (this.shouldSkipStyleApply(nodeId)) {
+                    log(`[FloatingNode] 跳过刚连接的节点: ${nodeId}`);
                     continue;
                 }
                 // 检查节点是否真的有入边
@@ -623,7 +633,9 @@ export class FloatingNodeService {
             
             for (const node of nodes) {
                 if (node?.data?.isFloating && !validFloatingNodes.includes(node.id)) {
+                    // 如果节点刚被连接过，跳过处理
                     if (this.shouldSkipStyleApply(node.id)) {
+                        log(`[FloatingNode] 跳过刚连接的节点: ${node.id}`);
                         continue;
                     }
                     if (!this.hasIncomingEdge(node.id, edges)) {
@@ -668,6 +680,10 @@ export class FloatingNodeService {
         if (!this.currentCanvasFilePath) return;
 
         for (const nodeId of nodeIds) {
+            if (this.shouldSkipStyleApply(nodeId)) {
+                log(`[FloatingNode] 跳过清理刚连接的节点: ${nodeId}`);
+                continue;
+            }
             await this.clearNodeFloatingState(nodeId);
         }
     }
