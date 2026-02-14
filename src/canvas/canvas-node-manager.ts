@@ -42,7 +42,7 @@ export class CanvasNodeManager {
         this.canvasFileService = canvasFileService;
 
         this.nodeTypeService = new NodeTypeService(settings);
-        this.nodeHeightService = new NodeHeightService(app, settings, canvasFileService);
+        this.nodeHeightService = new NodeHeightService(app, settings, canvasFileService, this.nodeTypeService);
 
         this.nodeCreationService = new NodeCreationService(
             app,

@@ -3,6 +3,7 @@ import { App, ItemView } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasNodeLike, CanvasLike, CanvasViewLike } from '../types';
 import { CanvasFileService } from './canvas-file-service';
+import { NodeTypeService } from './node-type-service';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
@@ -11,15 +12,18 @@ export class NodeHeightService {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
+    private nodeTypeService: NodeTypeService;
 
     constructor(
         app: App,
         settings: CanvasMindmapBuildSettings,
-        canvasFileService: CanvasFileService
+        canvasFileService: CanvasFileService,
+        nodeTypeService: NodeTypeService
     ) {
         this.app = app;
         this.settings = settings;
         this.canvasFileService = canvasFileService;
+        this.nodeTypeService = nodeTypeService;
     }
 
     /**
@@ -29,8 +33,9 @@ export class NodeHeightService {
      * @returns 计算后的高度
      */
     calculateTextNodeHeight(content: string, nodeEl?: Element): number {
-        const maxHeight = this.settings.textNodeMaxHeight || 800;
-        const nodeWidth = this.settings.textNodeWidth || 400;
+        const textDimensions = this.nodeTypeService.getTextDimensions();
+        const maxHeight = textDimensions.maxHeight;
+        const nodeWidth = textDimensions.width;
 
         if (nodeEl) {
             const measuredHeight = this.measureActualContentHeight(nodeEl, content);
@@ -111,8 +116,8 @@ export class NodeHeightService {
      * 估算文本节点高度（不依赖 DOM）
      */
     private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
-        const maxHeight = this.settings.textNodeMaxHeight || 800;
-        return estimateTextNodeHeight(content, nodeWidth, maxHeight);
+        const textDimensions = this.nodeTypeService.getTextDimensions();
+        return estimateTextNodeHeight(content, nodeWidth, textDimensions.maxHeight);
     }
 
     /**
@@ -145,8 +150,9 @@ export class NodeHeightService {
 
                         let newHeight: number;
                         if (isFormula) {
-                            newHeight = this.settings.formulaNodeHeight || 80;
-                            node.width = this.settings.formulaNodeWidth || 400;
+                            const formulaDimensions = this.nodeTypeService.getFormulaDimensions();
+                            newHeight = formulaDimensions.height;
+                            node.width = formulaDimensions.width;
                             log(`[NodeHeight] 公式节点, newHeight=${newHeight}`);
                         } else {
                             const canvasView = getCanvasView(this.app);
@@ -159,7 +165,8 @@ export class NodeHeightService {
                                 }
                             }
                             const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
-                            const maxHeight = this.settings.textNodeMaxHeight || 800;
+                            const textDimensions = this.nodeTypeService.getTextDimensions();
+                            const maxHeight = textDimensions.maxHeight;
                             newHeight = Math.min(calculatedHeight, maxHeight);
                             const currentHeight = node.height ?? 0;
                             const delta = newHeight - currentHeight;
