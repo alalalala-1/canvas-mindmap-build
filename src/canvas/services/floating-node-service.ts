@@ -28,6 +28,8 @@ export class FloatingNodeService {
     private processedEdgeCleanupTimeout: number | null = null;
     private pendingPersistNodeIds: Set<string> = new Set();
     private delayedPersistTimeout: number | null = null;
+    private lastFileModifyTime: number = 0;
+    private persistCompleteTime: number = 0;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
@@ -60,12 +62,7 @@ export class FloatingNodeService {
      */
     private getEdgesFromCanvas(): CanvasEdgeLike[] {
         if (!this.canvas) return [];
-        let edges = getEdgesFromCanvas(this.canvas);
-        const fileEdges = this.canvas.fileData?.edges;
-        if (fileEdges && fileEdges.length > edges.length) {
-            edges = fileEdges;
-        }
-        return edges;
+        return getEdgesFromCanvas(this.canvas);
     }
 
     /**
@@ -196,6 +193,12 @@ export class FloatingNodeService {
                 try {
                     log(`[FloatingNode] cleanup 持久化: ${id}`);
                     await this.persistClearFloatingState(id, false);
+                    // 关键修复：同时更新内存缓存
+                    this.removeFloatingNodeIds([id]);
+                    this.clearFloatingStyles([id]);
+                    if (this.currentCanvasFilePath) {
+                        this.clearFloatingMemory(this.currentCanvasFilePath, [id]);
+                    }
                 } catch (err) {
                     log(`[FloatingNode] cleanup 持久化失败: ${id}`, err);
                 }
@@ -359,6 +362,14 @@ export class FloatingNodeService {
     }
 
     /**
+     * 清除浮动状态但不触发 canvas.requestSave
+     * 用于避免与 Obsidian 的保存操作冲突
+     */
+    async executeClearFloatingNoSave(nodeIds: string[]): Promise<boolean> {
+        return await this.executeClearFloating(nodeIds, true, false);
+    }
+
+    /**
      * 执行清除浮动状态的核心逻辑
      * @param nodesToClear 要清除的节点列表
      * @param persistToFile 是否持久化到文件
@@ -481,6 +492,19 @@ export class FloatingNodeService {
 
         log(`[FloatingNode] ============ handleNewEdge 开始 ============`);
         log(`[FloatingNode] 处理新连线: ${fromNodeId} -> ${toNodeId}, persistToFile=${persistToFile}, edgeId=${edgeId}`);
+
+        // 记录文件修改时间，用于延迟持久化的冲突检测
+        this.lastFileModifyTime = Date.now();
+
+        // 检查是否在保护期内，如果是，延迟处理
+        if (this.isInProtectionPeriod()) {
+            log(`[FloatingNode] 在保护期内，延迟500ms处理新边`);
+            setTimeout(() => {
+                this.handleNewEdge(edge, persistToFile);
+            }, 500);
+            log(`[FloatingNode] ============ handleNewEdge 结束 (延迟) ============`);
+            return;
+        }
 
         // 防止同一个边被重复处理
         if (edgeId) {
@@ -619,34 +643,102 @@ export class FloatingNodeService {
      */
     private scheduleDelayedPersist(nodeId: string): void {
         this.pendingPersistNodeIds.add(nodeId);
-        
+        this.lastFileModifyTime = Date.now();
+
         // 清除之前的 timeout，重置计时器
         if (this.delayedPersistTimeout) {
             clearTimeout(this.delayedPersistTimeout);
         }
-        
-        // 延迟 2 秒后执行持久化，确保 Obsidian 已经保存完新边了
+
+        // 延迟 3 秒后执行持久化，确保 Obsidian 已经保存完新边了
         this.delayedPersistTimeout = window.setTimeout(async () => {
-            log(`[FloatingNode] 执行延迟持久化，节点数: ${this.pendingPersistNodeIds.size}`);
-            
-            const nodesToPersist = Array.from(this.pendingPersistNodeIds);
-            this.pendingPersistNodeIds.clear();
-            this.delayedPersistTimeout = null;
-            
-            for (const id of nodesToPersist) {
-                try {
-                    log(`[FloatingNode] 延迟持久化: ${id}`);
-                    await this.persistClearFloatingState(id, false);
-                    // 关键修复：只持久化到文件，不要修改 canvas 内存中的 node.data
-                    // 下次刷新或重新打开 Canvas 时，会自动从文件读取正确的状态
-                } catch (err) {
-                    log(`[FloatingNode] 延迟持久化失败: ${id}`, err);
-                }
-            }
-            log(`[FloatingNode] 延迟持久化完成`);
-        }, 2000);
+            await this.executeDelayedPersist();
+        }, 3000);
+
+        log(`[FloatingNode] 已安排延迟持久化，3秒后执行，当前待持久化: ${this.pendingPersistNodeIds.size} 个节点`);
+    }
+
+    /**
+     * 执行延迟持久化
+     * 如果文件最近被修改（可能是 Obsidian 保存新边），则延迟执行
+     */
+    private async executeDelayedPersist(): Promise<void> {
+        const now = Date.now();
+        const timeSinceLastModify = now - this.lastFileModifyTime;
+
+        // 如果文件最近 500ms 内被修改，延迟 500ms 再执行
+        if (timeSinceLastModify < 500) {
+            log(`[FloatingNode] 文件最近被修改(${timeSinceLastModify}ms前)，延迟500ms再执行持久化`);
+            this.delayedPersistTimeout = window.setTimeout(async () => {
+                await this.executeDelayedPersist();
+            }, 500);
+            return;
+        }
+
+        // 关键检查：比较 Canvas 内存中的边数与文件中的边数
+        const canvasEdges = this.getEdgesFromCanvas();
+        const canvasEdgeCount = canvasEdges.length;
         
-        log(`[FloatingNode] 已安排延迟持久化，2秒后执行，当前待持久化: ${this.pendingPersistNodeIds.size} 个节点`);
+        // 读取文件中的边数
+        if (this.currentCanvasFilePath) {
+            const fileData = await this.canvasFileService.readCanvasData(this.currentCanvasFilePath);
+            const fileEdgeCount = fileData?.edges?.length || 0;
+            log(`[FloatingNode] Canvas 内存边数: ${canvasEdgeCount}, 文件边数: ${fileEdgeCount}`);
+            
+            // 如果边数不一致，说明 Obsidian 还没保存完，延迟执行
+            if (canvasEdgeCount !== fileEdgeCount) {
+                log(`[FloatingNode] 边数不一致，延迟500ms再执行持久化`);
+                this.delayedPersistTimeout = window.setTimeout(async () => {
+                    await this.executeDelayedPersist();
+                }, 500);
+                return;
+            }
+        }
+
+        log(`[FloatingNode] 执行延迟持久化，节点数: ${this.pendingPersistNodeIds.size}`);
+
+        const nodesToPersist = Array.from(this.pendingPersistNodeIds);
+        this.pendingPersistNodeIds.clear();
+        this.delayedPersistTimeout = null;
+
+        for (const id of nodesToPersist) {
+            try {
+                log(`[FloatingNode] 延迟持久化: ${id}`);
+                await this.persistClearFloatingState(id, false);
+                // 关键修复：同时更新内存缓存和 canvas 内存数据
+                this.removeFloatingNodeIds([id]);
+                this.clearFloatingStyles([id]);
+                this.clearFloatingMemory(this.currentCanvasFilePath!, [id]);
+                this.clearFloatingCanvasData([id], false, 0, true);
+            } catch (err) {
+                log(`[FloatingNode] 延迟持久化失败: ${id}`, err);
+            }
+        }
+        // 设置保护期，500ms 内不处理新的边操作
+        this.persistCompleteTime = Date.now();
+        log(`[FloatingNode] 延迟持久化完成，设置保护期500ms`);
+    }
+
+    /**
+     * 检查是否在保护期内
+     * 保护期内不处理新的边操作，避免与 Obsidian 的保存操作冲突
+     */
+    isInProtectionPeriod(): boolean {
+        const now = Date.now();
+        const inProtection = now - this.persistCompleteTime < 500;
+        if (inProtection) {
+            log(`[FloatingNode] 在保护期内，距离持久化完成: ${now - this.persistCompleteTime}ms`);
+        }
+        return inProtection;
+    }
+
+    /**
+     * 通知文件被修改
+     * 用于延迟持久化的冲突检测
+     */
+    notifyFileModified(): void {
+        this.lastFileModifyTime = Date.now();
+        log(`[FloatingNode] 文件修改时间已更新`);
     }
 
     /**
@@ -820,6 +912,7 @@ export class FloatingNodeService {
 
     /**
      * 清理有入边的浮动节点状态（它们不应该保持浮动状态）
+     * 关键：不触发 canvas.requestSave，避免与 Obsidian 的保存操作冲突
      */
     private async cleanupConnectedFloatingNodes(nodeIds: string[]): Promise<void> {
         if (!this.currentCanvasFilePath) return;
@@ -829,7 +922,9 @@ export class FloatingNodeService {
                 log(`[FloatingNode] 跳过清理刚连接的节点: ${nodeId}`);
                 continue;
             }
-            await this.clearNodeFloatingState(nodeId);
+            // 关键修复：不调用 clearNodeFloatingState，而是直接执行清理逻辑
+            // 避免触发 canvas.requestSave，防止与 Obsidian 的保存操作冲突
+            await this.executeClearFloating([nodeId], true, false);
         }
     }
 

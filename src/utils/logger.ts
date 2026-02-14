@@ -23,6 +23,8 @@ export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>
 export function log(...messages: unknown[]): void {
     if (!isLoggingEnabled) return;
 
+    const now = new Date();
+    const timestamp = now.toISOString().split('T')[1]?.slice(0, 12) ?? '00:00:00.000'; // HH:MM:SS.mmm
     const body = messages.map(msg => {
         if (msg === null) return 'null';
         if (msg === undefined) return 'undefined';
@@ -45,7 +47,7 @@ export function log(...messages: unknown[]): void {
         return '[Unknown]';
     }).join(' ');
 
-    console.debug(body);
+    console.debug(`[${timestamp}] ${body}`);
 }
 
 /**

@@ -357,6 +357,10 @@ export class CanvasEventManager {
     private async handleCanvasFileModified(filePath: string): Promise<void> {
         log(`[Event] ============ handleCanvasFileModified 开始 ============`);
         log(`[Event] Canvas 文件变更: ${filePath}`);
+        
+        // 通知文件被修改，用于延迟持久化的冲突检测
+        this.floatingNodeService.notifyFileModified();
+        
         const data = await this.canvasFileService.readCanvasData(filePath);
         if (!data) {
             log(`[Event] Canvas 文件读取失败: ${filePath}`);
@@ -456,7 +460,9 @@ export class CanvasEventManager {
                 if (nodeId) {
                     const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
                     if (isFloating) {
-                        await this.floatingNodeService.clearNodeFloatingState(nodeId);
+                        // 关键修复：不调用 clearNodeFloatingState，而是使用 executeClearFloating 且 requestCanvasSave=false
+                        // 避免触发 canvas.requestSave，防止与 Obsidian 的保存操作冲突
+                        await this.floatingNodeService.executeClearFloatingNoSave([nodeId]);
                     }
                     log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
                     setTimeout(() => {

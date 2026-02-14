@@ -15,10 +15,52 @@ export type UpdateCallback = (data: CanvasDataLike) => boolean | Promise<boolean
 export class CanvasFileService {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
+    private fileLocks: Map<string, boolean> = new Map();
+    private pendingOperations: Map<string, Array<() => void>> = new Map();
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.app = app;
         this.settings = settings;
+    }
+
+    /**
+     * 获取文件锁
+     */
+    private acquireLock(filePath: string): boolean {
+        if (this.fileLocks.get(filePath)) {
+            log(`[File] 锁已被占用: ${filePath}`);
+            return false;
+        }
+        this.fileLocks.set(filePath, true);
+        log(`[File] 获取锁: ${filePath}`);
+        return true;
+    }
+
+    /**
+     * 释放文件锁
+     */
+    private releaseLock(filePath: string): void {
+        this.fileLocks.set(filePath, false);
+        log(`[File] 释放锁: ${filePath}`);
+        // 执行等待的操作
+        const pending = this.pendingOperations.get(filePath);
+        if (pending && pending.length > 0) {
+            const nextOp = pending.shift();
+            if (nextOp) {
+                log(`[File] 执行等待的操作: ${filePath}, 剩余=${pending.length}`);
+                setTimeout(nextOp, 100);
+            }
+        }
+    }
+
+    /**
+     * 等待锁释放
+     */
+    private waitForLock(filePath: string, callback: () => void): void {
+        if (!this.pendingOperations.has(filePath)) {
+            this.pendingOperations.set(filePath, []);
+        }
+        this.pendingOperations.get(filePath)!.push(callback);
     }
 
     getFloatingNodesInfo(canvasData: CanvasDataLike | null): {
@@ -114,33 +156,52 @@ export class CanvasFileService {
         filePath: string,
         updateCallback: UpdateCallback
     ): Promise<boolean> {
+        // 如果获取不到锁，延迟执行
+        if (!this.acquireLock(filePath)) {
+            log(`[File] 文件被锁定，等待重试: ${filePath}`);
+            return new Promise((resolve) => {
+                this.waitForLock(filePath, async () => {
+                    const result = await this.modifyCanvasDataAtomic(filePath, updateCallback);
+                    resolve(result);
+                });
+            });
+        }
+
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (!(canvasFile instanceof TFile)) return false;
+        if (!(canvasFile instanceof TFile)) {
+            this.releaseLock(filePath);
+            return false;
+        }
 
         try {
             const content = await this.app.vault.read(canvasFile);
             const data = JSON.parse(content) as CanvasDataLike;
+            const firstEdgeCount = data.edges?.length || 0;
 
             const shouldModify = await updateCallback(data);
-            log(`[File] 原子修改第一次检查: shouldModify=${shouldModify}`);
+            log(`[File] 原子修改第一次检查: shouldModify=${shouldModify}, edges=${firstEdgeCount}`);
 
             if (shouldModify) {
                 const latestContent = await this.app.vault.read(canvasFile);
                 const latestData = JSON.parse(latestContent) as CanvasDataLike;
+                const secondEdgeCount = latestData.edges?.length || 0;
                 
                 const finalShouldModify = await updateCallback(latestData);
-                log(`[File] 原子修改第二次检查: finalShouldModify=${finalShouldModify}`);
+                log(`[File] 原子修改第二次检查: finalShouldModify=${finalShouldModify}, edges=${secondEdgeCount}`);
                 
                 if (finalShouldModify) {
                     const output = JSON.stringify(latestData, null, 2);
                     await this.app.vault.modify(canvasFile, output);
-                    log(`[File] 原子修改成功: ${filePath}`);
+                    log(`[File] 原子修改成功: ${filePath}, edges=${secondEdgeCount}`);
+                    this.releaseLock(filePath);
                     return true;
                 }
             }
+            this.releaseLock(filePath);
             return false;
         } catch (err) {
             log('[File] 原子修改失败:', err);
+            this.releaseLock(filePath);
             return false;
         }
     }
