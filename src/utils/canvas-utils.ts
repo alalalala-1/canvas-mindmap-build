@@ -100,8 +100,8 @@ export function getCurrentCanvasFilePath(app: App): string | undefined {
 }
 
 export function findZoomToFitButton(targetEl: HTMLElement): HTMLElement | null {
-    const controlItem = targetEl.closest('.canvas-control-item') as HTMLElement | null;
-    if (!controlItem) return null;
+    const controlItem = targetEl.closest('.canvas-control-item');
+    if (!(controlItem instanceof HTMLElement)) return null;
 
     const ariaLabel = controlItem.getAttribute('aria-label')?.toLowerCase() || '';
     if (ariaLabel.includes('zoom to fit')) return controlItem;
@@ -132,6 +132,44 @@ export function tryZoomToSelection(app: App, canvasView: ItemView, canvas: Canva
     }
 
     return false;
+}
+
+function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as CanvasNodeLike;
+    return typeof candidate.id === 'string' || !!candidate.nodeEl || typeof candidate.type === 'string';
+}
+
+export function getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | null {
+    if (!canvas?.nodes) return null;
+
+    const selection = canvas.selection;
+    if (selection instanceof Set && selection.size > 0) {
+        for (const value of selection.values()) {
+            if (isCanvasNodeLike(value) && (value.nodeEl || value.type)) {
+                return value;
+            }
+            break;
+        }
+    }
+
+    if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
+        return canvas.selectedNodes[0] || null;
+    }
+
+    const allNodes = getNodesFromCanvas(canvas);
+
+    for (const node of allNodes) {
+        if (node.nodeEl) {
+            const hasFocused = node.nodeEl.classList.contains('is-focused');
+            const hasSelected = node.nodeEl.classList.contains('is-selected');
+            if (hasFocused || hasSelected) {
+                return node;
+            }
+        }
+    }
+
+    return null;
 }
 
 // ============================================================================

@@ -16,7 +16,8 @@ import {
     getEdgesFromCanvas,
     getNodesFromCanvas,
     findZoomToFitButton,
-    tryZoomToSelection
+    tryZoomToSelection,
+    getSelectedNodeFromCanvas
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike } from './types';
 import { VisibilityService } from './services/visibility-service';
@@ -161,7 +162,7 @@ export class CanvasEventManager {
                     }
                     
                     // 否则检查是否选中了节点
-                    const selectedNode = this.getSelectedNodeFromCanvas(canvas);
+                    const selectedNode = getSelectedNodeFromCanvas(canvas);
                     if (selectedNode) {
                         void this.executeDeleteOperation(selectedNode, canvas);
                     }
@@ -257,39 +258,6 @@ export class CanvasEventManager {
         }
         
         return deleteBtn;
-    }
-
-    private getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | null {
-        if (!canvas?.nodes) return null;
-        
-        if (canvas.selection && canvas.selection.size > 0) {
-            const firstSelected = canvas.selection.values().next().value;
-            if (firstSelected && (firstSelected.nodeEl || firstSelected.type)) {
-                return firstSelected;
-            }
-        }
-        
-        if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
-            return canvas.selectedNodes[0] || null;
-        }
-        
-        const allNodes = canvas.nodes instanceof Map 
-            ? Array.from(canvas.nodes.values()) 
-            : Array.isArray(canvas.nodes) 
-                ? canvas.nodes 
-                : [];
-                
-        for (const node of allNodes) {
-            if (node.nodeEl) {
-                const hasFocused = node.nodeEl.classList.contains('is-focused');
-                const hasSelected = node.nodeEl.classList.contains('is-selected');
-                if (hasFocused || hasSelected) {
-                    return node;
-                }
-            }
-        }
-        
-        return null;
     }
 
     private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
