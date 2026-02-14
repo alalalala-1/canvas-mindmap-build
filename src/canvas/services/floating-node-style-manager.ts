@@ -87,16 +87,17 @@ export class FloatingNodeStyleManager {
         try {
             this.clearPendingRetries(nodeId);
             const cleared = this.removeFloatingClass(nodeId);
-            if (!cleared) {
-                log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                let retryIndex = 1;
-                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
-                    this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, retryIndex), delay);
-                    retryIndex += 1;
-                }
-                return false;
+            if (cleared) {
+                return true;
             }
-            return true;
+            
+            log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
+            let retryIndex = 1;
+            for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, retryIndex), delay);
+                retryIndex += 1;
+            }
+            return false;
         } catch (err) {
             log('[Style] 清除失败:', err);
             return false;
@@ -107,6 +108,7 @@ export class FloatingNodeStyleManager {
         const cleared = this.removeFloatingClass(nodeId);
         if (cleared) {
             log(`[Style] 清除红框 (重试 #${retryNum}): ${nodeId}`);
+            this.clearPendingRetries(nodeId);
         }
     }
 
@@ -178,6 +180,8 @@ export class FloatingNodeStyleManager {
                 nodeEl.classList.remove(this.FLOATING_CLASS);
                 void nodeEl.offsetHeight;
                 cleared = true;
+            } else {
+                cleared = true;
             }
         }
         const nodes = document.querySelectorAll(`.canvas-node[data-node-id="${nodeId}"]`);
@@ -188,6 +192,9 @@ export class FloatingNodeStyleManager {
                     cleared = true;
                 }
             });
+        }
+        if (nodeEl && !cleared) {
+            cleared = true;
         }
         return cleared;
     }

@@ -33,7 +33,8 @@ export class CanvasNodeManager {
         plugin: Plugin,
         settings: CanvasMindmapBuildSettings,
         collapseStateManager: CollapseStateManager,
-        canvasFileService: CanvasFileService
+        canvasFileService: CanvasFileService,
+        nodeTypeService?: NodeTypeService
     ) {
         this.app = app;
         this.plugin = plugin;
@@ -41,14 +42,15 @@ export class CanvasNodeManager {
         this.collapseStateManager = collapseStateManager;
         this.canvasFileService = canvasFileService;
 
-        this.nodeTypeService = new NodeTypeService(settings);
+        this.nodeTypeService = nodeTypeService || new NodeTypeService(settings);
         this.nodeHeightService = new NodeHeightService(app, settings, canvasFileService, this.nodeTypeService);
 
         this.nodeCreationService = new NodeCreationService(
             app,
             plugin,
             settings,
-            this.canvasFileService
+            this.canvasFileService,
+            this.nodeTypeService
         );
         this.nodeDeletionService = new NodeDeletionService(
             app,

@@ -66,7 +66,7 @@ export class CanvasManager implements ICanvasManager {
         this.floatingNodeService = new FloatingNodeService(app, settings);
         this.floatingNodeService.setCanvasManager(this);
         this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this);
-        this.nodeManager = new CanvasNodeManager(app, plugin, settings, collapseStateManager, this.canvasFileService);
+        this.nodeManager = new CanvasNodeManager(app, plugin, settings, collapseStateManager, this.canvasFileService, nodeTypeService);
         this.nodeManager.setCanvasManager(this);
         this.uiManager = new CanvasUIManager(app, settings, collapseStateManager);
         this.edgeDeletionService = new EdgeDeletionService(app, plugin, settings, this.canvasFileService, this.floatingNodeService);
@@ -149,21 +149,25 @@ export class CanvasManager implements ICanvasManager {
     }
 
     public async checkAndClearFloatingStateForNewEdges() {
+        log(`[CanvasManager] ============ checkAndClearFloatingStateForNewEdges 开始 ============`);
         const canvasView = this.getCanvasView();
         if (!canvasView) {
             log(`[CanvasManager] 无 canvasView，跳过浮动清理检测`);
+            log(`[CanvasManager] ============ checkAndClearFloatingStateForNewEdges 结束 ============`);
             return;
         }
 
         const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) {
             log(`[CanvasManager] 无 canvas，跳过浮动清理检测`);
+            log(`[CanvasManager] ============ checkAndClearFloatingStateForNewEdges 结束 ============`);
             return;
         }
 
         // 使用新的服务强制检测边变化
-        log(`[CanvasManager] 触发浮动清理检测`);
+        log(`[CanvasManager] 调用 floatingNodeService.forceEdgeDetection`);
         this.floatingNodeService.forceEdgeDetection(canvas);
+        log(`[CanvasManager] ============ checkAndClearFloatingStateForNewEdges 结束 ============`);
     }
 
     public getFloatingNodeService(): FloatingNodeService {
@@ -184,8 +188,8 @@ export class CanvasManager implements ICanvasManager {
     unload() {
         this.eventManager.unload();
         this.uiManager.unload();
-        // 清理浮动节点服务的资源
-        this.floatingNodeService.cleanup();
+        // 清理浮动节点服务的资源（不等待完成，因为 unload 不是 async）
+        void this.floatingNodeService.cleanup();
     }
 
     // =========================================================================

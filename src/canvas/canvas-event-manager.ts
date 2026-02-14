@@ -355,10 +355,12 @@ export class CanvasEventManager {
     }
 
     private async handleCanvasFileModified(filePath: string): Promise<void> {
+        log(`[Event] ============ handleCanvasFileModified 开始 ============`);
         log(`[Event] Canvas 文件变更: ${filePath}`);
         const data = await this.canvasFileService.readCanvasData(filePath);
         if (!data) {
             log(`[Event] Canvas 文件读取失败: ${filePath}`);
+            log(`[Event] ============ handleCanvasFileModified 结束 ============`);
             return;
         }
         const edges = data.edges || [];
@@ -367,18 +369,23 @@ export class CanvasEventManager {
         if (newEdges.length > 0) {
             log(`[Event] Canvas 文件检测到新边: ${newEdges.length}`);
             for (const edge of newEdges) {
+                log(`[Event] 处理文件中的新边: ${edge.id}`);
                 await this.floatingNodeService.handleNewEdge(edge, true);
             }
             await this.canvasManager.checkAndAddCollapseButtons();
+        } else {
+            log(`[Event] Canvas 文件中没有新边`);
         }
 
         this.lastEdgeIds = newEdgeIds;
+        log(`[Event] ============ handleCanvasFileModified 结束 ============`);
     }
 
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
                 const { fromId, toId } = extractEdgeNodeIds(edge);
+                log(`[Event] ============ Canvas:EdgeCreate 开始 ============`);
                 log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
                 this.collapseStateManager.clearCache();
@@ -386,23 +393,33 @@ export class CanvasEventManager {
                 if (activeCanvasView) {
                     const activeCanvas = (activeCanvasView as CanvasViewLike).canvas;
                     if (activeCanvas && activeCanvas === canvas) {
+                        log(`[Event] 启动 startEdgeDetectionWindow`);
                         this.floatingNodeService.startEdgeDetectionWindow(activeCanvas);
                     }
                 }
+                log(`[Event] requestAnimationFrame 前`);
                 requestAnimationFrame(async () => {
                     try {
+                        log(`[Event] requestAnimationFrame 执行，调用 handleNewEdge`);
                         await this.floatingNodeService.handleNewEdge(edge, false);
+                        log(`[Event] handleNewEdge 执行完成`);
                     } catch (err) {
                         log(`[EdgeCreate] 异常: ${err}`);
                     }
                 });
+                log(`[Event] 立即调用 checkAndAddCollapseButtons`);
                 await this.canvasManager.checkAndAddCollapseButtons();
-                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+                // 只设置少量必要的延迟检查，避免过度重复调用
+                const checkDelays = [200, 500];
+                log(`[Event] 设置 ${checkDelays.length} 个延迟检查: ${checkDelays.join('ms, ')}ms`);
+                for (const delay of checkDelays) {
                     setTimeout(() => {
+                        log(`[Event] 延迟 ${delay}ms 检查: checkAndAddCollapseButtons + checkAndClearFloatingStateForNewEdges`);
                         void this.canvasManager.checkAndAddCollapseButtons();
                         void this.canvasManager.checkAndClearFloatingStateForNewEdges();
                     }, delay);
                 }
+                log(`[Event] ============ Canvas:EdgeCreate 结束 ============`);
             })
         );
 

@@ -22,13 +22,14 @@ export class NodeCreationService {
         plugin: Plugin,
         settings: CanvasMindmapBuildSettings,
         canvasFileService: CanvasFileService,
+        nodeTypeService: NodeTypeService,
         canvasManager?: ICanvasManager
     ) {
         this.app = app;
         this.plugin = plugin;
         this.settings = settings;
         this.canvasFileService = canvasFileService;
-        this.nodeTypeService = new NodeTypeService(settings);
+        this.nodeTypeService = nodeTypeService;
         this.positionCalculator = new NodePositionCalculator(settings);
         this.canvasManager = canvasManager || null;
     }

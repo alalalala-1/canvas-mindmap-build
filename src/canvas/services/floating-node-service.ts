@@ -24,6 +24,10 @@ export class FloatingNodeService {
     private pendingClearNodes: string[] = [];
     private pendingClearOptions: Map<string, { persistToFile: boolean; requestCanvasSave: boolean }> = new Map();
     private clearCompleteResolver: (() => void) | null = null;
+    private processedEdgeIds: Set<string> = new Set();
+    private processedEdgeCleanupTimeout: number | null = null;
+    private pendingPersistNodeIds: Set<string> = new Set();
+    private delayedPersistTimeout: number | null = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
@@ -173,7 +177,32 @@ export class FloatingNodeService {
     /**
      * 清理资源
      */
-    cleanup(): void {
+    async cleanup(): Promise<void> {
+        log(`[FloatingNode] cleanup 被调用`);
+        
+        // 立即执行待持久化的操作
+        if (this.pendingPersistNodeIds.size > 0) {
+            log(`[FloatingNode] cleanup 时立即执行待持久化，节点数: ${this.pendingPersistNodeIds.size}`);
+            
+            if (this.delayedPersistTimeout) {
+                clearTimeout(this.delayedPersistTimeout);
+                this.delayedPersistTimeout = null;
+            }
+            
+            const nodesToPersist = Array.from(this.pendingPersistNodeIds);
+            this.pendingPersistNodeIds.clear();
+            
+            for (const id of nodesToPersist) {
+                try {
+                    log(`[FloatingNode] cleanup 持久化: ${id}`);
+                    await this.persistClearFloatingState(id, false);
+                } catch (err) {
+                    log(`[FloatingNode] cleanup 持久化失败: ${id}`, err);
+                }
+            }
+            log(`[FloatingNode] cleanup 持久化完成`);
+        }
+        
         this.currentCanvasFilePath = null;
     }
 
@@ -266,16 +295,19 @@ export class FloatingNodeService {
      * @param nodeIds 节点ID列表
      * @param requestSave 是否请求保存文件
      * @param delay 保存延迟（毫秒），用于确保边数据已写入后再保存
+     * @param modifyCanvasData 是否修改 canvas 内存中的 node.data
      */
-    private clearFloatingCanvasData(nodeIds: string[], requestSave: boolean = true, delay: number = 0): void {
+    private clearFloatingCanvasData(nodeIds: string[], requestSave: boolean = true, delay: number = 0, modifyCanvasData: boolean = true): void {
         if (!this.canvas) return;
-        for (const id of nodeIds) {
-            const node = this.getNodeFromCanvas(id);
-            if (node?.data) {
-                delete node.data.isFloating;
-                delete node.data.originalParent;
-                delete node.data.floatingTimestamp;
-                delete node.data.isSubtreeNode;
+        if (modifyCanvasData) {
+            for (const id of nodeIds) {
+                const node = this.getNodeFromCanvas(id);
+                if (node?.data) {
+                    delete node.data.isFloating;
+                    delete node.data.originalParent;
+                    delete node.data.floatingTimestamp;
+                    delete node.data.isSubtreeNode;
+                }
             }
         }
         if (requestSave && typeof this.canvas.requestSave === 'function') {
@@ -356,12 +388,14 @@ export class FloatingNodeService {
             if (persistToFile) {
                 persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
                 if (requestCanvasSave) {
-                    this.clearFloatingCanvasData(nodesToClear, true, CONSTANTS.TIMING.RETRY_DELAY);
+                    this.clearFloatingCanvasData(nodesToClear, true, CONSTANTS.TIMING.RETRY_DELAY, true);
                 } else {
-                    this.clearFloatingCanvasData(nodesToClear, false);
+                    this.clearFloatingCanvasData(nodesToClear, false, 0, true);
                 }
             } else {
-                this.clearFloatingCanvasData(nodesToClear, requestCanvasSave);
+                // 关键修复：不持久化时，不修改 canvas 内存中的 node.data，完全不与 Obsidian 的保存操作冲突
+                log(`[FloatingNode] 不持久化时，跳过修改 canvas 内存中的 node.data`);
+                this.clearFloatingCanvasData(nodesToClear, false, 0, false);
             }
  
             log(`[FloatingNode] 清除浮动完成: ${nodesToClear.length} 个节点, success=${persistSuccess}`);
@@ -445,15 +479,39 @@ export class FloatingNodeService {
         const toNodeId = getEdgeToNodeIdUtil(edge);
         const fromNodeId = getEdgeFromNodeIdUtil(edge);
 
+        log(`[FloatingNode] ============ handleNewEdge 开始 ============`);
+        log(`[FloatingNode] 处理新连线: ${fromNodeId} -> ${toNodeId}, persistToFile=${persistToFile}, edgeId=${edgeId}`);
+
+        // 防止同一个边被重复处理
+        if (edgeId) {
+            if (this.processedEdgeIds.has(edgeId)) {
+                log(`[FloatingNode] 边 ${edgeId} 已处理过，跳过重复处理`);
+                log(`[FloatingNode] ============ handleNewEdge 结束 (跳过重复) ============`);
+                return;
+            }
+            this.processedEdgeIds.add(edgeId);
+            
+            // 设置清理 timeout，3秒后清除记录，允许再次处理
+            if (this.processedEdgeCleanupTimeout) {
+                clearTimeout(this.processedEdgeCleanupTimeout);
+            }
+            this.processedEdgeCleanupTimeout = window.setTimeout(() => {
+                log(`[FloatingNode] 清除 processedEdgeIds 缓存`);
+                this.processedEdgeIds.clear();
+                this.processedEdgeCleanupTimeout = null;
+            }, 3000);
+            log(`[FloatingNode] 边 ${edgeId} 标记为已处理，3秒内不会重复处理`);
+        }
+
         if (!toNodeId) {
             log(`[FloatingNode] 警告: 无法解析连线目标节点 ID`);
+            log(`[FloatingNode] ============ handleNewEdge 结束 (错误) ============`);
             return;
         }
 
-        log(`[FloatingNode] 处理新连线: ${fromNodeId} -> ${toNodeId}`);
-
         if (!this.currentCanvasFilePath) {
             log(`[FloatingNode] 警告: currentCanvasFilePath 为空，无法处理连线`);
+            log(`[FloatingNode] ============ handleNewEdge 结束 (错误) ============`);
             return;
         }
 
@@ -465,7 +523,7 @@ export class FloatingNodeService {
                 if (persistToFile) {
                     log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，但已在文件中，继续处理`);
                 } else {
-                    log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，等待...`);
+                    log(`[FloatingNode] 边 ${edgeId} 尚未保存到 Canvas，等待 100ms...`);
                     // 边还没保存到 Canvas，等待一小段时间
                     await new Promise(resolve => setTimeout(resolve, 100));
                     // 再次验证
@@ -473,6 +531,7 @@ export class FloatingNodeService {
                     const edgeExistsAfterWait = canvasEdgesAfterWait.some(e => e.id === edgeId);
                     if (!edgeExistsAfterWait) {
                         log(`[FloatingNode] 边 ${edgeId} 仍然不存在，跳过处理`);
+                        log(`[FloatingNode] ============ handleNewEdge 结束 (跳过) ============`);
                         return;
                     }
                     log(`[FloatingNode] 边 ${edgeId} 已保存到 Canvas`);
@@ -480,10 +539,13 @@ export class FloatingNodeService {
             }
         }
 
+        log(`[FloatingNode] 清除边观察: ${toNodeId}`);
         this.clearEdgeWatch(toNodeId);
         this.recentConnectedNodes.set(toNodeId, Date.now());
+        log(`[FloatingNode] 添加到 recentConnectedNodes: ${toNodeId}, 当前数量=${this.recentConnectedNodes.size}`);
 
         // 1. 立即清除目标节点的视觉样式（入边消除红框）
+        log(`[FloatingNode] 清除红框样式: ${toNodeId}`);
         this.styleManager.clearFloatingStyle(toNodeId);
 
         // 2. 检查内存缓存中的浮动状态（不刷新缓存，避免读取旧文件数据）
@@ -492,13 +554,13 @@ export class FloatingNodeService {
 
         // 3. 如果目标节点是浮动节点，清除其浮动状态
         if (isToNodeFloating) {
+            log(`[FloatingNode] 目标节点是浮动节点，准备清除状态`);
             let shouldPersistToFile = persistToFile;
+            
+            // 关键修复：来自 handleCanvasFileModified 时，不进行持久化操作，避免并发保存冲突！
             if (persistToFile) {
-                const edgePersisted = await this.isEdgePersistedInFile(toNodeId, edgeId);
-                if (!edgePersisted) {
-                    log(`[FloatingNode] 目标节点 ${toNodeId} 新边尚未持久化，跳过文件清除`);
-                    shouldPersistToFile = false;
-                }
+                log(`[FloatingNode] 关键：来自 handleCanvasFileModified，跳过文件持久化，避免并发保存冲突`);
+                shouldPersistToFile = false;
             }
 
             // 如果正在处理清除操作，将节点加入队列等待处理
@@ -512,12 +574,22 @@ export class FloatingNodeService {
                     requestCanvasSave: false
                 });
                 // 仍然等待清除完成
+                log(`[FloatingNode] 等待清除操作完成...`);
                 await this.waitForClearComplete();
                 log(`[FloatingNode] 等待完成，继续处理连线 ${fromNodeId} -> ${toNodeId}`);
             } else {
-                log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
+                log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在调用 executeClearFloating...`);
                 await this.executeClearFloating([toNodeId], shouldPersistToFile, false);
+                log(`[FloatingNode] executeClearFloating 完成`);
+                
+                // 如果是因为避免冲突而跳过了持久化，则安排延迟持久化
+                if (persistToFile && !shouldPersistToFile) {
+                    log(`[FloatingNode] 安排延迟持久化: ${toNodeId}`);
+                    this.scheduleDelayedPersist(toNodeId);
+                }
             }
+        } else {
+            log(`[FloatingNode] 目标节点不是浮动节点，跳过清除状态`);
         }
 
         // 4. 检查源节点是否原本是浮动节点，如果是，保持其红框样式
@@ -535,6 +607,7 @@ export class FloatingNodeService {
             log(`[FloatingNode] 新连线后刷新折叠按钮`);
             this.canvasManager.checkAndAddCollapseButtons();
         }
+        log(`[FloatingNode] ============ handleNewEdge 结束 ============`);
     }
 
     // =========================================================================
@@ -542,29 +615,75 @@ export class FloatingNodeService {
     // =========================================================================
 
     /**
+     * 安排延迟持久化清除浮动状态
+     */
+    private scheduleDelayedPersist(nodeId: string): void {
+        this.pendingPersistNodeIds.add(nodeId);
+        
+        // 清除之前的 timeout，重置计时器
+        if (this.delayedPersistTimeout) {
+            clearTimeout(this.delayedPersistTimeout);
+        }
+        
+        // 延迟 2 秒后执行持久化，确保 Obsidian 已经保存完新边了
+        this.delayedPersistTimeout = window.setTimeout(async () => {
+            log(`[FloatingNode] 执行延迟持久化，节点数: ${this.pendingPersistNodeIds.size}`);
+            
+            const nodesToPersist = Array.from(this.pendingPersistNodeIds);
+            this.pendingPersistNodeIds.clear();
+            this.delayedPersistTimeout = null;
+            
+            for (const id of nodesToPersist) {
+                try {
+                    log(`[FloatingNode] 延迟持久化: ${id}`);
+                    await this.persistClearFloatingState(id, false);
+                    // 延迟持久化时，也同时更新 canvas 内存中的 node.data
+                    log(`[FloatingNode] 延迟持久化完成后，更新 canvas 内存中的 node.data: ${id}`);
+                    this.clearFloatingCanvasData([id], false, 0, true);
+                } catch (err) {
+                    log(`[FloatingNode] 延迟持久化失败: ${id}`, err);
+                }
+            }
+            log(`[FloatingNode] 延迟持久化完成`);
+        }, 2000);
+        
+        log(`[FloatingNode] 已安排延迟持久化，2秒后执行，当前待持久化: ${this.pendingPersistNodeIds.size} 个节点`);
+    }
+
+    /**
      * 手动触发边变化检测
      */
     forceEdgeDetection(canvas: CanvasLike): void {
-        log(`[FloatingNode] 手动边检测触发`);
+        log(`[FloatingNode] ============ forceEdgeDetection 开始 ============`);
         const edges = this.getEdgesFromCanvas();
         log(`[FloatingNode] 当前边数: ${edges.length}`);
+        log(`[FloatingNode] floatingNodeIds 数量: ${this.floatingNodeIds.size}`);
+        log(`[FloatingNode] recentConnectedNodes 数量: ${this.recentConnectedNodes.size}`);
         
         // 检查所有边，确保折叠按钮状态正确
         this.canvasManager?.checkAndAddCollapseButtons();
         
+        let processedCount = 0;
         // 检查是否有新边需要处理
         for (const edge of edges) {
             const toNodeId = getEdgeToNodeIdUtil(edge);
             const fromNodeId = getEdgeFromNodeIdUtil(edge);
             if (toNodeId && this.currentCanvasFilePath) {
-                // 检查目标节点是否是浮动节点
+                // 检查目标节点是否是浮动节点，且不是刚连接过的节点
                 const isFloating = this.floatingNodeIds.has(toNodeId) || this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
-                if (isFloating) {
-                    log(`[FloatingNode] 检测到浮动节点的新入边: ${fromNodeId || 'unknown'} -> ${toNodeId}`);
+                const isRecentConnected = this.recentConnectedNodes.has(toNodeId);
+                
+                log(`[FloatingNode] 检查边 ${getEdgeFromNodeIdUtil(edge)} -> ${toNodeId}: isFloating=${isFloating}, isRecentConnected=${isRecentConnected}`);
+                
+                if (isFloating && !isRecentConnected) {
+                    log(`[FloatingNode] 检测到浮动节点的新入边: ${fromNodeId || 'unknown'} -> ${toNodeId}，调用 handleNewEdge`);
                     void this.handleNewEdge(edge, false);
+                    processedCount++;
                 }
             }
         }
+        log(`[FloatingNode] forceEdgeDetection 处理了 ${processedCount} 条边`);
+        log(`[FloatingNode] ============ forceEdgeDetection 结束 ============`);
     }
 
     // =========================================================================
