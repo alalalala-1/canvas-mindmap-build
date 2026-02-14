@@ -637,9 +637,8 @@ export class FloatingNodeService {
                 try {
                     log(`[FloatingNode] 延迟持久化: ${id}`);
                     await this.persistClearFloatingState(id, false);
-                    // 延迟持久化时，也同时更新 canvas 内存中的 node.data
-                    log(`[FloatingNode] 延迟持久化完成后，更新 canvas 内存中的 node.data: ${id}`);
-                    this.clearFloatingCanvasData([id], false, 0, true);
+                    // 关键修复：只持久化到文件，不要修改 canvas 内存中的 node.data
+                    // 下次刷新或重新打开 Canvas 时，会自动从文件读取正确的状态
                 } catch (err) {
                     log(`[FloatingNode] 延迟持久化失败: ${id}`, err);
                 }
