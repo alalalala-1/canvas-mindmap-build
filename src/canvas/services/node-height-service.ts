@@ -65,32 +65,74 @@ export class NodeHeightService {
         content: string,
         nodeEl?: Element,
         nodeWidthOverride?: number,
-        logDetail: boolean = false
-    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom'; estimated: number }> {
+        logDetail: boolean = false,
+        fileHeight?: number
+    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'file-trusted'; estimated: number }> {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
             ? nodeWidthOverride
             : (this.settings.textNodeWidth || 400);
         const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
 
-        if (nodeEl && this.isZeroSizedNode(nodeEl, false)) {
-            return { height: estimatedHeight, source: 'zero-dom', estimated: estimatedHeight };
-        }
-
         if (!nodeEl) {
             return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
         }
 
+        // [关键修复] 提前判断虚拟化状态
+        const isVirtualized = this.isZeroSizedNode(nodeEl, false);
+        
+        // [路径1] 虚拟化节点：优先使用历史数据验证策略
+        if (isVirtualized && fileHeight && fileHeight > 0) {
+            const ratio = Math.abs(fileHeight - estimatedHeight) / estimatedHeight;
+            
+            // 差异小于50%，直接信任历史数据，跳过DOM测量
+            // [方案B] 提高阈值以减少频繁重测量和振荡
+            if (ratio < 0.5) {
+                const final = Math.min(fileHeight, maxHeight);
+                if (logDetail) {
+                    log(`[NodeHeight] 虚拟化节点信任历史: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%, final=${final}`);
+                }
+                return { height: final, source: 'file-trusted', estimated: estimatedHeight };
+            }
+            
+            // 差异较大（50%+），记录并继续验证
+            if (logDetail) {
+                log(`[NodeHeight] 虚拟化节点差异大，需验证: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%`);
+            }
+        }
+        
+        // [路径2] 非虚拟化节点 或 历史不可信：尝试DOM测量
         const measuredHeight = this.measureActualContentHeight(nodeEl, content, fallbackWidth, false);
         if (measuredHeight > 0) {
-            // [修复] 直接使用DOM测量值，不做reconcile
             const final = Math.min(measuredHeight, maxHeight);
-            return { height: final, source: 'dom', estimated: estimatedHeight };
+            const source = isVirtualized ? 'rendered' : 'dom';
+            return { height: final, source, estimated: estimatedHeight };
         }
 
+        // [路径3] DOM测量失败，尝试离屏渲染
+        if (isVirtualized) {
+            const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
+            if (renderedHeight > 0) {
+                const final = Math.min(renderedHeight, maxHeight);
+                return { height: final, source: 'rendered', estimated: estimatedHeight };
+            }
+            
+            // 离屏渲染也失败，如果有历史数据就用历史（总比估算好）
+            if (fileHeight && fileHeight > 0) {
+                const final = Math.min(fileHeight, maxHeight);
+                if (logDetail) {
+                    log(`[NodeHeight] 离屏渲染失败，回退历史: file=${fileHeight}, final=${final}`);
+                }
+                return { height: final, source: 'file-trusted', estimated: estimatedHeight };
+            }
+            
+            // 最后fallback：估算
+            return { height: estimatedHeight, source: 'zero-dom', estimated: estimatedHeight };
+        }
+
+        // [路径4] 非虚拟化节点，DOM测量失败，尝试离屏渲染
         const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
         if (renderedHeight > 0) {
-            // [修复] 直接使用渲染测量值，不做reconcile
             const final = Math.min(renderedHeight, maxHeight);
             return { height: final, source: 'rendered', estimated: estimatedHeight };
         }
@@ -108,17 +150,30 @@ export class NodeHeightService {
             const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
             const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
 
-            // ===【路径1-PRIMARY】sizer.scrollHeight（已包含所有padding，直接使用）===
             if (sizerEl) {
+                // [修复] 同时读取 minHeight 和 scrollHeight，取较大值
+                // 原因：minHeight 是"最小高度"，当内容很长时实际需要的 scrollHeight 会更大
+                // 这样可以确保长内容不会被截断
+                let minH = 0;
+                if (sizerEl.style.minHeight) {
+                    const parsed = parseFloat(sizerEl.style.minHeight);
+                    if (parsed > 0 && Number.isFinite(parsed)) {
+                        minH = parsed;
+                    }
+                }
+
                 const scrollH = sizerEl.scrollHeight;
                 const sizerRect = sizerEl.getBoundingClientRect();
                 
-                if (scrollH > 20) {
-                    return Math.ceil(scrollH + 16);
-                }
-
-                if (sizerRect.height > 0) {
-                    return Math.ceil(sizerRect.height + 16);
+                // 取三者的最大值：minHeight, scrollHeight, rect.height
+                const maxMeasured = Math.max(minH, scrollH, sizerRect.height);
+                
+                if (maxMeasured > 20) {
+                    const result = Math.ceil(maxMeasured + 16);
+                    if (logDetail && (minH > 0 || scrollH > 20)) {
+                        log(`[NodeHeight] measure: minH=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
+                    }
+                    return result;
                 }
             }
 

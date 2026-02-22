@@ -106,46 +106,8 @@ export class LayoutDataProvider {
             return scaleX;
         };
 
-        const reconcileTextHeight = (dataHeight: number, estimatedHeight: number) => {
-            // [修复-方案B] 激进策略：优先使用估算值，只在极端情况下才使用旧数据
-            // 目的：彻底清理历史脏数据，重新建立准确的高度基线
-            if (estimatedHeight <= 0 && dataHeight > 0) {
-                // 无法估算但有历史数据，暂时接受
-                return { height: dataHeight, source: 'data', ratio: null, override: false };
-            }
-            if (estimatedHeight <= 0) {
-                return { height: 0, source: 'none', ratio: null, override: false };
-            }
-            
-            // 核心策略：默认使用估算值
-            let height = estimatedHeight;
-            let source = 'estimate';
-            let ratio: number | null = null;
-            let override = false;
-            
-            if (dataHeight > 0) {
-                ratio = dataHeight / estimatedHeight;
-                // 非常宽松的范围 [0.50, 2.00]，只过滤极端异常值
-                // 大部分情况下都使用估算值，除非文件值在合理范围内
-                if (ratio >= 0.50 && ratio <= 2.00) {
-                    // 即使在合理范围内，也优先用估算值（方案B激进策略）
-                    // 只有当文件值非常接近估算值时才使用
-                    if (ratio >= 0.90 && ratio <= 1.10) {
-                        height = dataHeight;
-                        source = 'data';
-                    } else {
-                        override = true;
-                    }
-                } else {
-                    // 极端异常，必须覆盖
-                    override = true;
-                    if (ratio < 0.50 || ratio > 2.00) {
-                        log(`[LayoutData] reconcile覆盖异常值: dataH=${dataHeight.toFixed(0)}, estH=${estimatedHeight.toFixed(0)}, ratio=${ratio.toFixed(2)}`);
-                    }
-                }
-            }
-            return { height, source, ratio, override };
-        };
+        // [SSOT重构] 移除reconcile - 直接传递数据，不做判断
+        // 高度决策已在adjustAllTextNodeHeights中完成
 
         let measurePass = 0;
         const measureVisibleNodes = () => {
@@ -381,47 +343,14 @@ export class LayoutDataProvider {
                                     } else if (isImageContent(content)) {
                                         estimatedHeight = CONSTANTS.LAYOUT.IMAGE_NODE_HEIGHT;
                                     }
-                                    if (estimatedHeight > 0) {
-                                        domHeightZeroEstimatedCount++;
-                                        const candidateHeight = dataHeight > 0 ? dataHeight : fileHeightValue;
-                                        const reconcile = reconcileTextHeight(candidateHeight, estimatedHeight);
-                                        if (reconcile.height > 0) {
-                                            if (reconcile.height !== dataHeight) {
-                                                mergedNode.height = reconcile.height;
-                                            }
-                                            if (reconcile.source === 'data') {
-                                                domHeightZeroEstimatedSameCount++;
-                                                domHeightZeroResolvedByDataCount++;
-                                            } else {
-                                                domHeightZeroEstimatedAppliedCount++;
-                                                domHeightZeroResolvedByEstimateCount++;
-                                            }
-                                            if (reconcile.override) domHeightZeroOverrideCount++;
-                                            if (domHeightZeroEstimatedSamples.length < 5) {
-                                                domHeightZeroEstimatedSamples.push({
-                                                    id,
-                                                    dataHeight: candidateHeight,
-                                                    estimatedHeight,
-                                                    width
-                                                });
-                                            }
-                                            if (domHeightZeroReconcileSamples.length < 5) {
-                                                domHeightZeroReconcileSamples.push({
-                                                    id,
-                                                    dataHeight: candidateHeight,
-                                                    estimatedHeight,
-                                                    finalHeight: reconcile.height,
-                                                    ratio: reconcile.ratio,
-                                                    source: reconcile.source
-                                                });
-                                            }
-                                            if (domHeightZeroEstimatedSamples.length < 5) {
-                                                const ratioText = reconcile.ratio === null ? 'n/a' : reconcile.ratio.toFixed(2);
-                                                if (logDetail) {
-                                                    log(`[LayoutData] DOM0估算详情: id=${id}, estH=${estimatedHeight.toFixed(1)}, dataH=${candidateHeight.toFixed(1)}, finalH=${reconcile.height.toFixed(1)}, ratio=${ratioText}, src=${reconcile.source}, w=${width}, len=${content.length}`);
-                                                }
-                                            }
-                                        }
+                                    // [SSOT重构] DOM=0且有文件高度时，直接使用文件高度
+                                    if (dataHeight > 0 && Math.abs(dataHeight - estimatedHeight) < estimatedHeight * 0.5) {
+                                        // 文件高度合理，使用文件值
+                                        domHeightZeroResolvedByDataCount++;
+                                    } else if (estimatedHeight > 0) {
+                                        // 否则使用估算值
+                                        mergedNode.height = estimatedHeight;
+                                        domHeightZeroResolvedByEstimateCount++;
                                     }
                                 } else if (fileHeightValue > 0) {
                                     mergedNode.height = fileHeightValue;
@@ -451,34 +380,14 @@ export class LayoutDataProvider {
                             } else if (isImageContent(content)) {
                                 estimatedHeight = CONSTANTS.LAYOUT.IMAGE_NODE_HEIGHT;
                             }
-                            if (estimatedHeight > 0) {
-                                const candidateHeight = dataHeight > 0 ? dataHeight : fileHeightValue;
-                                const reconcile = reconcileTextHeight(candidateHeight, estimatedHeight);
-                                if (reconcile.height > 0) {
-                                    if (reconcile.height !== dataHeight) {
-                                        mergedNode.height = reconcile.height;
-                                    }
-                                    if (reconcile.source === 'data') {
-                                        domHeightMissingResolvedByDataCount++;
-                                    } else {
-                                        domHeightMissingResolvedByEstimateCount++;
-                                    }
-                                    if (reconcile.override) domHeightMissingOverrideCount++;
-                                    if (domHeightMissingReconcileSamples.length < 5) {
-                                        domHeightMissingReconcileSamples.push({
-                                            id,
-                                            dataHeight: candidateHeight,
-                                            estimatedHeight,
-                                            finalHeight: reconcile.height,
-                                            ratio: reconcile.ratio,
-                                            source: reconcile.source
-                                        });
-                                    }
-                                    if (domHeightMissingSamples.length < 5) {
-                                        const ratioText = reconcile.ratio === null ? 'n/a' : reconcile.ratio.toFixed(2);
-                                        log(`[LayoutData] 缺少DOM高度对比: id=${id}, estH=${estimatedHeight.toFixed(1)}, dataH=${candidateHeight.toFixed(1)}, finalH=${reconcile.height.toFixed(1)}, ratio=${ratioText}, src=${reconcile.source}, w=${width}, len=${content.length}`);
-                                    }
-                                }
+                            // [SSOT重构] 缺少DOM时直接使用文件高度
+                            if (dataHeight > 0 && estimatedHeight > 0 && Math.abs(dataHeight - estimatedHeight) < estimatedHeight * 0.5) {
+                                // 文件高度合理
+                                domHeightMissingResolvedByDataCount++;
+                            } else if (estimatedHeight > 0) {
+                                // 使用估算值
+                                mergedNode.height = estimatedHeight;
+                                domHeightMissingResolvedByEstimateCount++;
                             }
                         } else if (fileHeightValue > 0) {
                             mergedNode.height = fileHeightValue;

@@ -505,7 +505,7 @@ const HEIGHT_CACHE_MAX_SIZE = 100;
  * 估算文本节点高度（带缓存）
  * 用于布局计算和节点高度调整
  * 
- * [修复v2] 区分普通文本和Markdown格式文本的行高
+ * [修复v3] 精确估算标题和格式化文本的高度
  */
 export function estimateTextNodeHeight(content: string, width: number, maxHeight: number = 800): number {
     const cacheKey = `${width}:${maxHeight}:${content}`;
@@ -516,9 +516,8 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
 
     // 基础参数
     const contentWidth = width - 16;  // 左右各8px padding
-    const fontSize = 14;  // Obsidian Canvas默认字体大小
+    const baseFontSize = 14;  // Obsidian Canvas默认字体大小
     const normalLineHeight = 20;  // 普通文本行高
-    const formattedLineHeight = 24;  // 格式化文本行高（标题、加粗等）
     
     const chineseCharRegex = /[\u4e00-\u9fa5]/;
     let totalHeight = 0;
@@ -531,22 +530,59 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
             continue;
         }
 
-        // 检测Markdown格式
-        const isHeading = /^#{1,6}\s+/.test(trimmedLine);
-        const hasBold = /\*\*|__/.test(trimmedLine);
-        const hasItalic = /\*|_/.test(trimmedLine);
-        const hasCode = /`/.test(trimmedLine);
-        const isFormatted = isHeading || hasBold || hasItalic || hasCode;
+        // 检测标题级别
+        const headingMatch = trimmedLine.match(/^(#{1,6})\s+/);
+        let currentFontSize = baseFontSize;
+        let currentLineHeight = normalLineHeight;
+        let marginTop = 0;
+        let marginBottom = 0;
         
-        // 根据格式选择行高
-        const currentLineHeight = isFormatted ? formattedLineHeight : normalLineHeight;
-        
-        // 额外间距：标题通常有额外的上下间距
-        let extraSpacing = 0;
-        if (isHeading) {
-            extraSpacing = 8;  // 标题额外间距
+        if (headingMatch && headingMatch[1]) {
+            const level = headingMatch[1].length;
+            // 根据标题级别设置不同的字体大小和间距
+            switch (level) {
+                case 1: // H1
+                    currentFontSize = baseFontSize * 1.8;  // ~25px
+                    currentLineHeight = currentFontSize * 1.4;  // ~35px
+                    marginTop = 20;
+                    marginBottom = 12;
+                    break;
+                case 2: // H2
+                    currentFontSize = baseFontSize * 1.6;  // ~22px
+                    currentLineHeight = currentFontSize * 1.35;  // ~30px
+                    marginTop = 16;
+                    marginBottom = 10;
+                    break;
+                case 3: // H3
+                    currentFontSize = baseFontSize * 1.4;  // ~20px
+                    currentLineHeight = currentFontSize * 1.3;  // ~26px
+                    marginTop = 12;
+                    marginBottom = 8;
+                    break;
+                case 4: // H4
+                    currentFontSize = baseFontSize * 1.25;  // ~18px
+                    currentLineHeight = currentFontSize * 1.25;  // ~22px
+                    marginTop = 10;
+                    marginBottom = 6;
+                    break;
+                case 5: // H5
+                case 6: // H6
+                    currentFontSize = baseFontSize * 1.15;  // ~16px
+                    currentLineHeight = currentFontSize * 1.2;  // ~19px
+                    marginTop = 8;
+                    marginBottom = 4;
+                    break;
+            }
+        } else {
+            // 非标题的格式化文本
+            const hasBold = /\*\*|__/.test(trimmedLine);
+            const hasCode = /`/.test(trimmedLine);
+            if (hasBold || hasCode) {
+                currentLineHeight = 24;  // 格式化文本稍高
+            }
         }
 
+        // 清理Markdown标记计算实际文本宽度
         const cleanLine = trimmedLine
             .replace(/^#{1,6}\s+/, '')
             .replace(/\*\*|\*|__|_|`/g, '');
@@ -554,16 +590,16 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
         let pixelWidth = 0;
         for (const char of cleanLine) {
             if (chineseCharRegex.test(char)) {
-                pixelWidth += fontSize;
+                pixelWidth += currentFontSize;
             } else if (char === ' ') {
-                pixelWidth += fontSize * 0.3;
+                pixelWidth += currentFontSize * 0.3;
             } else {
-                pixelWidth += fontSize * 0.55;
+                pixelWidth += currentFontSize * 0.55;
             }
         }
 
         const linesNeeded = Math.max(1, Math.ceil(pixelWidth / contentWidth));
-        totalHeight += linesNeeded * currentLineHeight + extraSpacing;
+        totalHeight += marginTop + (linesNeeded * currentLineHeight) + marginBottom;
     }
 
     // 上下padding: 16px

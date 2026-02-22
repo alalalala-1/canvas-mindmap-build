@@ -211,6 +211,7 @@ export class CanvasNodeManager {
             let sourceRenderedCount = 0;
             let sourceEstimateCount = 0;
             let sourceZeroDomCount = 0;
+            let sourceFileTrustedCount = 0;
             let sourceSampleCount = 0;
             const sourceSamples: string[] = [];
             let zeroDomOverrideCount = 0;
@@ -278,119 +279,45 @@ export class CanvasNodeManager {
                                     node.width = width;
                                 }
 
-                                // === DOM可见性检测 ===
+                                // === DOM可见性检测 ===  
                                 const domNode = nodeDomMap.get(node.id || '');
                                 const nodeEl = domNode?.nodeEl;
-                                const sizerEl = nodeEl ? nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement : null;
-                                const sizerScrollH = sizerEl?.scrollHeight || 0;
-
+                                
+                                // [关键修复] 使用DOM测量（包括minHeight），无论是否虚拟化
+                                // 传入文件历史高度以启用智能验证机制
                                 const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
                                     node.text,
                                     nodeEl,
                                     width,
-                                    logDetail
+                                    logDetail,
+                                    node.height  // 传入历史高度进行智能验证
                                 );
-                                const estimatedHeight = heightInfo.estimated;
-                                
-                                // === 紧凑日志：只在有问题时详细输出 ===
-                                if (logDetail) {
-                                    const delta = heightInfo.height - estimatedHeight;
-                                    const ratio = estimatedHeight > 0 ? (heightInfo.height / estimatedHeight) : 1;
-                                    const hasIssue = ratio > 1.3 || ratio < 0.7 || (heightInfo.source === 'zero-dom' && Math.abs(delta) > 20);
-                                    
-                                    if (hasIssue) {
-                                        const textPreview = node.text.substring(0, 40).replace(/\n/g, '↵');
-                                        const issue = ratio > 1.3 ? '⚠️低估' : ratio < 0.7 ? '⚠️高估' : '⚠️虚拟化偏差';
-                                        log(`[Node.ISSUE] ${issue} id=${node.id} "${textPreview}" | est=${estimatedHeight} vs ${heightInfo.source}=${heightInfo.height} (${((ratio - 1) * 100).toFixed(0)}%) | file=${node.height ?? 'null'} w=${width} len=${node.text.length}${sizerScrollH > 0 ? ` sizer=${sizerScrollH}` : ''}`);
-                                    }
+                                newHeight = heightInfo.height;
+
+                                // 统计来源（file-trusted 单独统计）
+                                if (heightInfo.source === 'dom') sourceDomCount++;
+                                else if (heightInfo.source === 'rendered') sourceRenderedCount++;
+                                else if (heightInfo.source === 'zero-dom') sourceZeroDomCount++;
+                                else if (heightInfo.source === 'file-trusted') sourceFileTrustedCount++;
+                                else sourceEstimateCount++;
+
+                                if (sourceSampleCount < 8 && Math.abs(heightInfo.height - (node.height ?? 0)) > 1) {
+                                    sourceSamples.push(`${node.id}:${heightInfo.source} ${node.height ?? 0}->${heightInfo.height}`);
+                                    sourceSampleCount++;
                                 }
+                                
+                                // 更新元数据（简化版）
                                 if (!node.data || typeof node.data !== 'object') {
                                     node.data = {};
                                 }
                                 const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
                                 const signature = getTextSignature(node.text, width);
-                                const zeroDomDelta = Math.abs((node.height ?? 0) - estimatedHeight);
-                                const zeroDomThreshold = Math.max(12, estimatedHeight * 0.2);
-                                if (heightInfo.source === 'zero-dom' && zeroDomDelta > zeroDomThreshold) {
-                                    if (heightMeta.manualHeight) {
-                                        manualResetCount++;
-                                    }
-                                    heightMeta.manualHeight = false;
-                                    zeroDomOverrideCount++;
-                                    if (zeroDomOverrideSampleCount < 8) {
-                                        zeroDomOverrideSamples.push(`${node.id}:${node.height ?? 0}->${estimatedHeight} w=${width} len=${node.text.length}`);
-                                        zeroDomOverrideSampleCount++;
-                                    }
-                                } else if (heightInfo.source === 'zero-dom') {
-                                    // [修复] zero-dom小偏差：DOM未渲染，高度未经用户手动调整
-                                    // 不应将此场景标记为manualHeight，否则会阻止布局引擎修正错误高度
-                                    // 保留现有高度（差异小，风险低），但清除可能残留的manualHeight标记
-                                    if (heightMeta.manualHeight) {
-                                        heightMeta.manualHeight = false;
-                                        manualResetCount++;
-                                        if (logDetail) {
-                                            log(`[Node] zeroDom小偏差清除manual: id=${node.id}, delta=${zeroDomDelta.toFixed(1)}, threshold=${zeroDomThreshold.toFixed(1)}, currH=${node.height ?? 0}, estH=${estimatedHeight}`);
-                                        }
-                                    }
-                                } else if (heightMeta.lastSignature === signature) {
-                                    if (typeof heightMeta.lastAutoHeight === 'number' && typeof node.height === 'number') {
-                                        if (Math.abs(node.height - heightMeta.lastAutoHeight) > 0.5) {
-                                            // [修复] 区分 "layout修正" vs "用户手动调整"：
-                                            // 旧逻辑：只要高度与 lastAutoHeight 差 >0.5px 就标为 manual。
-                                            // 问题：layout 改了高度（applyLayoutPositions）但 lastAutoHeight 仍是旧值，
-                                            //   导致下次 adjustAllTextNodeHeights 将 layout 修正误判为用户操作，
-                                            //   从而永久锁定该高度，不再更新。
-                                            // 修复：同时检查相对于 estimatedHeight 的偏差：
-                                            //   - 若高度在 estimatedHeight 的 [0.70, 1.50] 范围内 → 当作 layout 自动修正
-                                            //   - 若高度超出该范围 → 才认为是用户真正手动调整了（用户一般调整很大幅度）
-                                            const ratio = estimatedHeight > 0 ? node.height / estimatedHeight : 1;
-                                            const isLikelyManual = ratio < 0.70 || ratio > 1.50;
-                                            if (isLikelyManual) {
-                                                if (heightMeta.manualHeight !== true) {
-                                                    manualSetCount++;
-                                                    if (logDetail) {
-                                                        log(`[Node] 标记manual: id=${node.id}, fileH=${node.height}, estH=${estimatedHeight}, ratio=${ratio.toFixed(2)}, lastAutoH=${heightMeta.lastAutoHeight}`);
-                                                    }
-                                                }
-                                                heightMeta.manualHeight = true;
-                                            } else {
-                                                // 高度接近估算值，是 layout/自动修正，不标 manual
-                                                if (heightMeta.manualHeight) {
-                                                    heightMeta.manualHeight = false;
-                                                    manualResetCount++;
-                                                    if (logDetail) {
-                                                        log(`[Node] 清除误判manual: id=${node.id}, fileH=${node.height}, estH=${estimatedHeight}, ratio=${ratio.toFixed(2)}`);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    if (heightMeta.manualHeight) {
-                                        manualResetCount++;
-                                    }
-                                    heightMeta.manualHeight = false;
-                                }
                                 heightMeta.lastSignature = signature;
                                 heightMeta.lastWidth = width;
-                                heightMeta.lastAutoHeight = estimatedHeight;
+                                heightMeta.lastAutoHeight = newHeight;
+                                heightMeta.manualHeight = false; // SSOT: 移除手动高度概念
                                 (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
-                                if (heightInfo.source === 'dom') sourceDomCount++;
-                                else if (heightInfo.source === 'rendered') sourceRenderedCount++;
-                                else if (heightInfo.source === 'zero-dom') sourceZeroDomCount++;
-                                else sourceEstimateCount++;
-
-                                if (sourceSampleCount < 8 && Math.abs(heightInfo.height - (node.height ?? 0)) > 1) {
-                                    sourceSamples.push(`${node.id}:${heightInfo.source} ${node.height ?? 0}->${heightInfo.height} est=${estimatedHeight} w=${width}`);
-                                    sourceSampleCount++;
-                                }
-
-                                if (heightMeta.manualHeight) {
-                                    manualKeepCount++;
-                                    newHeight = typeof node.height === 'number' && node.height > 0 ? node.height : heightInfo.height;
-                                } else {
-                                    newHeight = heightInfo.height;
-                                }
+                                
                             }
 
                             const previousHeight = node.height ?? 0;
@@ -460,7 +387,7 @@ export class CanvasNodeManager {
                 log(`[Node] 批量调整完成: 无需更新节点高度`);
             }
             log(`[Node] 批量调整统计: 增加=${increasedCount}, 减少=${decreasedCount}, maxIncrease=${maxIncrease.toFixed(1)}, maxDecrease=${maxDecrease.toFixed(1)}, capped=${cappedCount}, formula=${formulaCount}, missingDom=${missingDomCount}, manualKeep=${manualKeepCount}, manualSet=${manualSetCount}, manualReset=${manualResetCount}`);
-            log(`[Node] 高度来源统计: dom=${sourceDomCount}, rendered=${sourceRenderedCount}, estimate=${sourceEstimateCount}, zeroDom=${sourceZeroDomCount}, sample=${sourceSamples.join('|')}`);
+            log(`[Node] 高度来源统计: dom=${sourceDomCount}, rendered=${sourceRenderedCount}, file-trusted=${sourceFileTrustedCount}, estimate=${sourceEstimateCount}, zeroDom=${sourceZeroDomCount}, sample=${sourceSamples.join('|')}`);
             if (zeroDomOverrideCount > 0) {
                 log(`[Node] DOM0高度清洗: count=${zeroDomOverrideCount}, sample=${zeroDomOverrideSamples.join('|')}`);
             }

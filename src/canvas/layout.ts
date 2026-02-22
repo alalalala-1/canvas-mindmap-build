@@ -151,67 +151,15 @@ function initializeLayoutNodes(
 ): Map<string, LayoutNode> {
     const layoutNodes = new Map<string, LayoutNode>();
 
-    // [日志] 高度统计：用于追踪每次布局时高度决策情况
-    const heightStats = {
-        formula: 0,
-        trusted: 0,       // dataHeight在合理范围内，信任历史数据
-        mismatch: 0,      // dataHeight偏差过大(>25%/30%)，改用estimatedHeight
-        estimated: 0,     // 无dataHeight，直接使用estimatedHeight
-        capped: 0,        // dataHeight超过maxHeight（保留，大节点）
-        mismatchSamples: [] as string[],
-        cappedSamples: [] as string[]
-    };
+    // [SSOT原则] Layout不负责高度决策，直接使用传入的height值
+    // 高度由adjustAllTextNodeHeights唯一管理，已写入nodeData.height
+    // Layout只负责根据已有的width/height计算节点位置(x,y)
 
     nodes.forEach((nodeData, nodeId) => {
-        const nodeText = nodeData.text || '';
-        const isFormula = nodeText && /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(nodeText.trim());
-
-        let nodeHeight: number;
-        if (isFormula) {
-            nodeHeight = settings.formulaNodeHeight || CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT;
-            heightStats.formula++;
-        } else {
-            const currentWidth = nodeData.width || settings.textNodeWidth;
-            const maxHeight = settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT;
-            const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, maxHeight);
-
-            if (nodeData.height && nodeData.height > 0) {
-                if (nodeData.height > maxHeight) {
-                    // 超过最大高度，保留（可能手动设置的大节点）
-                    nodeHeight = nodeData.height;
-                    heightStats.capped++;
-                    if (heightStats.cappedSamples.length < 3) {
-                        heightStats.cappedSamples.push(`${nodeId}:data=${nodeData.height},est=${estimatedHeight.toFixed(0)},max=${maxHeight}`);
-                    }
-                } else if (estimatedHeight > 0) {
-                    const ratio = nodeData.height / estimatedHeight;
-                    // [修复-方案B] 激进策略：只要不是极端离谱就信任数据
-                    // 放宽到 [0.30, 4.00]，因为layout-data-provider已经做了初步过滤
-                    // 这里主要是为了捕获非常极端的异常值
-                    if (ratio < 0.30 || ratio > 4.00) {
-                        nodeHeight = estimatedHeight;
-                        heightStats.mismatch++;
-                        if (heightStats.mismatchSamples.length < 5) {
-                            heightStats.mismatchSamples.push(`${nodeId}:data=${nodeData.height.toFixed(0)},est=${estimatedHeight.toFixed(0)},r=${ratio.toFixed(2)},w=${currentWidth},len=${nodeText.length}`);
-                        }
-                    } else {
-                        // 在可信范围内，信任传入数据（已经过layout-data-provider处理）
-                        nodeHeight = nodeData.height;
-                        heightStats.trusted++;
-                    }
-                } else {
-                    // estimatedHeight无效，信任历史数据
-                    nodeHeight = nodeData.height;
-                    heightStats.trusted++;
-                }
-            } else {
-                if (estimatedHeight >= maxHeight) {
-                    log(`[Layout] HeightCapped: node=${nodeId}, estimated=${estimatedHeight}, max=${maxHeight}, width=${currentWidth}, len=${nodeText.length}`);
-                }
-                nodeHeight = estimatedHeight;
-                heightStats.estimated++;
-            }
-        }
+        // 直接使用传入的高度，不做任何判断、估算或修改
+        const nodeHeight = typeof nodeData.height === 'number' && nodeData.height > 0
+            ? nodeData.height
+            : (settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT);
 
         layoutNodes.set(nodeId, {
             id: nodeId,
@@ -224,14 +172,7 @@ function initializeLayoutNodes(
         });
     });
 
-    // [日志] 高度初始化统计：可快速判断估算/历史数据的使用比例
-    log(`[Layout] HeightInit: total=${layoutNodes.size}, trusted=${heightStats.trusted}, mismatch=${heightStats.mismatch}, estimated=${heightStats.estimated}, formula=${heightStats.formula}, capped=${heightStats.capped}`);
-    if (heightStats.mismatch > 0) {
-        log(`[Layout] HeightMismatch(改用estimate): ${heightStats.mismatchSamples.join(' | ')}`);
-    }
-    if (heightStats.capped > 0) {
-        log(`[Layout] HeightCappedNodes: ${heightStats.cappedSamples.join(' | ')}`);
-    }
+    log(`[Layout] HeightInit: total=${layoutNodes.size}, 直接使用传入高度值`);
 
     return layoutNodes;
 }

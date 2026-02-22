@@ -115,11 +115,9 @@ export class LayoutManager {
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
-        let heightSyncCount = 0;
-        const heightSyncSamples: string[] = [];
 
         for (const [nodeId, newPosition] of result.entries()) {
-            // 保留原始 CanvasNodeLike 引用，用于访问 nodeEl（类型收窄后 canSetData 中无 nodeEl）
+            // 保留原始 CanvasNodeLike 引用，用于访问 nodeEl
             const originalNode = allNodes.get(nodeId);
             if (this.canSetData(originalNode)) {
                 const currentData = originalNode.getData ? originalNode.getData() : {};
@@ -132,41 +130,26 @@ export class LayoutManager {
                 if (delta > maxDelta) maxDelta = delta;
                 totalDelta += delta;
 
-                const newHeight = typeof newPosition.height === 'number' && newPosition.height > 0
-                    ? newPosition.height
-                    : (typeof currentData.height === 'number' ? currentData.height : 0);
-                const newWidth = typeof newPosition.width === 'number' && newPosition.width > 0
-                    ? newPosition.width
-                    : (typeof currentData.width === 'number' ? currentData.width : 0);
+                // [SSOT原则] Layout只负责位置(x,y)，不修改width/height
+                // width/height由adjustAllTextNodeHeights唯一管理，已在文件中
+                const currentWidth = typeof currentData.width === 'number' ? currentData.width : 0;
+                const currentHeight = typeof currentData.height === 'number' ? currentData.height : 0;
 
-                const prevHeight = typeof currentData.height === 'number' ? currentData.height : 0;
-                const heightChanged = Math.abs(newHeight - prevHeight) > 1;
-
-                if (heightChanged) {
-                    heightSyncCount++;
-                    if (heightSyncSamples.length < 5) {
-                        heightSyncSamples.push(`${nodeId}:h=${prevHeight}->${newHeight}`);
-                    }
-                }
-
-                // [修复] 使用 Canvas 引擎原生的 moveAndResize 方法
-                // 这是最安全、最标准的方式，它会自动更新 x, y, width, height, bbox，
-                // 并且会自动触发所有连接到该节点的边的重绘！
+                // 使用 Canvas 引擎原生的 moveAndResize 方法
+                // 注意：虽然叫 moveAndResize，但我们保持原有的 width/height 不变
                 if (typeof (originalNode as any).moveAndResize === 'function') {
                     (originalNode as any).moveAndResize({
                         x: newPosition.x,
                         y: newPosition.y,
-                        width: newWidth,
-                        height: newHeight
+                        width: currentWidth,
+                        height: currentHeight
                     });
                 } else {
                     // Fallback: 如果没有 moveAndResize，则手动更新
                     const newData: Record<string, unknown> = {
                         ...currentData,
                         x: newPosition.x,
-                        y: newPosition.y,
-                        width: newWidth,
-                        height: newHeight
+                        y: newPosition.y
                     };
                     originalNode.setData(newData);
 
@@ -174,8 +157,8 @@ export class LayoutManager {
                         (originalNode as any).bbox = {
                             minX: newPosition.x,
                             minY: newPosition.y,
-                            maxX: newPosition.x + newWidth,
-                            maxY: newPosition.y + newHeight
+                            maxX: newPosition.x + currentWidth,
+                            maxY: newPosition.y + currentHeight
                         };
                     }
 
@@ -194,10 +177,7 @@ export class LayoutManager {
         }
 
         const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
-        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, heightSync=${heightSyncCount}, ctx=${contextId || 'none'}`);
-        if (heightSyncCount > 0) {
-            log(`[Layout] NodeHeight同步: ${heightSyncSamples.join(' | ')}`);
-        }
+        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
 
         if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
         if (typeof canvas.requestSave === 'function') canvas.requestSave();
@@ -804,8 +784,6 @@ export class LayoutManager {
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
-        let heightFixedCount = 0;
-        const heightFixedSamples: string[] = [];
 
         for (const node of canvasData.nodes ?? []) {
             if (typeof node.id !== 'string') continue;
@@ -828,37 +806,14 @@ export class LayoutManager {
                 changedCount++;
             }
 
-            // [修复] 同步布局使用的修正高度到文件数据，持久化解决旧版本失准的问题
-            // 这样下次打开时，DOM-0 节点的历史高度就已经是正确值，不再需要 mismatch 修正
-            const newHeight = typeof newPos.height === 'number' && newPos.height > 0 ? newPos.height : undefined;
-            if (newHeight !== undefined) {
-                const prevHeight = typeof node.height === 'number' ? node.height : 0;
-                if (Math.abs(newHeight - prevHeight) > 1) {
-                    node.height = newHeight;
-                    changed = true;
-                    heightFixedCount++;
-                    if (heightFixedSamples.length < 5) {
-                        heightFixedSamples.push(`${node.id}:h=${prevHeight}->${newHeight}`);
-                    }
-                    // [修复] 同步更新 heightMeta.lastAutoHeight：
-                    // 若不更新，下次 adjustAllTextNodeHeights 会看到 node.height(layout改后) != lastAutoHeight(旧值)，
-                    // 并将此 layout 修正误判为用户手动调整（manualHeight=true），永久锁定该高度。
-                    // 同时清除 manualHeight 标记，因为这是 layout 自动修正不是用户操作。
-                    if (node.data && typeof node.data === 'object') {
-                        const nodeData = node.data as { heightMeta?: { lastAutoHeight?: number; manualHeight?: boolean } };
-                        if (!nodeData.heightMeta) nodeData.heightMeta = {};
-                        nodeData.heightMeta.lastAutoHeight = newHeight;
-                        nodeData.heightMeta.manualHeight = false;
-                        log(`[Layout] FileHeight更新heightMeta: ${node.id}:lastAutoH=${prevHeight}->${newHeight}`);
-                    }
-                }
-            }
+            // [已移除] FileHeight修正逻辑 - 导致与adjustAllTextNodeHeights产生死循环
+            // 问题：Layout用估算值覆盖adjustAllTextNodeHeights刚写的准确minHeight值
+            // → adjustAllTextNodeHeights读minHeight写94 → Layout用估算68覆盖 → 重新加载又变94 → 死循环
+            // 解决：Layout只负责位置(x,y)，高度由adjustAllTextNodeHeights唯一管理(SSOT原则)
+            // 高度在arrangeLayout之前已由adjustAllTextNodeHeights处理完毕，此处不再修改
         }
         const avgDelta = changedCount > 0 ? totalDelta / changedCount : 0;
-        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, heightFixed=${heightFixedCount}, ctx=${contextId || 'none'}`);
-        if (heightFixedCount > 0) {
-            log(`[Layout] FileHeight修正(持久化): ${heightFixedSamples.join(' | ')}`);
-        }
+        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
         return changed;
     }
 

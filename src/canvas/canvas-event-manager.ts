@@ -112,15 +112,10 @@ export class CanvasEventManager {
                 if (leaf?.view?.getViewType() === 'canvas') {
                     log(`[Event] Canvas 视图打开，开始设置事件监听`);
                     
-                    // 1. 健康检查：修复持久化数据中的异常高度
-                    // 直接使用当前 leaf 的 view，确保它是正确的 canvas 视图
+                    // [已移除] 健康检查会用估算值覆盖文件中Obsidian设置的准确minHeight值
+                    // 导致与批量调整产生死循环：健康检查改成估算值 → 批量调整改回minHeight → 重新加载又被改成估算值
+                    // 文件中的值本身就是历史准确值，应该保持不变，只通过批量调整和minHeight来更新
                     const canvasView = leaf.view as ItemView;
-                    if (canvasView) {
-                        const file = (canvasView as any).file as TFile;
-                        if (file) {
-                             void this.canvasManager.validateAndRepairNodeHeights(file);
-                        }
-                    }
 
                     // 启动 MutationObserver
                     this.setupMutationObserver();
