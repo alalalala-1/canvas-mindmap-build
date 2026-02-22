@@ -98,12 +98,16 @@ export class CanvasManager implements ICanvasManager {
         await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
     }
 
+    public async validateAndRepairNodeHeights(file: TFile) {
+        await this.nodeManager.validateAndRepairNodeHeights(file);
+    }
+
     public async adjustAllTextNodeHeights(): Promise<number> {
         return await this.nodeManager.adjustAllTextNodeHeights();
     }
 
-    public calculateTextNodeHeight(content: string, nodeEl?: Element): number {
-        return this.nodeManager.calculateTextNodeHeight(content, nodeEl);
+    public calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {
+        return this.nodeManager.calculateTextNodeHeight(content, nodeEl, nodeWidthOverride);
     }
 
     async deleteSelectedEdge() {

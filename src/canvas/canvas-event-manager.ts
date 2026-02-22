@@ -111,11 +111,20 @@ export class CanvasEventManager {
                 log(`[Event] active-leaf-change 触发, leaf=${leaf ? 'exists' : 'null'}, viewType=${leaf?.view?.getViewType() || 'null'}`);
                 if (leaf?.view?.getViewType() === 'canvas') {
                     log(`[Event] Canvas 视图打开，开始设置事件监听`);
+                    
+                    // 1. 健康检查：修复持久化数据中的异常高度
+                    // 直接使用当前 leaf 的 view，确保它是正确的 canvas 视图
+                    const canvasView = leaf.view as ItemView;
+                    if (canvasView) {
+                        const file = (canvasView as any).file as TFile;
+                        if (file) {
+                             void this.canvasManager.validateAndRepairNodeHeights(file);
+                        }
+                    }
+
                     // 启动 MutationObserver
                     this.setupMutationObserver();
                     
-                    // 直接使用当前 leaf 的 view，确保它是正确的 canvas 视图
-                    const canvasView = leaf.view as ItemView;
                     if (canvasView) {
                         await this.setupCanvasEventListeners(canvasView);
                         // Canvas打开时立即检查并添加所有必要的DOM属性和按钮

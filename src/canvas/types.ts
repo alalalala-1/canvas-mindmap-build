@@ -2,7 +2,9 @@
  * Canvas 类型定义
  */
 
+import type { TFile } from 'obsidian';
 import type { CollapseStateManager } from '../state/collapse-state';
+
 
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): Promise<void>;
@@ -13,6 +15,7 @@ export interface ICanvasManager {
     readonly collapseStateManager: CollapseStateManager;
     handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
+    validateAndRepairNodeHeights(file: TFile): Promise<void>;
 }
 
 export interface FromLink {
@@ -63,11 +66,19 @@ export interface CanvasView {
     file?: { path: string };
 }
 
+export type HeightMeta = {
+    lastSignature?: string;
+    lastWidth?: number;
+    lastAutoHeight?: number;
+    manualHeight?: boolean;
+};
+
 export type FloatingNodeMetadata = {
     isFloating?: boolean;
     originalParent?: string;
     floatingTimestamp?: number;
     isSubtreeNode?: boolean;
+    heightMeta?: HeightMeta;
 };
 
 export type CanvasNodeLike = {

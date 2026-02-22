@@ -150,7 +150,18 @@ function initializeLayoutNodes(
     settings: CanvasArrangerSettings
 ): Map<string, LayoutNode> {
     const layoutNodes = new Map<string, LayoutNode>();
-    
+
+    // [日志] 高度统计：用于追踪每次布局时高度决策情况
+    const heightStats = {
+        formula: 0,
+        trusted: 0,       // dataHeight在合理范围内，信任历史数据
+        mismatch: 0,      // dataHeight偏差过大(>25%/30%)，改用estimatedHeight
+        estimated: 0,     // 无dataHeight，直接使用estimatedHeight
+        capped: 0,        // dataHeight超过maxHeight（保留，大节点）
+        mismatchSamples: [] as string[],
+        cappedSamples: [] as string[]
+    };
+
     nodes.forEach((nodeData, nodeId) => {
         const nodeText = nodeData.text || '';
         const isFormula = nodeText && /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(nodeText.trim());
@@ -158,21 +169,47 @@ function initializeLayoutNodes(
         let nodeHeight: number;
         if (isFormula) {
             nodeHeight = settings.formulaNodeHeight || CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT;
+            heightStats.formula++;
         } else {
             const currentWidth = nodeData.width || settings.textNodeWidth;
             const maxHeight = settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT;
             const estimatedHeight = estimateTextNodeHeight(nodeText, currentWidth, maxHeight);
+
             if (nodeData.height && nodeData.height > 0) {
-                const heightDelta = nodeData.height - estimatedHeight;
-                if (heightDelta > 80 || nodeData.height > maxHeight) {
-                    log(`[Layout] HeightOverride: node=${nodeId}, current=${nodeData.height}, estimated=${estimatedHeight}, max=${maxHeight}, width=${currentWidth}, len=${nodeText.length}`);
+                if (nodeData.height > maxHeight) {
+                    // 超过最大高度，保留（可能手动设置的大节点）
+                    nodeHeight = nodeData.height;
+                    heightStats.capped++;
+                    if (heightStats.cappedSamples.length < 3) {
+                        heightStats.cappedSamples.push(`${nodeId}:data=${nodeData.height},est=${estimatedHeight.toFixed(0)},max=${maxHeight}`);
+                    }
+                } else if (estimatedHeight > 0) {
+                    const ratio = nodeData.height / estimatedHeight;
+                    // [修复-方案B] 激进策略：只要不是极端离谱就信任数据
+                    // 放宽到 [0.30, 4.00]，因为layout-data-provider已经做了初步过滤
+                    // 这里主要是为了捕获非常极端的异常值
+                    if (ratio < 0.30 || ratio > 4.00) {
+                        nodeHeight = estimatedHeight;
+                        heightStats.mismatch++;
+                        if (heightStats.mismatchSamples.length < 5) {
+                            heightStats.mismatchSamples.push(`${nodeId}:data=${nodeData.height.toFixed(0)},est=${estimatedHeight.toFixed(0)},r=${ratio.toFixed(2)},w=${currentWidth},len=${nodeText.length}`);
+                        }
+                    } else {
+                        // 在可信范围内，信任传入数据（已经过layout-data-provider处理）
+                        nodeHeight = nodeData.height;
+                        heightStats.trusted++;
+                    }
+                } else {
+                    // estimatedHeight无效，信任历史数据
+                    nodeHeight = nodeData.height;
+                    heightStats.trusted++;
                 }
-                nodeHeight = Math.max(nodeData.height, estimatedHeight);
             } else {
                 if (estimatedHeight >= maxHeight) {
                     log(`[Layout] HeightCapped: node=${nodeId}, estimated=${estimatedHeight}, max=${maxHeight}, width=${currentWidth}, len=${nodeText.length}`);
                 }
                 nodeHeight = estimatedHeight;
+                heightStats.estimated++;
             }
         }
 
@@ -186,7 +223,16 @@ function initializeLayoutNodes(
             _subtreeHeight: 0
         });
     });
-    
+
+    // [日志] 高度初始化统计：可快速判断估算/历史数据的使用比例
+    log(`[Layout] HeightInit: total=${layoutNodes.size}, trusted=${heightStats.trusted}, mismatch=${heightStats.mismatch}, estimated=${heightStats.estimated}, formula=${heightStats.formula}, capped=${heightStats.capped}`);
+    if (heightStats.mismatch > 0) {
+        log(`[Layout] HeightMismatch(改用estimate): ${heightStats.mismatchSamples.join(' | ')}`);
+    }
+    if (heightStats.capped > 0) {
+        log(`[Layout] HeightCappedNodes: ${heightStats.cappedSamples.join(' | ')}`);
+    }
+
     return layoutNodes;
 }
 
@@ -459,6 +505,39 @@ function calculatePositionsRightToLeft(
         childrenMaxY = Math.max(childrenMaxY, currentY + (range.maxY - range.minY));
         
         currentY += (range.maxY - range.minY) + settings.verticalSpacing;
+    }
+
+    if (childRanges.length > 1) {
+        const sortedChildren = [...childRanges]
+            .map(r => {
+                const childNode = layoutNodes.get(r.id);
+                return childNode ? { id: r.id, y: childNode.y, height: childNode.height } : null;
+            })
+            .filter((v): v is { id: string; y: number; height: number } => !!v)
+            .sort((a, b) => a.y - b.y);
+        let overlapCount = 0;
+        let tightCount = 0;
+        const samples: string[] = [];
+        for (let i = 1; i < sortedChildren.length; i++) {
+            const prev = sortedChildren[i - 1];
+            const curr = sortedChildren[i];
+            if (!prev || !curr) continue;
+            const gap = curr.y - (prev.y + prev.height);
+            if (gap < 0) {
+                overlapCount++;
+                if (samples.length < 5) {
+                    samples.push(`${prev.id}->${curr.id} gap=${gap.toFixed(1)} prevH=${prev.height.toFixed(1)} currH=${curr.height.toFixed(1)}`);
+                }
+            } else if (gap < settings.verticalSpacing * 0.5) {
+                tightCount++;
+                if (samples.length < 5) {
+                    samples.push(`${prev.id}->${curr.id} gap=${gap.toFixed(1)} prevH=${prev.height.toFixed(1)} currH=${curr.height.toFixed(1)}`);
+                }
+            }
+        }
+        if (overlapCount > 0 || tightCount > 0) {
+            log(`[Layout] 子节点间距异常: node=${nodeId}, overlap=${overlapCount}, tight=${tightCount}, spacing=${settings.verticalSpacing}, sample=${samples.join('|')}`);
+        }
     }
 
     let sumCenters = 0;

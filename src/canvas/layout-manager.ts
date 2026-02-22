@@ -98,13 +98,14 @@ export class LayoutManager {
 
     /**
      * 更新节点位置到Canvas
-     * @param result 布局结果映射
+     * [修复] 同时同步 height 到内存节点，确保边连接点基于正确高度计算
+     * @param result 布局结果映射（包含 x, y, width, height）
      * @param allNodes 所有节点映射
      * @param canvas Canvas对象
      * @returns 更新的节点数量
      */
     private async updateNodePositions(
-        result: Map<string, { x: number; y: number }>,
+        result: Map<string, { x: number; y: number; width?: number; height?: number }>,
         allNodes: Map<string, CanvasNodeLike>,
         canvas: CanvasLike,
         contextId?: string
@@ -114,10 +115,14 @@ export class LayoutManager {
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
+        let heightSyncCount = 0;
+        const heightSyncSamples: string[] = [];
+
         for (const [nodeId, newPosition] of result.entries()) {
-            const node = allNodes.get(nodeId);
-            if (this.canSetData(node)) {
-                const currentData = node.getData ? node.getData() : {};
+            // 保留原始 CanvasNodeLike 引用，用于访问 nodeEl（类型收窄后 canSetData 中无 nodeEl）
+            const originalNode = allNodes.get(nodeId);
+            if (this.canSetData(originalNode)) {
+                const currentData = originalNode.getData ? originalNode.getData() : {};
                 const prevX = typeof currentData.x === 'number' ? currentData.x : 0;
                 const prevY = typeof currentData.y === 'number' ? currentData.y : 0;
                 const dx = Math.abs(prevX - newPosition.x);
@@ -126,11 +131,62 @@ export class LayoutManager {
                 if (delta > 0.5) movedCount++;
                 if (delta > maxDelta) maxDelta = delta;
                 totalDelta += delta;
-                node.setData({
-                    ...currentData,
-                    x: newPosition.x,
-                    y: newPosition.y,
-                });
+
+                const newHeight = typeof newPosition.height === 'number' && newPosition.height > 0
+                    ? newPosition.height
+                    : (typeof currentData.height === 'number' ? currentData.height : 0);
+                const newWidth = typeof newPosition.width === 'number' && newPosition.width > 0
+                    ? newPosition.width
+                    : (typeof currentData.width === 'number' ? currentData.width : 0);
+
+                const prevHeight = typeof currentData.height === 'number' ? currentData.height : 0;
+                const heightChanged = Math.abs(newHeight - prevHeight) > 1;
+
+                if (heightChanged) {
+                    heightSyncCount++;
+                    if (heightSyncSamples.length < 5) {
+                        heightSyncSamples.push(`${nodeId}:h=${prevHeight}->${newHeight}`);
+                    }
+                }
+
+                // [修复] 使用 Canvas 引擎原生的 moveAndResize 方法
+                // 这是最安全、最标准的方式，它会自动更新 x, y, width, height, bbox，
+                // 并且会自动触发所有连接到该节点的边的重绘！
+                if (typeof (originalNode as any).moveAndResize === 'function') {
+                    (originalNode as any).moveAndResize({
+                        x: newPosition.x,
+                        y: newPosition.y,
+                        width: newWidth,
+                        height: newHeight
+                    });
+                } else {
+                    // Fallback: 如果没有 moveAndResize，则手动更新
+                    const newData: Record<string, unknown> = {
+                        ...currentData,
+                        x: newPosition.x,
+                        y: newPosition.y,
+                        width: newWidth,
+                        height: newHeight
+                    };
+                    originalNode.setData(newData);
+
+                    if ((originalNode as any).bbox) {
+                        (originalNode as any).bbox = {
+                            minX: newPosition.x,
+                            minY: newPosition.y,
+                            maxX: newPosition.x + newWidth,
+                            maxY: newPosition.y + newHeight
+                        };
+                    }
+
+                    if (typeof (originalNode as any).update === 'function') {
+                        (originalNode as any).update();
+                    }
+                    if (typeof (originalNode as any).render === 'function') {
+                        (originalNode as any).render();
+                    }
+                }
+
                 updatedCount++;
             } else {
                 missingCount++;
@@ -138,7 +194,10 @@ export class LayoutManager {
         }
 
         const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
-        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
+        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, heightSync=${heightSyncCount}, ctx=${contextId || 'none'}`);
+        if (heightSyncCount > 0) {
+            log(`[Layout] NodeHeight同步: ${heightSyncSamples.join(' | ')}`);
+        }
 
         if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
         if (typeof canvas.requestSave === 'function') canvas.requestSave();
@@ -149,38 +208,25 @@ export class LayoutManager {
      * 触发节点高度调整
      * @param skipAdjust 是否跳过调整
      */
-    private async triggerHeightAdjustment(skipAdjust: boolean): Promise<void> {
-        if (skipAdjust) return;
-
-        let adjustLogged = false;
-        let postAdjustScheduled = false;
-        const triggerAdjust = async () => {
-            if (!this.canvasManager) {
-                if (!adjustLogged) {
-                    log(`[Layout] 调整高度失败: 未找到管理器`);
-                    adjustLogged = true;
-                }
-                return;
-            }
-            if (!adjustLogged) {
-                log(`[Layout] 调整高度触发`);
-                adjustLogged = true;
-            }
-            await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
+    private async triggerHeightAdjustment(skipAdjust: boolean, contextId?: string): Promise<number> {
+        if (skipAdjust) return 0;
+        if (!this.canvasManager) {
+            log(`[Layout] 调整高度失败: 未找到管理器`);
+            return 0;
+        }
+        log(`[Layout] PreAdjustStart: id=${contextId || 'none'}`);
+        await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+        });
+        const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
+        log(`[Layout] PreAdjustWait: id=${contextId || 'none'}`);
+        await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+                window.setTimeout(() => resolve(), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
             });
-            const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
-            if (adjustedCount > 0 && !postAdjustScheduled) {
-                postAdjustScheduled = true;
-                setTimeout(() => {
-                    void this.performArrange(true);
-                }, 0);
-            }
-        };
-
-        void triggerAdjust();
-        setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
-        setTimeout(() => void triggerAdjust(), CONSTANTS.TIMING.EDGE_DETECTION_INTERVAL);
+        });
+        log(`[Layout] PreAdjustDone: id=${contextId || 'none'}, adjusted=${adjustedCount}`);
+        return adjustedCount;
     }
 
     /**
@@ -204,6 +250,16 @@ export class LayoutManager {
 
         try {
             const arrangeId = `arrange-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+            await this.triggerHeightAdjustment(skipAdjust, arrangeId);
+
+            const normalizeFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
+            if (normalizeFilePath) {
+                const normalized = await this.canvasFileService.normalizeCanvasDataAtomic(normalizeFilePath);
+                if (normalized) {
+                    log(`[Layout] 数据规范化完成: ${normalizeFilePath}`);
+                }
+            }
+
             const layoutData = await this.layoutDataProvider.getLayoutData(canvas);
             if (!layoutData) {
                 new Notice("Failed to gather canvas data.");
@@ -214,6 +270,22 @@ export class LayoutManager {
 
             log(`[Layout] ArrangeStart: id=${arrangeId}, visible=${visibleNodes.size}, all=${allNodes.size}, edges=${edges.length}, originalEdges=${originalEdges.length}, file=${canvasFilePath || 'unknown'}`);
             log(`[Layout] ArrangeData: id=${arrangeId}, canvasNodes=${canvasData?.nodes?.length || 0}, canvasEdges=${canvasData?.edges?.length || 0}`);
+
+            // === 补充详细诊断日志：布局前的节点和边状态 ===
+            if (canvasData?.nodes) {
+                const nodeSamples = canvasData.nodes.slice(0, 5).map(n => {
+                    const dataStr = n.data ? JSON.stringify(n.data).substring(0, 50) : 'none';
+                    return `${n.id}: x=${n.x}, y=${n.y}, w=${n.width}, h=${n.height}, data=${dataStr}`;
+                });
+                log(`[Layout.Diag] 布局前节点状态(前5个): ${nodeSamples.join(' | ')}`);
+            }
+            if (canvasData?.edges) {
+                const edgeSamples = canvasData.edges.slice(0, 5).map(e => {
+                    return `${e.id}: ${e.fromNode}(${e.fromSide})->${e.toNode}(${e.toSide}), fromEnd=${e.fromEnd}, toEnd=${e.toEnd}`;
+                });
+                log(`[Layout.Diag] 布局前边状态(前5个): ${edgeSamples.join(' | ')}`);
+            }
+            // ==========================================
 
             const result = originalArrangeLayout(
                 visibleNodes,
@@ -255,16 +327,66 @@ export class LayoutManager {
             let updatedCount = 0;
             if (success) {
                 updatedCount = await this.updateNodePositions(result, allNodes, canvas, arrangeId);
-            }
 
-            await this.triggerHeightAdjustment(skipAdjust);
+                // === 补充详细诊断日志：布局后的边状态 ===
+                // 延迟一点时间，等待 Canvas 引擎完成 DOM 更新
+                setTimeout(() => {
+                    const memoryEdgesAfter = this.getCanvasEdges(canvas);
+                    const edgeSamplesAfter = memoryEdgesAfter.slice(0, 5).map(e => {
+                        const fromId = this.toStringId(e.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.from));
+                        const toId = this.toStringId(e.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.to));
+                        const fromSide = this.toStringId(e.fromSide) || (isRecord(e.from) ? this.toStringId(e.from.side) : undefined);
+                        const toSide = this.toStringId(e.toSide) || (isRecord(e.to) ? this.toStringId(e.to.side) : undefined);
+
+                        // 尝试获取 SVG path 数据
+                        let pathData = 'none';
+                        let bboxData = 'none';
+
+                        // Obsidian Canvas 内部的 edge 对象通常有 bbox 属性
+                        if ((e as any).bbox) {
+                            const b = (e as any).bbox;
+                            bboxData = `bbox(${b.minX?.toFixed(1)},${b.minY?.toFixed(1)}->${b.maxX?.toFixed(1)},${b.maxY?.toFixed(1)})`;
+                        }
+
+                        if (e.lineGroupEl) {
+                            // Obsidian Canvas 的边通常是一个 path 元素
+                            const pathEl = e.lineGroupEl.querySelector('path');
+                            if (pathEl) {
+                                pathData = pathEl.getAttribute('d') || 'empty';
+                            }
+                        }
+
+                        return `${e.id}: ${fromId}(${fromSide})->${toId}(${toSide}), ${bboxData}, path=${pathData.substring(0, 30)}...`;
+                    });
+                    log(`[Layout.Diag] 布局后内存边状态(前5个): ${edgeSamplesAfter.join(' | ')}`);
+
+                    // 打印几个节点的实际 DOM 坐标
+                    const nodeSamplesAfter = Array.from(allNodes.values()).slice(0, 3).map(n => {
+                        let rectStr = 'none';
+                        let bboxStr = 'none';
+
+                        if ((n as any).bbox) {
+                            const b = (n as any).bbox;
+                            bboxStr = `bbox(${b.minX?.toFixed(1)},${b.minY?.toFixed(1)}->${b.maxX?.toFixed(1)},${b.maxY?.toFixed(1)})`;
+                        }
+
+                        if (n.nodeEl && n.nodeEl instanceof HTMLElement) {
+                            const rect = n.nodeEl.getBoundingClientRect();
+                            rectStr = `rect(x=${rect.x.toFixed(1)},y=${rect.y.toFixed(1)},w=${rect.width.toFixed(1)},h=${rect.height.toFixed(1)})`;
+                        }
+                        return `${n.id}: x=${n.x}, y=${n.y}, w=${n.width}, h=${n.height}, ${bboxStr}, ${rectStr}`;
+                    });
+                    log(`[Layout.Diag] 布局后节点DOM状态(前3个): ${nodeSamplesAfter.join(' | ')}`);
+                }, 350); // 等待最后一次重绘完成
+                // ==========================================
+            }
 
             await this.cleanupStaleFloatingNodes(canvas, allNodes);
             await this.reapplyFloatingNodeStyles(canvas);
 
             new Notice(`布局完成！更新了 ${updatedCount} 个节点`);
             log(`[Layout] 完成: 更新 ${updatedCount}`);
-            
+
         } catch (err) {
             handleError(err, { context: 'Layout', message: '布局失败，请重试' });
         }
@@ -284,22 +406,22 @@ export class LayoutManager {
     ): Set<string> {
         const allCollapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
         const allHiddenNodeIds = new Set<string>();
-        
+
         for (const collapsedId of allCollapsedNodes) {
             if (!nodes.has(collapsedId)) continue;
             this.collapseStateManager.addAllDescendantsToSet(collapsedId, edges, allHiddenNodeIds);
         }
-        
+
         if (canvasData?.metadata?.floatingNodes) {
             for (const [floatingNodeId, info] of Object.entries(canvasData.metadata.floatingNodes)) {
                 const { isFloating, originalParent } = parseFloatingNodeInfo(info as boolean | FloatingNodeRecord);
-                
+
                 if (isFloating && originalParent && allCollapsedNodes.has(originalParent)) {
                     allHiddenNodeIds.add(floatingNodeId);
                 }
             }
         }
-        
+
         return allHiddenNodeIds;
     }
 
@@ -463,13 +585,13 @@ export class LayoutManager {
                 log(`[Layout] Toggle: 可见节点太少，跳过布局`);
                 return;
             }
-            
+
             const newLayout = originalArrangeLayout(
-                visibleNodes, 
-                visibleEdges, 
-                this.getLayoutSettings(), 
-                layoutData.originalEdges, 
-                layoutData.allNodes, 
+                visibleNodes,
+                visibleEdges,
+                this.getLayoutSettings(),
+                layoutData.originalEdges,
+                layoutData.allNodes,
                 finalCanvasData || canvasData
             );
 
@@ -481,9 +603,9 @@ export class LayoutManager {
 
             if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
             if (canvas.requestSave) canvas.requestSave();
-            
+
             log(`[Layout] Toggle: 更新了 ${updatedCount} 个节点`);
-            
+
         } catch (err) {
             handleError(err, { context: 'Layout', message: 'Toggle 失败', showNotice: false });
         }
@@ -491,7 +613,7 @@ export class LayoutManager {
 
     async toggleNodeCollapse(nodeId: string, canvas: CanvasLike) {
         const isCurrentlyCollapsed = this.collapseStateManager.isCollapsed(nodeId);
-        
+
         if (isCurrentlyCollapsed) {
             this.collapseStateManager.markExpanded(nodeId);
             // 展开操作
@@ -550,7 +672,7 @@ export class LayoutManager {
                         // 但 moveAndResize 通常不触发事件，除非是通过 UI 拖拽
                     }
                 }
-                
+
                 node.prevX = nodeX;
                 node.prevY = nodeY;
             }
@@ -674,7 +796,7 @@ export class LayoutManager {
 
     private applyLayoutPositions(
         canvasData: CanvasDataLike,
-        result: Map<string, { x: number; y: number }>,
+        result: Map<string, { x: number; y: number; width?: number; height?: number }>,
         contextId?: string
     ): boolean {
         let changed = false;
@@ -682,6 +804,9 @@ export class LayoutManager {
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
+        let heightFixedCount = 0;
+        const heightFixedSamples: string[] = [];
+
         for (const node of canvasData.nodes ?? []) {
             if (typeof node.id !== 'string') continue;
             const newPos = result.get(node.id);
@@ -702,9 +827,38 @@ export class LayoutManager {
                 changed = true;
                 changedCount++;
             }
+
+            // [修复] 同步布局使用的修正高度到文件数据，持久化解决旧版本失准的问题
+            // 这样下次打开时，DOM-0 节点的历史高度就已经是正确值，不再需要 mismatch 修正
+            const newHeight = typeof newPos.height === 'number' && newPos.height > 0 ? newPos.height : undefined;
+            if (newHeight !== undefined) {
+                const prevHeight = typeof node.height === 'number' ? node.height : 0;
+                if (Math.abs(newHeight - prevHeight) > 1) {
+                    node.height = newHeight;
+                    changed = true;
+                    heightFixedCount++;
+                    if (heightFixedSamples.length < 5) {
+                        heightFixedSamples.push(`${node.id}:h=${prevHeight}->${newHeight}`);
+                    }
+                    // [修复] 同步更新 heightMeta.lastAutoHeight：
+                    // 若不更新，下次 adjustAllTextNodeHeights 会看到 node.height(layout改后) != lastAutoHeight(旧值)，
+                    // 并将此 layout 修正误判为用户手动调整（manualHeight=true），永久锁定该高度。
+                    // 同时清除 manualHeight 标记，因为这是 layout 自动修正不是用户操作。
+                    if (node.data && typeof node.data === 'object') {
+                        const nodeData = node.data as { heightMeta?: { lastAutoHeight?: number; manualHeight?: boolean } };
+                        if (!nodeData.heightMeta) nodeData.heightMeta = {};
+                        nodeData.heightMeta.lastAutoHeight = newHeight;
+                        nodeData.heightMeta.manualHeight = false;
+                        log(`[Layout] FileHeight更新heightMeta: ${node.id}:lastAutoH=${prevHeight}->${newHeight}`);
+                    }
+                }
+            }
         }
         const avgDelta = changedCount > 0 ? totalDelta / changedCount : 0;
-        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
+        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, heightFixed=${heightFixedCount}, ctx=${contextId || 'none'}`);
+        if (heightFixedCount > 0) {
+            log(`[Layout] FileHeight修正(持久化): ${heightFixedSamples.join(' | ')}`);
+        }
         return changed;
     }
 

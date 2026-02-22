@@ -6,6 +6,8 @@
 import { CanvasMindmapBuildSettings } from '../settings/types';
 
 let isLoggingEnabled = false;
+let logSequence = 0;
+let logStartTime = Date.now();
 
 /**
  * 更新日志配置
@@ -13,6 +15,10 @@ let isLoggingEnabled = false;
 export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>): void {
     if (settings.enableDebugLogging !== undefined) {
         isLoggingEnabled = settings.enableDebugLogging;
+    }
+    if (settings.enableDebugLogging) {
+        logSequence = 0;
+        logStartTime = Date.now();
     }
 }
 
@@ -23,6 +29,8 @@ export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>
 export function log(...messages: unknown[]): void {
     if (!isLoggingEnabled) return;
 
+    const seq = ++logSequence;
+    const delta = Date.now() - logStartTime;
     const body = messages.map(msg => {
         if (msg === null) return 'null';
         if (msg === undefined) return 'undefined';
@@ -45,7 +53,7 @@ export function log(...messages: unknown[]): void {
         return '[Unknown]';
     }).join(' ');
 
-    console.debug(body);
+    console.debug(`[${seq}|${delta}ms] ${body}`);
 }
 
 /**
@@ -54,6 +62,8 @@ export function log(...messages: unknown[]): void {
  */
 export function logCritical(...messages: unknown[]): void {
 
+    const seq = ++logSequence;
+    const delta = Date.now() - logStartTime;
     const body = messages.map(msg => {
         if (msg === null) return 'null';
         if (msg === undefined) return 'undefined';
@@ -76,5 +86,5 @@ export function logCritical(...messages: unknown[]): void {
         return '[Unknown]';
     }).join(' ');
 
-    console.warn(body);
+    console.warn(`[${seq}|${delta}ms] ${body}`);
 }

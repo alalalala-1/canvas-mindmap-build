@@ -504,6 +504,8 @@ const HEIGHT_CACHE_MAX_SIZE = 100;
 /**
  * 估算文本节点高度（带缓存）
  * 用于布局计算和节点高度调整
+ * 
+ * [修复v2] 区分普通文本和Markdown格式文本的行高
  */
 export function estimateTextNodeHeight(content: string, width: number, maxHeight: number = 800): number {
     const cacheKey = `${width}:${maxHeight}:${content}`;
@@ -512,19 +514,37 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
         return cached;
     }
 
-    const contentWidth = width - 40;
-    const fontSize = CONSTANTS.TYPOGRAPHY.FONT_SIZE;
-    const lineHeight = CONSTANTS.TYPOGRAPHY.LINE_HEIGHT;
+    // 基础参数
+    const contentWidth = width - 16;  // 左右各8px padding
+    const fontSize = 14;  // Obsidian Canvas默认字体大小
+    const normalLineHeight = 20;  // 普通文本行高
+    const formattedLineHeight = 24;  // 格式化文本行高（标题、加粗等）
     
     const chineseCharRegex = /[\u4e00-\u9fa5]/;
-    let totalLines = 0;
+    let totalHeight = 0;
     const textLines = content.split('\n');
 
     for (const line of textLines) {
         const trimmedLine = line.trim();
         if (trimmedLine === '') {
-            totalLines += 0.5;
+            totalHeight += normalLineHeight;  // 空行
             continue;
+        }
+
+        // 检测Markdown格式
+        const isHeading = /^#{1,6}\s+/.test(trimmedLine);
+        const hasBold = /\*\*|__/.test(trimmedLine);
+        const hasItalic = /\*|_/.test(trimmedLine);
+        const hasCode = /`/.test(trimmedLine);
+        const isFormatted = isHeading || hasBold || hasItalic || hasCode;
+        
+        // 根据格式选择行高
+        const currentLineHeight = isFormatted ? formattedLineHeight : normalLineHeight;
+        
+        // 额外间距：标题通常有额外的上下间距
+        let extraSpacing = 0;
+        if (isHeading) {
+            extraSpacing = 8;  // 标题额外间距
         }
 
         const cleanLine = trimmedLine
@@ -534,18 +554,22 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
         let pixelWidth = 0;
         for (const char of cleanLine) {
             if (chineseCharRegex.test(char)) {
-                pixelWidth += fontSize * 1.15;
+                pixelWidth += fontSize;
+            } else if (char === ' ') {
+                pixelWidth += fontSize * 0.3;
             } else {
-                pixelWidth += fontSize * 0.6;
+                pixelWidth += fontSize * 0.55;
             }
         }
 
-        const linesNeeded = Math.ceil(pixelWidth / contentWidth);
-        totalLines += Math.max(1, linesNeeded);
+        const linesNeeded = Math.max(1, Math.ceil(pixelWidth / contentWidth));
+        totalHeight += linesNeeded * currentLineHeight + extraSpacing;
     }
 
-    const calculatedHeight = Math.ceil(totalLines * lineHeight + CONSTANTS.TYPOGRAPHY.SAFETY_PADDING);
-    const result = Math.max(CONSTANTS.TYPOGRAPHY.MIN_NODE_HEIGHT, Math.min(calculatedHeight, maxHeight));
+    // 上下padding: 16px
+    const actualPadding = 16;
+    const calculatedHeight = Math.ceil(totalHeight + actualPadding);
+    const result = Math.max(60, Math.min(calculatedHeight, maxHeight));
     
     if (heightCache.size >= HEIGHT_CACHE_MAX_SIZE) {
         const firstKey = heightCache.keys().next().value;

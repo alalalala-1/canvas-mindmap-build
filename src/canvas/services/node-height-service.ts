@@ -1,16 +1,17 @@
-
-import { App, ItemView } from 'obsidian';
+import { App, ItemView, Component, MarkdownRenderer } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasNodeLike, CanvasLike, CanvasViewLike } from '../types';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
-import { CONSTANTS } from '../../constants';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
 
 export class NodeHeightService {
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
+    private measurementContainerEl: HTMLElement | null = null;
+    private measurementSizerEl: HTMLElement | null = null;
+    private measurementComponent: Component | null = null;
 
     constructor(
         app: App,
@@ -26,83 +27,120 @@ export class NodeHeightService {
      * 计算文本节点高度
      * @param content 节点内容
      * @param nodeEl 可选的 DOM 元素
+     * @param nodeWidthOverride 可选的节点宽度
      * @returns 计算后的高度
      */
-    calculateTextNodeHeight(content: string, nodeEl?: Element): number {
+    calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
-        const nodeWidth = this.settings.textNodeWidth || 400;
+        const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
+            ? nodeWidthOverride
+            : (this.settings.textNodeWidth || 400);
+        const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
+
+        if (nodeEl && this.isZeroSizedNode(nodeEl, true)) {
+            log(`[NodeHeight] calculateTextNodeHeight: nodeEl存在但zero-sized, 使用estimated=${estimatedHeight}`);
+            return estimatedHeight;
+        }
 
         if (nodeEl) {
-            const measuredHeight = this.measureActualContentHeight(nodeEl, content);
+            const measuredHeight = this.measureActualContentHeight(nodeEl, content, fallbackWidth, true);
             if (measuredHeight > 0) {
-                return Math.min(measuredHeight, maxHeight);
+                // [修复] 直接使用DOM测量值，不做reconcile
+                const final = Math.min(measuredHeight, maxHeight);
+                log(`[NodeHeight] calculateTextNodeHeight: estimated=${estimatedHeight}, measured=${measuredHeight}, final=${final}`);
+                return final;
             }
         }
 
-        return this.calculateTextNodeHeightComputed(content, nodeWidth);
+        log(`[NodeHeight] calculateTextNodeHeight: 无DOM测量, 使用estimated=${estimatedHeight}`);
+        return estimatedHeight;
+    }
+
+    async calculateTextNodeHeightAsync(content: string, nodeEl?: Element, nodeWidthOverride?: number): Promise<number> {
+        const info = await this.calculateTextNodeHeightInfoAsync(content, nodeEl, nodeWidthOverride);
+        return info.height;
+    }
+
+    async calculateTextNodeHeightInfoAsync(
+        content: string,
+        nodeEl?: Element,
+        nodeWidthOverride?: number,
+        logDetail: boolean = false
+    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom'; estimated: number }> {
+        const maxHeight = this.settings.textNodeMaxHeight || 800;
+        const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
+            ? nodeWidthOverride
+            : (this.settings.textNodeWidth || 400);
+        const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
+
+        if (nodeEl && this.isZeroSizedNode(nodeEl, false)) {
+            return { height: estimatedHeight, source: 'zero-dom', estimated: estimatedHeight };
+        }
+
+        if (!nodeEl) {
+            return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
+        }
+
+        const measuredHeight = this.measureActualContentHeight(nodeEl, content, fallbackWidth, false);
+        if (measuredHeight > 0) {
+            // [修复] 直接使用DOM测量值，不做reconcile
+            const final = Math.min(measuredHeight, maxHeight);
+            return { height: final, source: 'dom', estimated: estimatedHeight };
+        }
+
+        const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
+        if (renderedHeight > 0) {
+            // [修复] 直接使用渲染测量值，不做reconcile
+            const final = Math.min(renderedHeight, maxHeight);
+            return { height: final, source: 'rendered', estimated: estimatedHeight };
+        }
+
+        return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
     }
 
     /**
      * 测量 DOM 元素的实际内容高度
+     *
+     * [修复] 直接使用sizer.scrollHeight - 它已经是完整的内容高度（包含所有内部padding）
      */
-    private measureActualContentHeight(nodeEl: Element, content: string): number {
+    private measureActualContentHeight(nodeEl: Element, content: string, fallbackWidth: number, logDetail: boolean = false): number {
         try {
             const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
             const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
 
+            // ===【路径1-PRIMARY】sizer.scrollHeight（已包含所有padding，直接使用）===
             if (sizerEl) {
-                const sizerMinHeightStyle = sizerEl.style.minHeight;
-                if (sizerMinHeightStyle) {
-                    const parsedMinHeight = parseFloat(sizerMinHeightStyle);
-                    if (!isNaN(parsedMinHeight) && parsedMinHeight > 0) {
-                        return Math.ceil(parsedMinHeight + 24);
-                    }
+                const scrollH = sizerEl.scrollHeight;
+                const sizerRect = sizerEl.getBoundingClientRect();
+                
+                if (scrollH > 20) {
+                    return Math.ceil(scrollH + 16);
+                }
+
+                if (sizerRect.height > 0) {
+                    return Math.ceil(sizerRect.height + 16);
                 }
             }
 
+            // ===【路径2】contentEl.scrollHeight===
             if (contentEl) {
-                const pElement = contentEl.querySelector('p');
-                if (pElement) {
-                    const pRect = pElement.getBoundingClientRect();
-                    const pStyles = window.getComputedStyle(pElement);
-                    const lineHeight = parseFloat(pStyles.lineHeight) || 24;
-                    
-                    const actualLines = Math.max(1, Math.round(pRect.height / lineHeight));
-                    
-                    const styles = window.getComputedStyle(contentEl);
-                    const paddingTop = parseFloat(styles.paddingTop) || 8;
-                    const paddingBottom = parseFloat(styles.paddingBottom) || 8;
-
-                    return Math.ceil(actualLines * lineHeight + paddingTop + paddingBottom + 20);
+                const scrollH = contentEl.scrollHeight;
+                if (scrollH > 20) {
+                    return Math.ceil(scrollH);
                 }
             }
 
-            if (sizerEl) {
-                const scrollHeight = sizerEl.scrollHeight;
-                if (scrollHeight > 20) {
-                    return Math.ceil(scrollHeight + 24);
-                }
-
-                const rect = sizerEl.getBoundingClientRect();
-                if (rect.height > 0) {
-                    return Math.ceil(rect.height + 24);
-                }
+            // ===【路径3-FALLBACK】如果DOM测量全部失败，使用估算===
+            const nodeWidth = (nodeEl as HTMLElement).clientWidth;
+            if (nodeWidth && nodeWidth > 0) {
+                return this.calculateTextNodeHeightComputed(content, nodeWidth);
+            }
+            if (fallbackWidth > 0) {
+                return this.calculateTextNodeHeightComputed(content, fallbackWidth);
             }
 
-            if (contentEl) {
-                const styles = window.getComputedStyle(contentEl);
-                const paddingTop = parseFloat(styles.paddingTop) || 8;
-                const paddingBottom = parseFloat(styles.paddingBottom) || 8;
-                const scrollHeight = contentEl.scrollHeight;
-                if (scrollHeight > 20) {
-                    return Math.ceil(scrollHeight + paddingTop + paddingBottom);
-                }
-            }
-
-            const nodeWidth = nodeEl.clientWidth || 400;
-            return this.calculateTextNodeHeightComputed(content, nodeWidth);
         } catch (e) {
-            log(`[NodeHeight] 测量高度异常: ${e}`);
+            // Silent fail
         }
         return 0;
     }
@@ -113,6 +151,130 @@ export class NodeHeightService {
     private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         return estimateTextNodeHeight(content, nodeWidth, maxHeight);
+    }
+
+    /**
+     * 协调测量值与估算值
+     *
+     * 核心原则：
+     * - 如果 measured < lowerRatio * estimated → 可疑，返回 estimated
+     * - 如果 measured > upperRatio * estimated → 容器被撑大/Canvas minHeight污染，返回 estimated
+     * - 否则 → 信任 measured
+     *
+     * 注意：此函数现在真正使用 lowerRatio 和 upperRatio 参数！
+     */
+    private reconcileMeasuredHeight(
+        measured: number,
+        estimated: number,
+        lowerRatio: number,
+        upperRatio: number,
+        logDetail: boolean = false
+    ): number {
+        if (measured <= 0) {
+            return 0;
+        }
+
+        if (estimated > 0) {
+            const ratio = measured / estimated;
+
+            if (ratio < 0.2) {
+                return estimated;
+            }
+            if (ratio < lowerRatio) {
+                return estimated;
+            }
+            if (ratio > upperRatio) {
+                // 测量值比估算大太多：很可能是容器高度/Canvas minHeight污染
+                // 返回 estimated 防止高度膨胀
+                return estimated;
+            }
+        }
+
+        return measured;
+    }
+
+    private isZeroSizedNode(nodeEl: Element, logDetail: boolean = false): boolean {
+        const el = nodeEl as HTMLElement;
+        const rectHeight = el.getBoundingClientRect().height;
+        const isZero = rectHeight === 0 && el.offsetHeight === 0 && el.clientHeight === 0 && el.scrollHeight === 0;
+        return isZero;
+    }
+
+    private ensureMeasurementElements(): void {
+        if (this.measurementContainerEl && this.measurementSizerEl && this.measurementComponent) return;
+        if (!document?.body) return;
+
+        const container = document.createElement('div');
+        container.className = 'canvas-node-content markdown-preview-view';
+        container.style.position = 'fixed';
+        container.style.left = '-10000px';
+        container.style.top = '-10000px';
+        container.style.visibility = 'hidden';
+        container.style.pointerEvents = 'none';
+        container.style.zIndex = '-1';
+        container.style.boxSizing = 'border-box';
+
+        const sizer = document.createElement('div');
+        sizer.className = 'markdown-preview-sizer markdown-preview-section';
+        container.appendChild(sizer);
+        document.body.appendChild(container);
+
+        this.measurementContainerEl = container;
+        this.measurementSizerEl = sizer;
+        this.measurementComponent = new Component();
+        log(`[NodeHeight] ensureMeasurementElements: 创建离屏测量容器`);
+    }
+
+    private applyMeasurementStyles(nodeEl?: Element): void {
+        if (!this.measurementContainerEl || !nodeEl) return;
+        const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement | null;
+        const sourceEl = contentEl || (nodeEl as HTMLElement);
+        if (!sourceEl) return;
+        const styles = window.getComputedStyle(sourceEl);
+        this.measurementContainerEl.style.fontSize = styles.fontSize;
+        this.measurementContainerEl.style.lineHeight = styles.lineHeight;
+        this.measurementContainerEl.style.fontFamily = styles.fontFamily;
+        this.measurementContainerEl.style.fontWeight = styles.fontWeight;
+        this.measurementContainerEl.style.fontStyle = styles.fontStyle;
+        this.measurementContainerEl.style.letterSpacing = styles.letterSpacing;
+        this.measurementContainerEl.style.wordBreak = styles.wordBreak;
+        this.measurementContainerEl.style.whiteSpace = styles.whiteSpace;
+        this.measurementContainerEl.style.paddingTop = styles.paddingTop;
+        this.measurementContainerEl.style.paddingRight = styles.paddingRight;
+        this.measurementContainerEl.style.paddingBottom = styles.paddingBottom;
+        this.measurementContainerEl.style.paddingLeft = styles.paddingLeft;
+    }
+
+    private async measureRenderedMarkdownHeight(
+        content: string,
+        nodeWidth: number,
+        nodeEl?: Element,
+        logDetail: boolean = false
+    ): Promise<number> {
+        try {
+            this.ensureMeasurementElements();
+            if (!this.measurementContainerEl || !this.measurementSizerEl || !this.measurementComponent) {
+                return 0;
+            }
+
+            const width = nodeWidth > 0 ? nodeWidth : (this.settings.textNodeWidth || 400);
+            this.measurementContainerEl.style.width = `${width}px`;
+            this.applyMeasurementStyles(nodeEl);
+            this.measurementSizerEl.innerHTML = '';
+            await MarkdownRenderer.renderMarkdown(content, this.measurementSizerEl, '', this.measurementComponent);
+
+            const rect = this.measurementSizerEl.getBoundingClientRect();
+            const scrollHeight = this.measurementSizerEl.scrollHeight;
+            const measuredHeight = Math.max(rect.height, scrollHeight);
+            const styles = window.getComputedStyle(this.measurementContainerEl);
+            const paddingTop = parseFloat(styles.paddingTop) || 0;
+            const paddingBottom = parseFloat(styles.paddingBottom) || 0;
+            const result = Math.ceil(measuredHeight + paddingTop + paddingBottom);
+
+            return result;
+        } catch (err) {
+            return 0;
+        }
     }
 
     /**
@@ -139,8 +301,8 @@ export class NodeHeightService {
                 if (!node.type || node.type === 'text') {
                     log(`[NodeHeight] 节点类型=text, text长度=${node.text?.length || 0}`);
                     if (node.text) {
-                        const isFormula = this.settings.enableFormulaDetection && 
-                            node.text.trim().startsWith('$$') && 
+                        const isFormula = this.settings.enableFormulaDetection &&
+                            node.text.trim().startsWith('$$') &&
                             node.text.trim().endsWith('$$');
 
                         let newHeight: number;
@@ -158,16 +320,37 @@ export class NodeHeightService {
                                     nodeEl = nodeData.nodeEl;
                                 }
                             }
-                            const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl);
+                            
+                            // 先估算高度用于对比
+                            const nodeWidth = node.width || this.settings.textNodeWidth || 400;
+                            const estimatedHeight = this.calculateTextNodeHeightComputed(node.text, nodeWidth);
+                            const calculatedHeight = this.calculateTextNodeHeight(node.text, nodeEl, nodeWidth);
                             const maxHeight = this.settings.textNodeMaxHeight || 800;
                             newHeight = Math.min(calculatedHeight, maxHeight);
                             const currentHeight = node.height ?? 0;
                             const delta = newHeight - currentHeight;
-                            if (newHeight >= maxHeight || Math.abs(delta) > 80) {
-                                log(`[NodeHeight] 高度异常: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}, delta=${delta.toFixed(1)}, textLen=${node.text.length}`);
-                            } else {
-                                log(`[NodeHeight] 计算高度: id=${node.id || 'unknown'}, calculated=${calculatedHeight}, max=${maxHeight}, newHeight=${newHeight}, currentHeight=${currentHeight}`);
+                            
+                            // 增强日志：显示文本预览、估算vs实测对比
+                            const textPreview = node.text.substring(0, 50).replace(/\n/g, '↵');
+                            const measureSource = nodeEl ? 'DOM测量' : '估算';
+                            
+                            log(`[NodeHeight-SUMMARY] ========================================`);
+                            log(`[NodeHeight-SUMMARY] 节点ID: ${node.id || 'unknown'}`);
+                            log(`[NodeHeight-SUMMARY] 文本预览: "${textPreview}..." (总长度=${node.text.length})`);
+                            log(`[NodeHeight-SUMMARY] 节点宽度: ${nodeWidth}`);
+                            log(`[NodeHeight-SUMMARY] 估算高度: ${estimatedHeight}`);
+                            log(`[NodeHeight-SUMMARY] ${measureSource}高度: ${calculatedHeight}`);
+                            log(`[NodeHeight-SUMMARY] 文件中高度: ${currentHeight}`);
+                            log(`[NodeHeight-SUMMARY] 最终高度: ${newHeight}`);
+                            log(`[NodeHeight-SUMMARY] 变化量: ${delta.toFixed(1)} (${delta > 0 ? '+' : ''}${((delta/currentHeight)*100).toFixed(1)}%)`);
+                            
+                            if (Math.abs(delta) > 80) {
+                                log(`[NodeHeight-SUMMARY] ⚠️ 高度变化过大！可能存在问题`);
                             }
+                            if (newHeight >= maxHeight) {
+                                log(`[NodeHeight-SUMMARY] ⚠️ 达到最大高度限制 ${maxHeight}`);
+                            }
+                            log(`[NodeHeight-SUMMARY] ========================================`);
                         }
 
                         if (node.height !== newHeight) {
@@ -229,4 +412,3 @@ export class NodeHeightService {
         return undefined;
     }
 }
-
