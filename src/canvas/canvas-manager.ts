@@ -98,6 +98,10 @@ export class CanvasManager implements ICanvasManager {
         await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
     }
 
+    public async measureAndPersistTrustedHeight(nodeId: string) {
+        await this.nodeManager.measureAndPersistTrustedHeight(nodeId);
+    }
+
     public async validateAndRepairNodeHeights(file: TFile) {
         await this.nodeManager.validateAndRepairNodeHeights(file);
     }
@@ -112,6 +116,17 @@ export class CanvasManager implements ICanvasManager {
 
     async deleteSelectedEdge() {
         await this.edgeDeletionService.deleteSelectedEdge();
+    }
+
+    // =========================================================================
+    // 删除操作标志控制（防止删边后被误判为新边）
+    // =========================================================================
+    startDeletingOperation(): void {
+        this.eventManager.startDeletingOperation();
+    }
+
+    endDeletingOperation(canvas: CanvasLike | null): void {
+        this.eventManager.endDeletingOperation(canvas);
     }
 
     // =========================================================================

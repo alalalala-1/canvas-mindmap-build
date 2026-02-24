@@ -99,7 +99,6 @@ export class CanvasNodeManager {
                         node.data = {};
                     }
                     const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
-                    const isManual = heightMeta.manualHeight === true;
 
                     // 5. 判定是否需要修复
                     let shouldRepair = false;
@@ -111,7 +110,7 @@ export class CanvasNodeManager {
                         repairReason = 'too_small';
                     }
                     // 场景B: 非手动调整，且偏差过大 (>20% 且 >20px)
-                    else if (!isManual) {
+                    else {
                         const delta = Math.abs(currentHeight - estimatedHeight);
                         const threshold = Math.max(20, estimatedHeight * 0.2);
 
@@ -124,11 +123,6 @@ export class CanvasNodeManager {
                     // 6. 执行修复
                     if (shouldRepair) {
                         node.height = estimatedHeight;
-
-                        // 重置 manualHeight，因为这显然不是用户想要的“正确”手动值
-                        if (isManual && currentHeight < 20) {
-                            heightMeta.manualHeight = false;
-                        }
 
                         // 更新元数据以匹配估算值
                         heightMeta.lastAutoHeight = estimatedHeight;
@@ -229,7 +223,7 @@ export class CanvasNodeManager {
 
                 let changed = false;
 
-                const logDetail = updatePass === 1;
+                const logDetail = false;
 
                 const canvasView = getCanvasView(this.app);
                 const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
@@ -279,26 +273,34 @@ export class CanvasNodeManager {
                                     node.width = width;
                                 }
 
+                                // === 初始化/获取元数据 ===
+                                if (!node.data || typeof node.data !== 'object') {
+                                    node.data = {};
+                                }
+                                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+                                
                                 // === DOM可见性检测 ===  
                                 const domNode = nodeDomMap.get(node.id || '');
                                 const nodeEl = domNode?.nodeEl;
                                 
                                 // [关键修复] 使用DOM测量（包括minHeight），无论是否虚拟化
-                                // 传入文件历史高度以启用智能验证机制
+                                // 传入文件历史高度和元数据以启用智能验证机制
                                 const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
                                     node.text,
                                     nodeEl,
                                     width,
                                     logDetail,
-                                    node.height  // 传入历史高度进行智能验证
+                                    node.height,  // 传入历史高度进行智能验证
+                                    heightMeta    // 传入元数据以检查可信历史值
                                 );
                                 newHeight = heightInfo.height;
 
-                                // 统计来源（file-trusted 单独统计）
+                                // 统计来源（增加 trusted-history）
                                 if (heightInfo.source === 'dom') sourceDomCount++;
                                 else if (heightInfo.source === 'rendered') sourceRenderedCount++;
                                 else if (heightInfo.source === 'zero-dom') sourceZeroDomCount++;
                                 else if (heightInfo.source === 'file-trusted') sourceFileTrustedCount++;
+                                else if (heightInfo.source === 'trusted-history') sourceFileTrustedCount++; // 归入 file-trusted 统计
                                 else sourceEstimateCount++;
 
                                 if (sourceSampleCount < 8 && Math.abs(heightInfo.height - (node.height ?? 0)) > 1) {
@@ -306,18 +308,25 @@ export class CanvasNodeManager {
                                     sourceSampleCount++;
                                 }
                                 
-                                // 更新元数据（简化版）
-                                if (!node.data || typeof node.data !== 'object') {
-                                    node.data = {};
-                                }
-                                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+                                // 更新元数据
                                 const signature = getTextSignature(node.text, width);
                                 heightMeta.lastSignature = signature;
                                 heightMeta.lastWidth = width;
                                 heightMeta.lastAutoHeight = newHeight;
                                 heightMeta.manualHeight = false; // SSOT: 移除手动高度概念
-                                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
                                 
+                                // [渐进式策略] 保存可信测量值
+                                if (heightInfo.shouldSaveTrusted) {
+                                    heightMeta.trustedHeight = newHeight;
+                                    heightMeta.trustedSignature = signature;
+                                    heightMeta.trustedTimestamp = Date.now();
+                                    
+                                    if (logDetail) {
+                                        log(`[NodeHeight] 保存可信测量: id=${node.id}, h=${newHeight}, sig=${signature.substring(0, 20)}...`);
+                                    }
+                                }
+                                
+                                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
                             }
 
                             const previousHeight = node.height ?? 0;
@@ -481,5 +490,106 @@ export class CanvasNodeManager {
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {
         return this.nodeHeightService.calculateTextNodeHeight(content, nodeEl, nodeWidthOverride);
+    }
+
+    /**
+     * [渐进式策略] 测量并保存节点的可信高度（在节点失焦时调用）
+     * @param nodeId 节点ID
+     */
+    async measureAndPersistTrustedHeight(nodeId: string): Promise<void> {
+        log(`[Node] measureAndPersistTrustedHeight 被调用, nodeId=${nodeId}`);
+        
+        try {
+            const canvasView = getCanvasView(this.app);
+            const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
+            
+            // 获取DOM节点（必须在视口内）
+            const domNode = canvas?.nodes instanceof Map ? canvas.nodes.get(nodeId) : undefined;
+            if (!domNode?.nodeEl) {
+                log(`[Node] 失焦测量跳过: 节点不在DOM中 ${nodeId}`);
+                return;
+            }
+            
+            // 检查节点是否真的可见（非虚拟化）
+            const isVirtualized = this.isNodeVirtualized(domNode.nodeEl);
+            if (isVirtualized) {
+                log(`[Node] 失焦测量跳过: 节点已虚拟化 ${nodeId}`);
+                return;
+            }
+            
+            if (!domNode.text || domNode.type !== 'text') {
+                log(`[Node] 失焦测量跳过: 非文本节点 ${nodeId}`);
+                return;
+            }
+            
+            // 测量当前高度
+            const width = domNode.width || this.settings.textNodeWidth || 400;
+            const measuredHeight = this.nodeHeightService.calculateTextNodeHeight(domNode.text, domNode.nodeEl, width);
+            
+            if (measuredHeight <= 0) {
+                log(`[Node] 失焦测量失败: 测量高度为0 ${nodeId}`);
+                return;
+            }
+            
+            log(`[Node] 失焦测量成功: id=${nodeId}, h=${measuredHeight}`);
+            
+            // 持久化到文件
+            const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
+            if (!canvasFilePath) {
+                log(`[Node] 失焦保存跳过: 找不到Canvas路径`);
+                return;
+            }
+            
+            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
+                if (!canvasData.nodes) return false;
+                
+                const node = canvasData.nodes.find(n => n.id === nodeId);
+                if (!node || !node.text) return false;
+                
+                // 初始化元数据
+                if (!node.data || typeof node.data !== 'object') {
+                    node.data = {};
+                }
+                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+                
+                // 生成签名
+                const signature = this.generateTextSignature(node.text, width);
+                
+                // 保存可信测量值
+                heightMeta.trustedHeight = measuredHeight;
+                heightMeta.trustedSignature = signature;
+                heightMeta.trustedTimestamp = Date.now();
+                heightMeta.lastWidth = width;
+                heightMeta.lastAutoHeight = measuredHeight;
+                
+                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
+                
+                // 同时更新node.height
+                const changed = node.height !== measuredHeight;
+                if (changed) {
+                    node.height = measuredHeight;
+                    log(`[Node] 失焦保存: id=${nodeId}, ${node.height}->${measuredHeight}`);
+                }
+                
+                return changed;
+            });
+            
+        } catch (err) {
+            log(`[Node] 失焦测量异常: ${err}`);
+        }
+    }
+
+    private isNodeVirtualized(nodeEl: Element): boolean {
+        const el = nodeEl as HTMLElement;
+        const rectHeight = el.getBoundingClientRect().height;
+        return rectHeight === 0 && el.offsetHeight === 0 && el.clientHeight === 0 && el.scrollHeight === 0;
+    }
+
+    private generateTextSignature(content: string, width: number): string {
+        let hash = 0;
+        for (let i = 0; i < content.length; i++) {
+            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
+        }
+        return `${content.length}:${hash}:${width}`;
     }
 }

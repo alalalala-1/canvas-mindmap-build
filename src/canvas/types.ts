@@ -9,6 +9,7 @@ import type { CollapseStateManager } from '../state/collapse-state';
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): Promise<void>;
     adjustNodeHeightAfterRender(nodeId: string): Promise<void>;
+    measureAndPersistTrustedHeight(nodeId: string): Promise<void>;
     toggleNodeCollapse(nodeId: string): Promise<void>;
     syncHiddenChildrenOnDrag(node: CanvasNodeLike): Promise<void>;
     calculateTextNodeHeight(content: string, nodeEl?: Element): number;
@@ -16,6 +17,9 @@ export interface ICanvasManager {
     handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     validateAndRepairNodeHeights(file: TFile): Promise<void>;
+    // 删除操作标志控制（防止删边后被误判为新边）
+    startDeletingOperation(): void;
+    endDeletingOperation(canvas: CanvasLike | null): void;
 }
 
 export interface FromLink {
@@ -71,6 +75,11 @@ export type HeightMeta = {
     lastWidth?: number;
     lastAutoHeight?: number;
     manualHeight?: boolean;
+    
+    // === 渐进式可信测量字段 ===
+    trustedHeight?: number;         // 可信测量高度（DOM完全可见时测得）
+    trustedTimestamp?: number;      // 可信测量时间戳
+    trustedSignature?: string;      // 可信测量时的内容指纹（内容+宽度）
 };
 
 export type FloatingNodeMetadata = {

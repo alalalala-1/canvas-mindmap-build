@@ -4,7 +4,7 @@ import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeService } from './floating-node-service';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
-import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId, reloadCanvas, getSelectedEdge } from '../../utils/canvas-utils';
+import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId, getSelectedEdge } from '../../utils/canvas-utils';
 import { CanvasLike, CanvasEdgeLike, ICanvasManager, CanvasViewLike } from '../types';
 
 export class EdgeDeletionService {
@@ -46,14 +46,14 @@ export class EdgeDeletionService {
             new Notice('Canvas 未初始化');
             return;
         }
-        
+
         const edge = getSelectedEdge(canvas);
 
         if (!edge) {
             new Notice('未选中边');
             return;
         }
-        
+
         await this.deleteEdge(edge, canvas);
     }
 
@@ -61,49 +61,46 @@ export class EdgeDeletionService {
         try {
             const parentNodeId = getEdgeFromNodeId(edge);
             const childNodeId = getEdgeToNodeId(edge);
-            
+
             log(`[EdgeDelete] 边: ${parentNodeId} -> ${childNodeId}`);
 
             const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
             if (!canvasFilePath) return;
 
+            // 开始删除操作，暂停新边检测
+            this.canvasManager?.startDeletingOperation();
+
+            // 核心修复：调用 Canvas 的原生删除机制
+            const nativeDeleteSuccess = this.triggerNativeEdgeDelete(edge, canvas);
+            log(`[EdgeDelete] 原生删除: ${nativeDeleteSuccess ? '成功' : '失败，使用兜底方案'}`);
+
+            // 兜底方案：手动删除边数据
             let hasOtherIncomingEdges = false;
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 if (!canvasData.edges) return false;
-                
+
                 const originalEdgeCount = canvasData.edges.length;
                 canvasData.edges = canvasData.edges.filter((e) => {
                     const fromId = getEdgeFromNodeId(e);
                     const toId = getEdgeToNodeId(e);
                     return !(fromId === parentNodeId && toId === childNodeId);
                 });
-                
+
                 hasOtherIncomingEdges = canvasData.edges.some((e) => {
                     return getEdgeToNodeId(e) === childNodeId;
                 });
-                
+
                 return canvasData.edges.length !== originalEdgeCount;
             });
 
-            if (canvas.edges && edge?.id) {
-                const edgeId = edge.id;
-                if (canvas.edges instanceof Map && canvas.edges.has(edgeId)) {
-                    canvas.edges.delete(edgeId);
-                }
-                if (canvas.selectedEdge === edge) {
-                    (canvas as { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = null;
-                }
-                if (canvas.selectedEdges) {
-                    const index = canvas.selectedEdges.indexOf(edge);
-                    if (index > -1) {
-                        canvas.selectedEdges.splice(index, 1);
-                    }
-                }
+            // 如果原生删除失败，手动清理 Canvas 内存中的边
+            if (!nativeDeleteSuccess) {
+                this.manualCleanupEdge(edge, canvas, parentNodeId, childNodeId);
             }
 
             if (childNodeId && parentNodeId && !hasOtherIncomingEdges) {
                 log(`[EdgeDelete] 孤立: ${childNodeId}`);
-                
+
                 const subtreeIds: string[] = [];
                 if (canvas.nodes && canvas.edges) {
                     const childrenMap = new Map<string, string[]>();
@@ -112,7 +109,7 @@ export class EdgeDeletionService {
                         : Array.isArray(canvas.edges)
                             ? canvas.edges
                             : [];
-                    
+
                     for (const e of edgesArray) {
                         const f = getEdgeFromNodeId(e);
                         const t = getEdgeToNodeId(e);
@@ -134,13 +131,15 @@ export class EdgeDeletionService {
                     collectSubtree(childNodeId);
                 }
 
+                // 修复：不再调用 initialize()，直接标记浮动节点
+                // initialize() 会触发 reapplyAllFloatingStyles() 导致与其他操作冲突
                 this.floatingNodeService.removeFromRecentConnected(childNodeId);
-                await this.floatingNodeService.initialize(canvasFilePath, canvas);
-                await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds);
+                await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds, true);
             }
 
-            reloadCanvas(canvas);
-            
+            // 结束删除操作，恢复新边检测并更新边快照
+            this.canvasManager?.endDeletingOperation(canvas);
+
             setTimeout(() => {
                 if (this.canvasManager) {
                     log(`[EdgeDelete] 刷新折叠按钮`);
@@ -149,6 +148,139 @@ export class EdgeDeletionService {
             }, CONSTANTS.TIMING.STYLE_APPLY_DELAY);
         } catch (err) {
             log(`[EdgeDelete] 失败`, err);
+            this.canvasManager?.endDeletingOperation(canvas);
+        }
+    }
+
+    /**
+     * 触发 Canvas 的原生边删除机制
+     */
+    private triggerNativeEdgeDelete(edge: CanvasEdgeLike, canvas: CanvasLike): boolean {
+        try {
+            const canvasAny = canvas as CanvasLike & {
+                removeEdge?: (edge: CanvasEdgeLike) => void;
+                deleteEdge?: (edge: CanvasEdgeLike) => void;
+                removeSelection?: () => void;
+            };
+
+            if (typeof canvasAny.removeEdge === 'function') {
+                canvasAny.removeEdge(edge);
+                log(`[EdgeDelete] 使用 canvas.removeEdge`);
+                return true;
+            }
+
+            if (typeof canvasAny.deleteEdge === 'function') {
+                canvasAny.deleteEdge(edge);
+                log(`[EdgeDelete] 使用 canvas.deleteEdge`);
+                return true;
+            }
+
+            if (typeof canvasAny.removeSelection === 'function') {
+                const selection = canvas.selection as Set<unknown> | undefined;
+                if (selection) {
+                    selection.clear();
+                    selection.add(edge);
+                }
+                (canvas as { selectedEdge?: CanvasEdgeLike }).selectedEdge = edge;
+                canvasAny.removeSelection();
+                log(`[EdgeDelete] 使用 canvas.removeSelection`);
+                return true;
+            }
+
+            // 模拟 Delete 键
+            (canvas as { selectedEdge?: CanvasEdgeLike }).selectedEdge = edge;
+            const canvasEl = document.querySelector('.canvas-wrapper') || document.querySelector('.canvas');
+            if (canvasEl) {
+                const deleteEvent = new KeyboardEvent('keydown', {
+                    key: 'Delete',
+                    code: 'Delete',
+                    keyCode: 46,
+                    bubbles: true,
+                    cancelable: true
+                });
+                canvasEl.dispatchEvent(deleteEvent);
+                log(`[EdgeDelete] 模拟 Delete 键`);
+            }
+
+            return false;
+        } catch (err) {
+            log(`[EdgeDelete] 原生删除异常`, err);
+            return false;
+        }
+    }
+
+    /**
+     * 兜底清理逻辑：手动清理 Canvas 内存和 DOM
+     */
+    private manualCleanupEdge(
+        edge: CanvasEdgeLike,
+        canvas: CanvasLike,
+        parentNodeId: string | null,
+        childNodeId: string | null
+    ): void {
+        try {
+            if (canvas.edges && edge?.id) {
+                const edgeId = edge.id;
+                if (canvas.edges instanceof Map && canvas.edges.has(edgeId)) {
+                    canvas.edges.delete(edgeId);
+                }
+                if (canvas.selectedEdge === edge) {
+                    (canvas as { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = null;
+                }
+                if (canvas.selectedEdges) {
+                    const index = canvas.selectedEdges.indexOf(edge);
+                    if (index > -1) {
+                        canvas.selectedEdges.splice(index, 1);
+                    }
+                }
+
+                this.removeEdgeDomElements(edge);
+            }
+
+            if (canvas.fileData?.edges && parentNodeId && childNodeId) {
+                canvas.fileData.edges = canvas.fileData.edges.filter((e) => {
+                    const fromId = getEdgeFromNodeId(e);
+                    const toId = getEdgeToNodeId(e);
+                    return !(fromId === parentNodeId && toId === childNodeId);
+                });
+            }
+
+            // [修复] 关键步骤：强制 Canvas 重新渲染
+            // 如果不调用 requestUpdate，Canvas 可能会缓存旧的边数据，
+            // 下次渲染时重新创建已删除边的 DOM 元素
+            if (typeof canvas.requestUpdate === 'function') {
+                log(`[EdgeDelete] 触发 canvas.requestUpdate() 强制重新渲染`);
+                canvas.requestUpdate();
+            } else if (typeof canvas.requestSave === 'function') {
+                log(`[EdgeDelete] 触发 canvas.requestSave() 保存状态`);
+                canvas.requestSave();
+            }
+        } catch (err) {
+            log(`[EdgeDelete] 兜底清理失败`, err);
+        }
+    }
+
+    /**
+     * 移除边的 DOM 元素
+     */
+    private removeEdgeDomElements(edge: CanvasEdgeLike): void {
+        try {
+            if (edge.lineGroupEl) {
+                edge.lineGroupEl.remove();
+                log(`[EdgeDelete] 移除 lineGroupEl`);
+            }
+
+            const edgeAny = edge as CanvasEdgeLike & {
+                lineEl?: HTMLElement;
+                labelEl?: HTMLElement;
+                wrapperEl?: HTMLElement;
+            };
+
+            if (edgeAny.lineEl) edgeAny.lineEl.remove();
+            if (edgeAny.labelEl) edgeAny.labelEl.remove();
+            if (edgeAny.wrapperEl) edgeAny.wrapperEl.remove();
+        } catch (err) {
+            log(`[EdgeDelete] 移除 DOM 失败`, err);
         }
     }
 }

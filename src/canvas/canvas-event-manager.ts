@@ -45,6 +45,7 @@ export class CanvasEventManager {
     private canvasManager: CanvasManager;
     private canvasFileService: CanvasFileService;
     private mutationObserver: MutationObserver | null = null;
+    private focusMutationObserver: MutationObserver | null = null;
     private clickDebounceMap = new Map<string, number>();
     private mutationObserverRetryCount = 0;
     private readonly MAX_MUTATION_OBSERVER_RETRIES = 10;
@@ -53,6 +54,9 @@ export class CanvasEventManager {
     private currentCanvasFilePath: string | null = null;
     private lastEdgeIds: Set<string> = new Set();
     private canvasFileModifyTimeoutId: number | null = null;
+    private focusLostDebounceId: number | null = null;
+    private lastFocusedNodeId: string | null = null;
+    private isDeleting: boolean = false;
 
     constructor(
         plugin: Plugin,
@@ -360,6 +364,13 @@ export class CanvasEventManager {
 
     private async handleCanvasFileModified(filePath: string): Promise<void> {
         log(`[Event] Canvas 文件变更: ${filePath}`);
+        
+        // 如果正在执行删除操作，跳过新边检测（防止删边后被误判为新边）
+        if (this.isDeleting) {
+            log(`[Event] 跳过新边检测（正在删除操作中）`);
+            return;
+        }
+        
         const data = await this.canvasFileService.readCanvasData(filePath);
         if (!data) {
             log(`[Event] Canvas 文件读取失败: ${filePath}`);
@@ -515,12 +526,95 @@ export class CanvasEventManager {
         this.mutationObserver.observe(canvasWrapper, { childList: true, subtree: true });
         this.isObserverSetup = true;
         this.plugin.register(() => this.mutationObserver?.disconnect());
+
+        this.setupFocusMutationObserver(canvasWrapper);
+    }
+
+    private setupFocusMutationObserver(canvasWrapper: Element): void {
+        if (this.focusMutationObserver) return;
+
+        this.focusMutationObserver = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type !== 'attributes' || mutation.attributeName !== 'class') continue;
+
+                const target = mutation.target as HTMLElement;
+                if (!target?.classList?.contains('canvas-node')) continue;
+
+                const hasFocus = target.classList.contains('is-focused') || target.classList.contains('is-editing');
+
+                if (hasFocus) {
+                    this.lastFocusedNodeId = this.extractNodeIdFromElement(target);
+                    continue;
+                }
+
+                const nodeId = this.extractNodeIdFromElement(target) || this.lastFocusedNodeId;
+                if (!nodeId) continue;
+
+                this.lastFocusedNodeId = null;
+
+                if (this.focusLostDebounceId !== null) {
+                    window.clearTimeout(this.focusLostDebounceId);
+                }
+
+                this.focusLostDebounceId = window.setTimeout(() => {
+                    this.focusLostDebounceId = null;
+                    void this.canvasManager.measureAndPersistTrustedHeight(nodeId);
+                }, 500);
+            }
+        });
+
+        this.focusMutationObserver.observe(canvasWrapper, {
+            attributes: true,
+            attributeFilter: ['class'],
+            subtree: true
+        });
+
+        this.plugin.register(() => this.focusMutationObserver?.disconnect());
+    }
+
+    private extractNodeIdFromElement(nodeEl: HTMLElement): string | null {
+        const nodeIdAttr = nodeEl.getAttribute('data-node-id') || nodeEl.getAttribute('data-id');
+        if (nodeIdAttr) return nodeIdAttr;
+
+        const match = nodeEl.id?.match(/node-(.+)/);
+        if (match?.[1]) return match[1];
+
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
+        if (!canvas) return null;
+        const matchedNode = getCanvasNodeByElement(canvas, nodeEl);
+        return matchedNode?.id || null;
     }
     
     // =========================================================================
+    // 删除操作标志控制（防止删边后被误判为新边）
+    // =========================================================================
+    
+    /**
+     * 开始删除操作，暂停新边检测
+     */
+    startDeletingOperation(): void {
+        this.isDeleting = true;
+        log(`[Event] 开始删除操作，暂停新边检测`);
+    }
+
+    /**
+     * 结束删除操作，恢复新边检测并更新边快照
+     */
+    endDeletingOperation(canvas: CanvasLike | null): void {
+        this.isDeleting = false;
+        if (canvas) {
+            const edges = getEdgesFromCanvas(canvas);
+            this.lastEdgeIds = buildEdgeIdSet(edges);
+            log(`[Event] 结束删除操作，更新边快照: edges=${edges.length}`);
+        } else {
+            log(`[Event] 结束删除操作，canvas为空无法更新快照`);
+        }
+    }
+
+    // =========================================================================
     // 辅助方法
     // =========================================================================
-
 
     private getCanvasFromView(view: ItemView): CanvasLike | null {
         return (view as CanvasViewLike).canvas || null;

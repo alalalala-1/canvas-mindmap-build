@@ -27,6 +27,14 @@ export class LayoutDataProvider {
         this.visibilityService = visibilityService;
     }
 
+    private buildTextSignature(content: string, width: number): string {
+        let hash = 0;
+        for (let i = 0; i < content.length; i++) {
+            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
+        }
+        return `${content.length}:${hash}:${width}`;
+    }
+
     /**
      * 获取布局所需的所有数据
      */
@@ -121,6 +129,8 @@ export class LayoutDataProvider {
             let domHeightDiffCount = 0;
             let domHeightDiffSum = 0;
             let domHeightDiffMaxAbs = 0;
+            let trustedHeightUsedCount = 0;
+            let signatureMatchedCount = 0;
             let domHeightZeroEstimatedCount = 0;
             let domHeightZeroEstimatedAppliedCount = 0;
             let domHeightZeroEstimatedSameCount = 0;
@@ -143,6 +153,11 @@ export class LayoutDataProvider {
             const domHeightHiddenSamples: string[] = [];
             const domHeightMissingSamples: string[] = [];
             const heightSamples: Array<{ id: string; height: number }> = [];
+            const trustedHeightSamples: string[] = [];
+            const trustedHeightMismatchSamples: string[] = [];
+            const signatureMatchedSamples: string[] = [];
+            const signatureMismatchSamples: string[] = [];
+            const fileHeightPreferredSamples: string[] = [];
 
             allNodes.forEach((node, id) => {
                 if (visibleNodeIds.has(id)) {
@@ -155,18 +170,50 @@ export class LayoutDataProvider {
                         text: nodeText
                     };
 
-                    const fileHeightValue = typeof fileNode?.height === 'number' ? fileNode.height : 0;
+                    let fileHeightValue = typeof fileNode?.height === 'number' ? fileNode.height : 0;
                     const fileWidthValue = typeof fileNode?.width === 'number' ? fileNode.width : 0;
                     if ((!mergedNode.width || mergedNode.width <= 0) && fileWidthValue > 0) {
                         mergedNode.width = fileWidthValue;
+                    }
+
+                    const nodeType = mergedNode.type;
+                    const isTextNode = !nodeType || nodeType === 'text';
+                    const nodeTextContent = mergedNode.text || '';
+                    const nodeWidthForSignature = typeof mergedNode.width === 'number' && mergedNode.width > 0
+                        ? mergedNode.width
+                        : CONSTANTS.LAYOUT.TEXT_NODE_WIDTH;
+                    const fileHeightMeta = isRecord(fileNode?.data) ? (fileNode?.data as { heightMeta?: { trustedHeight?: number; trustedSignature?: string } }).heightMeta : undefined;
+                    const nodeHeightMeta = isRecord(mergedNode.data) ? (mergedNode.data as { heightMeta?: { trustedHeight?: number; trustedSignature?: string } }).heightMeta : undefined;
+                    const heightMeta = fileHeightMeta || nodeHeightMeta;
+                    let trustedHeightUsed = false;
+                    if (isTextNode && nodeTextContent && heightMeta?.trustedHeight && heightMeta.trustedSignature) {
+                        const currentSignature = this.buildTextSignature(nodeTextContent, nodeWidthForSignature);
+                        if (heightMeta.trustedSignature === currentSignature) {
+                            mergedNode.height = heightMeta.trustedHeight;
+                            fileHeightValue = heightMeta.trustedHeight;
+                            trustedHeightUsed = true;
+                            trustedHeightUsedCount++;
+                            signatureMatchedCount++;
+                            if (trustedHeightSamples.length < 5) {
+                                trustedHeightSamples.push(`${id}:${heightMeta.trustedHeight}`);
+                            }
+                            if (signatureMatchedSamples.length < 5) {
+                                signatureMatchedSamples.push(`${id}:${currentSignature.substring(0, 12)}...`);
+                            }
+                        } else if (trustedHeightMismatchSamples.length < 5) {
+                            trustedHeightMismatchSamples.push(`${id}:metaSig=${heightMeta.trustedSignature.substring(0, 12)}... curSig=${currentSignature.substring(0, 12)}...`);
+                            if (signatureMismatchSamples.length < 5) {
+                                signatureMismatchSamples.push(`${id}:metaSig=${heightMeta.trustedSignature.substring(0, 12)}... curSig=${currentSignature.substring(0, 12)}...`);
+                            }
+                        }
                     }
 
                     // [修复] 优先使用文件高度：height服务最后更新了文件，内存节点的height可能是stale旧值
                     // 场景：adjustAllTextNodeHeights写入文件但内存节点height字段未同步（或同步被覆盖）
                     const memoryHeightRaw = typeof node?.height === 'number' ? node.height : 0;
                     if (fileHeightValue > 0) {
-                        if (Math.abs(fileHeightValue - memoryHeightRaw) > 1) {
-                            log(`[LayoutData] 文件高度优先: id=${id}, fileH=${fileHeightValue.toFixed(0)}, memH=${memoryHeightRaw.toFixed(0)}, diff=${(fileHeightValue - memoryHeightRaw).toFixed(0)}`);
+                        if (Math.abs(fileHeightValue - memoryHeightRaw) > 1 && fileHeightPreferredSamples.length < 5) {
+                            fileHeightPreferredSamples.push(`${id}:${fileHeightValue.toFixed(0)}<-mem${memoryHeightRaw.toFixed(0)}`);
                         }
                         mergedNode.height = fileHeightValue;
                     }
@@ -210,8 +257,8 @@ export class LayoutDataProvider {
                             const pElDiag = contentElDiag?.querySelector('p') as HTMLElement | null;
                             const pScrollHDiag = pElDiag?.scrollHeight || 0;
                             const pClientHDiag = pElDiag?.clientHeight || 0;
-                            if (logDetail) {
-                                log(`[LayoutData.perNode] id=${id} fileH=${fileHeightValue} memH=${dataHeight} rectH=${rectHeight.toFixed(1)} offsetH=${offsetHeight} clientH=${clientHeight} scale=${scale.toFixed(3)} domH=${domHeight.toFixed(1)} sizer.minH=${sizerMinHDiag} sizer.scrollH=${sizerScrollHDiag} p.scrollH=${pScrollHDiag} p.clientH=${pClientHDiag}`);
+                            if (logDetail && domHeight <= 0 && domHeightZeroSamples.length < 3) {
+                                log(`[LayoutData] DOM0详情: id=${id}, fileH=${fileHeightValue.toFixed(1)}, rectH=${rectHeight.toFixed(1)}, offsetH=${offsetHeight}, clientH=${clientHeight}, scale=${scale.toFixed(3)}, sizer.minH=${sizerMinHDiag}, sizer.scrollH=${sizerScrollHDiag}`);
                             }
 
                             if (domHeight && domHeight > 0) {
@@ -329,9 +376,10 @@ export class LayoutDataProvider {
                                         textLength
                                     });
                                 }
-                                const nodeType = mergedNode.type;
-                                const isTextNode = !nodeType || nodeType === 'text';
                                 if (isTextNode) {
+                                    if (trustedHeightUsed) {
+                                        domHeightZeroResolvedByDataCount++;
+                                    } else {
                                     const content = mergedNode.text || '';
                                     const width = typeof mergedNode.width === 'number' && mergedNode.width > 0
                                         ? mergedNode.width
@@ -352,6 +400,7 @@ export class LayoutDataProvider {
                                         mergedNode.height = estimatedHeight;
                                         domHeightZeroResolvedByEstimateCount++;
                                     }
+                                    }
                                 } else if (fileHeightValue > 0) {
                                     mergedNode.height = fileHeightValue;
                                     if (domHeightZeroDetailSamples.length < 10) {
@@ -369,6 +418,9 @@ export class LayoutDataProvider {
                         const nodeType = mergedNode.type;
                         const isTextNode = !nodeType || nodeType === 'text';
                         if (isTextNode) {
+                            if (trustedHeightUsed) {
+                                domHeightMissingResolvedByDataCount++;
+                            } else {
                             const content = mergedNode.text || '';
                             const width = typeof mergedNode.width === 'number' && mergedNode.width > 0
                                 ? mergedNode.width
@@ -388,6 +440,7 @@ export class LayoutDataProvider {
                                 // 使用估算值
                                 mergedNode.height = estimatedHeight;
                                 domHeightMissingResolvedByEstimateCount++;
+                            }
                             }
                         } else if (fileHeightValue > 0) {
                             mergedNode.height = fileHeightValue;
@@ -435,7 +488,14 @@ export class LayoutDataProvider {
                 domHeightZeroOverrideCount,
                 domHeightMissingResolvedByEstimateCount,
                 domHeightMissingResolvedByDataCount,
-                domHeightMissingOverrideCount
+                domHeightMissingOverrideCount,
+                trustedHeightUsedCount,
+                trustedHeightSamples,
+                trustedHeightMismatchSamples,
+                signatureMatchedCount,
+                signatureMatchedSamples,
+                signatureMismatchSamples,
+                fileHeightPreferredSamples
             };
         };
 
@@ -476,7 +536,14 @@ export class LayoutDataProvider {
             domHeightZeroOverrideCount,
             domHeightMissingResolvedByEstimateCount,
             domHeightMissingResolvedByDataCount,
-            domHeightMissingOverrideCount
+            domHeightMissingOverrideCount,
+            trustedHeightUsedCount,
+            trustedHeightSamples,
+            trustedHeightMismatchSamples,
+            signatureMatchedCount,
+            signatureMatchedSamples,
+            signatureMismatchSamples,
+            fileHeightPreferredSamples
         } = measureResult;
 
         if (visibleCount > 0) {
@@ -487,7 +554,19 @@ export class LayoutDataProvider {
             const zeroHeightCount = heights.filter(h => h <= 0).length;
             const avgHeight = heightSum / heights.length;
             log(`[LayoutData] 高度统计 count=${visibleCount}, min=${heightMin.toFixed(1)}, max=${heightMax.toFixed(1)}, avg=${avgHeight.toFixed(1)}, zero=${zeroHeightCount}, dom覆盖=${domHeightAppliedCount}, 无元素=${domHeightMissingElCount}, 隐藏=${domHeightHiddenCount}, 0高=${domHeightZeroCount}`);
-            log(`[LayoutData] 高度来源 file=${dataHeightFromFileCount}, memory=${dataHeightFromMemoryCount}, missing=${dataHeightMissingCount}`);
+            log(`[LayoutData] 高度来源 file=${dataHeightFromFileCount}, memory=${dataHeightFromMemoryCount}, missing=${dataHeightMissingCount}, trusted=${trustedHeightUsedCount}, sigMatch=${signatureMatchedCount}`);
+            if (trustedHeightUsedCount > 0) {
+                log(`[LayoutData] trustedHeight样例: ${trustedHeightSamples.join('|')}`);
+            }
+            if (signatureMatchedSamples.length > 0) {
+                log(`[LayoutData] trusted签名匹配样例: ${signatureMatchedSamples.join('|')}`);
+            }
+            if (signatureMismatchSamples.length > 0) {
+                log(`[LayoutData] trusted签名不匹配样例: ${signatureMismatchSamples.join('|')}`);
+            }
+            if (fileHeightPreferredSamples.length > 0) {
+                log(`[LayoutData] 文件高度优先样例: ${fileHeightPreferredSamples.join('|')}`);
+            }
             if (domHeightDiffCount > 0) {
                 const avgDiff = domHeightDiffSum / domHeightDiffCount;
                 const sample = domHeightDiffSamples.map(s => `${s.id}:${s.dataHeight}->${s.domHeight} rect=${s.rect.toFixed(1)} client=${s.client} scroll=${s.scroll} offset=${s.offset}`).join('|');

@@ -199,7 +199,7 @@ export class LayoutManager {
             requestAnimationFrame(() => resolve());
         });
         const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
-        log(`[Layout] PreAdjustWait: id=${contextId || 'none'}`);
+        log(`[Layout] PreAdjustWait: id=${contextId || 'none'}, adjusted=${adjustedCount}`);
         await new Promise<void>((resolve) => {
             requestAnimationFrame(() => {
                 window.setTimeout(() => resolve(), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
@@ -250,22 +250,18 @@ export class LayoutManager {
 
             log(`[Layout] ArrangeStart: id=${arrangeId}, visible=${visibleNodes.size}, all=${allNodes.size}, edges=${edges.length}, originalEdges=${originalEdges.length}, file=${canvasFilePath || 'unknown'}`);
             log(`[Layout] ArrangeData: id=${arrangeId}, canvasNodes=${canvasData?.nodes?.length || 0}, canvasEdges=${canvasData?.edges?.length || 0}`);
-
-            // === 补充详细诊断日志：布局前的节点和边状态 ===
-            if (canvasData?.nodes) {
-                const nodeSamples = canvasData.nodes.slice(0, 5).map(n => {
-                    const dataStr = n.data ? JSON.stringify(n.data).substring(0, 50) : 'none';
-                    return `${n.id}: x=${n.x}, y=${n.y}, w=${n.width}, h=${n.height}, data=${dataStr}`;
-                });
-                log(`[Layout.Diag] 布局前节点状态(前5个): ${nodeSamples.join(' | ')}`);
+            if (canvasData?.nodes?.length) {
+                const nodeSamples = canvasData.nodes.slice(0, 3).map(n => `${n.id}:x=${n.x},y=${n.y},w=${n.width},h=${n.height}`);
+                log(`[Layout] ArrangeSample(before): ${nodeSamples.join(' | ')}`);
             }
-            if (canvasData?.edges) {
-                const edgeSamples = canvasData.edges.slice(0, 5).map(e => {
-                    return `${e.id}: ${e.fromNode}(${e.fromSide})->${e.toNode}(${e.toSide}), fromEnd=${e.fromEnd}, toEnd=${e.toEnd}`;
+            if (canvasData?.edges?.length) {
+                const edgeSamples = canvasData.edges.slice(0, 3).map(e => {
+                    const fromId = e.fromNode || this.toStringId(getNodeIdFromEdgeEndpoint(e.from)) || 'unknown';
+                    const toId = e.toNode || this.toStringId(getNodeIdFromEdgeEndpoint(e.to)) || 'unknown';
+                    return `${e.id || 'edge'}:${fromId}->${toId}`;
                 });
-                log(`[Layout.Diag] 布局前边状态(前5个): ${edgeSamples.join(' | ')}`);
+                log(`[Layout] ArrangeEdges(before): ${edgeSamples.join(' | ')}`);
             }
-            // ==========================================
 
             const result = originalArrangeLayout(
                 visibleNodes,
@@ -308,57 +304,22 @@ export class LayoutManager {
             if (success) {
                 updatedCount = await this.updateNodePositions(result, allNodes, canvas, arrangeId);
 
-                // === 补充详细诊断日志：布局后的边状态 ===
-                // 延迟一点时间，等待 Canvas 引擎完成 DOM 更新
                 setTimeout(() => {
                     const memoryEdgesAfter = this.getCanvasEdges(canvas);
-                    const edgeSamplesAfter = memoryEdgesAfter.slice(0, 5).map(e => {
-                        const fromId = this.toStringId(e.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.from));
-                        const toId = this.toStringId(e.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.to));
-                        const fromSide = this.toStringId(e.fromSide) || (isRecord(e.from) ? this.toStringId(e.from.side) : undefined);
-                        const toSide = this.toStringId(e.toSide) || (isRecord(e.to) ? this.toStringId(e.to.side) : undefined);
-
-                        // 尝试获取 SVG path 数据
-                        let pathData = 'none';
-                        let bboxData = 'none';
-
-                        // Obsidian Canvas 内部的 edge 对象通常有 bbox 属性
-                        if ((e as any).bbox) {
-                            const b = (e as any).bbox;
-                            bboxData = `bbox(${b.minX?.toFixed(1)},${b.minY?.toFixed(1)}->${b.maxX?.toFixed(1)},${b.maxY?.toFixed(1)})`;
-                        }
-
-                        if (e.lineGroupEl) {
-                            // Obsidian Canvas 的边通常是一个 path 元素
-                            const pathEl = e.lineGroupEl.querySelector('path');
-                            if (pathEl) {
-                                pathData = pathEl.getAttribute('d') || 'empty';
-                            }
-                        }
-
-                        return `${e.id}: ${fromId}(${fromSide})->${toId}(${toSide}), ${bboxData}, path=${pathData.substring(0, 30)}...`;
+                    const edgeSamplesAfter = memoryEdgesAfter.slice(0, 3).map(e => {
+                        const fromId = this.toStringId(e.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.from)) || 'unknown';
+                        const toId = this.toStringId(e.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.to)) || 'unknown';
+                        return `${e.id || 'edge'}:${fromId}->${toId}`;
                     });
-                    log(`[Layout.Diag] 布局后内存边状态(前5个): ${edgeSamplesAfter.join(' | ')}`);
+                    log(`[Layout] ArrangeEdges(after): ${edgeSamplesAfter.join(' | ')}`);
 
-                    // 打印几个节点的实际 DOM 坐标
                     const nodeSamplesAfter = Array.from(allNodes.values()).slice(0, 3).map(n => {
-                        let rectStr = 'none';
-                        let bboxStr = 'none';
-
-                        if ((n as any).bbox) {
-                            const b = (n as any).bbox;
-                            bboxStr = `bbox(${b.minX?.toFixed(1)},${b.minY?.toFixed(1)}->${b.maxX?.toFixed(1)},${b.maxY?.toFixed(1)})`;
-                        }
-
-                        if (n.nodeEl && n.nodeEl instanceof HTMLElement) {
-                            const rect = n.nodeEl.getBoundingClientRect();
-                            rectStr = `rect(x=${rect.x.toFixed(1)},y=${rect.y.toFixed(1)},w=${rect.width.toFixed(1)},h=${rect.height.toFixed(1)})`;
-                        }
-                        return `${n.id}: x=${n.x}, y=${n.y}, w=${n.width}, h=${n.height}, ${bboxStr}, ${rectStr}`;
+                        const bbox = (n as any).bbox;
+                        const bboxStr = bbox ? `bbox(${bbox.minX?.toFixed(1)},${bbox.minY?.toFixed(1)}->${bbox.maxX?.toFixed(1)},${bbox.maxY?.toFixed(1)})` : 'bbox=none';
+                        return `${n.id}:x=${n.x},y=${n.y},w=${n.width},h=${n.height},${bboxStr}`;
                     });
-                    log(`[Layout.Diag] 布局后节点DOM状态(前3个): ${nodeSamplesAfter.join(' | ')}`);
-                }, 350); // 等待最后一次重绘完成
-                // ==========================================
+                    log(`[Layout] ArrangeSample(after): ${nodeSamplesAfter.join(' | ')}`);
+                }, 300);
             }
 
             await this.cleanupStaleFloatingNodes(canvas, allNodes);

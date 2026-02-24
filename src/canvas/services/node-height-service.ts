@@ -38,7 +38,7 @@ export class NodeHeightService {
         const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
 
         if (nodeEl && this.isZeroSizedNode(nodeEl, true)) {
-            log(`[NodeHeight] calculateTextNodeHeight: nodeEl存在但zero-sized, 使用estimated=${estimatedHeight}`);
+            log(`[NodeHeight] calculateTextNodeHeight: zero-sized, estimated=${estimatedHeight}`);
             return estimatedHeight;
         }
 
@@ -47,12 +47,12 @@ export class NodeHeightService {
             if (measuredHeight > 0) {
                 // [修复] 直接使用DOM测量值，不做reconcile
                 const final = Math.min(measuredHeight, maxHeight);
-                log(`[NodeHeight] calculateTextNodeHeight: estimated=${estimatedHeight}, measured=${measuredHeight}, final=${final}`);
+                log(`[NodeHeight] calculateTextNodeHeight: measured=${measuredHeight}, final=${final}`);
                 return final;
             }
         }
 
-        log(`[NodeHeight] calculateTextNodeHeight: 无DOM测量, 使用estimated=${estimatedHeight}`);
+        log(`[NodeHeight] calculateTextNodeHeight: no-dom, estimated=${estimatedHeight}`);
         return estimatedHeight;
     }
 
@@ -66,13 +66,17 @@ export class NodeHeightService {
         nodeEl?: Element,
         nodeWidthOverride?: number,
         logDetail: boolean = false,
-        fileHeight?: number
-    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'file-trusted'; estimated: number }> {
+        fileHeight?: number,
+        heightMeta?: { trustedHeight?: number; trustedSignature?: string; trustedTimestamp?: number }
+    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'file-trusted' | 'trusted-history'; estimated: number; shouldSaveTrusted?: boolean }> {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
             ? nodeWidthOverride
             : (this.settings.textNodeWidth || 400);
         const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
+
+        // 生成当前内容签名
+        const currentSignature = this.generateContentSignature(content, fallbackWidth);
 
         if (!nodeEl) {
             return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
@@ -81,23 +85,31 @@ export class NodeHeightService {
         // [关键修复] 提前判断虚拟化状态
         const isVirtualized = this.isZeroSizedNode(nodeEl, false);
         
-        // [路径1] 虚拟化节点：优先使用历史数据验证策略
+        // [路径0] 最高优先级：可信历史值（内容未变化时）
+        if (heightMeta?.trustedHeight && heightMeta.trustedSignature === currentSignature) {
+            const final = Math.min(heightMeta.trustedHeight, maxHeight);
+            if (logDetail) {
+                log(`[NodeHeight] trusted-history: trusted=${heightMeta.trustedHeight}, final=${final}`);
+            }
+            return { height: final, source: 'trusted-history', estimated: estimatedHeight };
+        }
+        
+        // [路径1] 虚拟化节点：使用一般历史数据验证策略（降低阈值到30%）
         if (isVirtualized && fileHeight && fileHeight > 0) {
             const ratio = Math.abs(fileHeight - estimatedHeight) / estimatedHeight;
             
-            // 差异小于50%，直接信任历史数据，跳过DOM测量
-            // [方案B] 提高阈值以减少频繁重测量和振荡
-            if (ratio < 0.5) {
+            // 差异小于30%，信任历史数据（从50%降到30%以减少振荡）
+            if (ratio < 0.3) {
                 const final = Math.min(fileHeight, maxHeight);
                 if (logDetail) {
-                    log(`[NodeHeight] 虚拟化节点信任历史: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%, final=${final}`);
+                    log(`[NodeHeight] virtualized-trust: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%, final=${final}`);
                 }
                 return { height: final, source: 'file-trusted', estimated: estimatedHeight };
             }
             
-            // 差异较大（50%+），记录并继续验证
+            // 差异较大（30%+），记录并继续验证
             if (logDetail) {
-                log(`[NodeHeight] 虚拟化节点差异大，需验证: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%`);
+                log(`[NodeHeight] virtualized-diff: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%`);
             }
         }
         
@@ -106,7 +118,15 @@ export class NodeHeightService {
         if (measuredHeight > 0) {
             const final = Math.min(measuredHeight, maxHeight);
             const source = isVirtualized ? 'rendered' : 'dom';
-            return { height: final, source, estimated: estimatedHeight };
+            
+            // [渐进式策略] 非虚拟化节点的DOM测量是高可信的，标记应该保存
+            const shouldSaveTrusted = !isVirtualized;
+            
+            if (logDetail && shouldSaveTrusted) {
+                log(`[NodeHeight] dom-trusted: measured=${measuredHeight}, final=${final}`);
+            }
+            
+            return { height: final, source, estimated: estimatedHeight, shouldSaveTrusted };
         }
 
         // [路径3] DOM测量失败，尝试离屏渲染
@@ -121,7 +141,7 @@ export class NodeHeightService {
             if (fileHeight && fileHeight > 0) {
                 const final = Math.min(fileHeight, maxHeight);
                 if (logDetail) {
-                    log(`[NodeHeight] 离屏渲染失败，回退历史: file=${fileHeight}, final=${final}`);
+                    log(`[NodeHeight] rendered-fallback: file=${fileHeight}, final=${final}`);
                 }
                 return { height: final, source: 'file-trusted', estimated: estimatedHeight };
             }
@@ -138,6 +158,17 @@ export class NodeHeightService {
         }
 
         return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
+    }
+
+    /**
+     * 生成内容签名（用于检测内容是否变化）
+     */
+    private generateContentSignature(content: string, width: number): string {
+        let hash = 0;
+        for (let i = 0; i < content.length; i++) {
+            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
+        }
+        return `${content.length}:${hash}:${width}`;
     }
 
     /**
@@ -206,46 +237,6 @@ export class NodeHeightService {
     private calculateTextNodeHeightComputed(content: string, nodeWidth: number): number {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         return estimateTextNodeHeight(content, nodeWidth, maxHeight);
-    }
-
-    /**
-     * 协调测量值与估算值
-     *
-     * 核心原则：
-     * - 如果 measured < lowerRatio * estimated → 可疑，返回 estimated
-     * - 如果 measured > upperRatio * estimated → 容器被撑大/Canvas minHeight污染，返回 estimated
-     * - 否则 → 信任 measured
-     *
-     * 注意：此函数现在真正使用 lowerRatio 和 upperRatio 参数！
-     */
-    private reconcileMeasuredHeight(
-        measured: number,
-        estimated: number,
-        lowerRatio: number,
-        upperRatio: number,
-        logDetail: boolean = false
-    ): number {
-        if (measured <= 0) {
-            return 0;
-        }
-
-        if (estimated > 0) {
-            const ratio = measured / estimated;
-
-            if (ratio < 0.2) {
-                return estimated;
-            }
-            if (ratio < lowerRatio) {
-                return estimated;
-            }
-            if (ratio > upperRatio) {
-                // 测量值比估算大太多：很可能是容器高度/Canvas minHeight污染
-                // 返回 estimated 防止高度膨胀
-                return estimated;
-            }
-        }
-
-        return measured;
     }
 
     private isZeroSizedNode(nodeEl: Element, logDetail: boolean = false): boolean {
@@ -385,27 +376,13 @@ export class NodeHeightService {
                             const currentHeight = node.height ?? 0;
                             const delta = newHeight - currentHeight;
                             
-                            // 增强日志：显示文本预览、估算vs实测对比
-                            const textPreview = node.text.substring(0, 50).replace(/\n/g, '↵');
-                            const measureSource = nodeEl ? 'DOM测量' : '估算';
-                            
-                            log(`[NodeHeight-SUMMARY] ========================================`);
-                            log(`[NodeHeight-SUMMARY] 节点ID: ${node.id || 'unknown'}`);
-                            log(`[NodeHeight-SUMMARY] 文本预览: "${textPreview}..." (总长度=${node.text.length})`);
-                            log(`[NodeHeight-SUMMARY] 节点宽度: ${nodeWidth}`);
-                            log(`[NodeHeight-SUMMARY] 估算高度: ${estimatedHeight}`);
-                            log(`[NodeHeight-SUMMARY] ${measureSource}高度: ${calculatedHeight}`);
-                            log(`[NodeHeight-SUMMARY] 文件中高度: ${currentHeight}`);
-                            log(`[NodeHeight-SUMMARY] 最终高度: ${newHeight}`);
-                            log(`[NodeHeight-SUMMARY] 变化量: ${delta.toFixed(1)} (${delta > 0 ? '+' : ''}${((delta/currentHeight)*100).toFixed(1)}%)`);
-                            
+                            const measureSource = nodeEl ? 'dom' : 'estimate';
                             if (Math.abs(delta) > 80) {
-                                log(`[NodeHeight-SUMMARY] ⚠️ 高度变化过大！可能存在问题`);
+                                log(`[NodeHeight] large-delta: id=${node.id || 'unknown'}, src=${measureSource}, est=${estimatedHeight}, calc=${calculatedHeight}, file=${currentHeight}, final=${newHeight}, delta=${delta.toFixed(1)}`);
                             }
                             if (newHeight >= maxHeight) {
-                                log(`[NodeHeight-SUMMARY] ⚠️ 达到最大高度限制 ${maxHeight}`);
+                                log(`[NodeHeight] max-cap: id=${node.id || 'unknown'}, final=${newHeight}, cap=${maxHeight}`);
                             }
-                            log(`[NodeHeight-SUMMARY] ========================================`);
                         }
 
                         if (node.height !== newHeight) {

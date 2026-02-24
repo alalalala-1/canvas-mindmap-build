@@ -187,12 +187,14 @@ export class FloatingNodeService {
      * @param originalParentId 原父节点ID
      * @param canvasFilePath 可选，Canvas文件路径。如果不提供，使用当前初始化的路径
      * @param subtreeIds 可选，子树节点ID列表
+     * @param skipCanvasSave 可选，是否跳过 Canvas 的 requestSave（删边时需要跳过，避免将旧缓存写回）
      */
     async markNodeAsFloating(
         nodeId: string,
         originalParentId: string,
         canvasFilePath?: string,
-        subtreeIds: string[] = []
+        subtreeIds: string[] = [],
+        skipCanvasSave: boolean = false
     ): Promise<boolean> {
         this.recentConnectedNodes.delete(nodeId);
         this.clearEdgeWatch(nodeId);
@@ -230,8 +232,11 @@ export class FloatingNodeService {
                 node.data.floatingTimestamp = timestamp;
             }
 
-            if (typeof this.canvas.requestSave === 'function') {
+            // 删边时跳过 requestSave，避免将 Canvas 内部缓存的旧边数据写回文件
+            if (!skipCanvasSave && typeof this.canvas.requestSave === 'function') {
                 this.canvas.requestSave();
+            } else if (skipCanvasSave) {
+                log(`[FloatingNode] 跳过 requestSave（删边模式）`);
             }
         }
 
