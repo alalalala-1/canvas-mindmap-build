@@ -4,6 +4,7 @@ import { CanvasNodeLike, CanvasLike, CanvasViewLike } from '../types';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
+import { generateTextSignature } from '../../utils/height-utils';
 
 export class NodeHeightService {
     private app: App;
@@ -76,7 +77,7 @@ export class NodeHeightService {
         const estimatedHeight = this.calculateTextNodeHeightComputed(content, fallbackWidth);
 
         // 生成当前内容签名
-        const currentSignature = this.generateContentSignature(content, fallbackWidth);
+        const currentSignature = generateTextSignature(content, fallbackWidth);
 
         if (!nodeEl) {
             return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
@@ -158,17 +159,6 @@ export class NodeHeightService {
         }
 
         return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
-    }
-
-    /**
-     * 生成内容签名（用于检测内容是否变化）
-     */
-    private generateContentSignature(content: string, width: number): string {
-        let hash = 0;
-        for (let i = 0; i < content.length; i++) {
-            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
-        }
-        return `${content.length}:${hash}:${width}`;
     }
 
     /**

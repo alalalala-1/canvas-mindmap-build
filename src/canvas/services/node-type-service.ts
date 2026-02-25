@@ -52,14 +52,12 @@ export class NodeTypeService {
 
     /**
      * 检测是否为公式内容
+     * 统一委托给 isFormulaContent（支持 fromLink 注释后缀）
      */
     isFormula(content: string): boolean {
         if (!content) return false;
-        const trimmed = content.trim();
-        return this.settings.enableFormulaDetection &&
-            trimmed.startsWith('$$') &&
-            trimmed.endsWith('$$') &&
-            trimmed.length > 4;
+        if (!this.settings.enableFormulaDetection) return false;
+        return isFormulaContent(content);
     }
 
     /**

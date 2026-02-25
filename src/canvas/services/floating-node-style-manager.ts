@@ -104,9 +104,25 @@ export class FloatingNodeStyleManager {
     }
 
     private clearFloatingStyleRetry(nodeId: string, retryNum: number): void {
-        const cleared = this.removeFloatingClass(nodeId);
-        if (cleared) {
+        // 先检查当前状态，避免无效的 DOM 操作干扰用户交互
+        const nodeEl = this.findNodeElement(nodeId);
+        if (nodeEl) {
+            const hasClass = nodeEl.classList.contains(this.FLOATING_CLASS);
+            log(`[Style] 清除红框重试 #${retryNum}: ${nodeId}, hasClass=${hasClass}`);
+            
+            if (!hasClass) {
+                // 样式已清除，取消后续所有重试，避免干扰用户连线操作
+                this.clearPendingRetries(nodeId);
+                log(`[Style] 样式已清除，取消后续重试: ${nodeId}`);
+                return;
+            }
+            
+            // 只有确实有样式时才执行清除
+            nodeEl.classList.remove(this.FLOATING_CLASS);
+            void nodeEl.offsetHeight;
             log(`[Style] 清除红框 (重试 #${retryNum}): ${nodeId}`);
+        } else {
+            log(`[Style] 清除红框重试 #${retryNum}: ${nodeId}, 节点元素未找到`);
         }
     }
 
@@ -169,7 +185,6 @@ export class FloatingNodeStyleManager {
     }
 
     private removeFloatingClass(nodeId: string): boolean {
-        let cleared = false;
         const nodeEl = this.findNodeElement(nodeId);
         if (nodeEl) {
             const hasClass = nodeEl.classList.contains(this.FLOATING_CLASS);
@@ -177,19 +192,29 @@ export class FloatingNodeStyleManager {
             if (hasClass) {
                 nodeEl.classList.remove(this.FLOATING_CLASS);
                 void nodeEl.offsetHeight;
-                cleared = true;
             }
+            // 无论 hasClass 是 true 还是 false，只要找到节点元素就返回 true
+            // hasClass=false 表示样式已清除，不需要重试
+            return true;
         }
+        
+        // 节点元素未找到，检查是否有重复元素需要清理
         const nodes = document.querySelectorAll(`.canvas-node[data-node-id="${nodeId}"]`);
-        if (nodes.length > 1) {
+        if (nodes.length > 0) {
+            let cleared = false;
             nodes.forEach((node) => {
                 if (node.classList.contains(this.FLOATING_CLASS)) {
                     node.classList.remove(this.FLOATING_CLASS);
                     cleared = true;
                 }
             });
+            log(`[Style] 清除红框(备用查找): ${nodeId}, 找到 ${nodes.length} 个元素, cleared=${cleared}`);
+            // 找到元素就返回 true，避免不必要的重试
+            return true;
         }
-        return cleared;
+        
+        // 真正找不到节点元素，返回 false 触发重试
+        return false;
     }
 
     /**

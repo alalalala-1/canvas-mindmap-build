@@ -23,15 +23,10 @@ export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>
 }
 
 /**
- * 核心日志函数 - 唯一出口
- * 格式：直接输出内容（代码中已有分类前缀如 [Layout]、[Event] 等）
+ * 格式化日志消息数组为字符串
  */
-export function log(...messages: unknown[]): void {
-    if (!isLoggingEnabled) return;
-
-    const seq = ++logSequence;
-    const delta = Date.now() - logStartTime;
-    const body = messages.map(msg => {
+function formatMessages(messages: unknown[]): string {
+    return messages.map(msg => {
         if (msg === null) return 'null';
         if (msg === undefined) return 'undefined';
         if (typeof msg === 'object') {
@@ -52,8 +47,17 @@ export function log(...messages: unknown[]): void {
         if (typeof msg === 'function') return '[Function]';
         return '[Unknown]';
     }).join(' ');
+}
 
-    console.debug(`[${seq}|${delta}ms] ${body}`);
+/**
+ * 核心日志函数 - 唯一出口
+ * 格式：直接输出内容（代码中已有分类前缀如 [Layout]、[Event] 等）
+ */
+export function log(...messages: unknown[]): void {
+    if (!isLoggingEnabled) return;
+    const seq = ++logSequence;
+    const delta = Date.now() - logStartTime;
+    console.debug(`[${seq}|${delta}ms] ${formatMessages(messages)}`);
 }
 
 /**
@@ -61,30 +65,7 @@ export function log(...messages: unknown[]): void {
  * 不受 enableDebugLogging 设置影响
  */
 export function logCritical(...messages: unknown[]): void {
-
     const seq = ++logSequence;
     const delta = Date.now() - logStartTime;
-    const body = messages.map(msg => {
-        if (msg === null) return 'null';
-        if (msg === undefined) return 'undefined';
-        if (typeof msg === 'object') {
-            try {
-                if (msg instanceof Error) {
-                    return `${msg.name}: ${msg.message}\n${msg.stack}`;
-                }
-                return JSON.stringify(msg);
-            } catch {
-                return '[Complex Object]';
-            }
-        }
-        if (typeof msg === 'string') return msg;
-        if (typeof msg === 'number') return String(msg);
-        if (typeof msg === 'boolean') return String(msg);
-        if (typeof msg === 'bigint') return msg.toString();
-        if (typeof msg === 'symbol') return msg.toString();
-        if (typeof msg === 'function') return '[Function]';
-        return '[Unknown]';
-    }).join(' ');
-
-    console.warn(`[${seq}|${delta}ms] ${body}`);
+    console.warn(`[${seq}|${delta}ms] ${formatMessages(messages)}`);
 }

@@ -14,7 +14,44 @@ import {
     getCanvasView,
     getCurrentCanvasFilePath
 } from '../utils/canvas-utils';
+import { generateTextSignature } from '../utils/height-utils';
 import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
+
+/** 高度调整的统计上下文 */
+interface HeightAdjustmentStats {
+    adjustedCount: number;
+    increasedCount: number;
+    decreasedCount: number;
+    cappedCount: number;
+    formulaCount: number;
+    maxIncrease: number;
+    maxDecrease: number;
+    sourceDomCount: number;
+    sourceRenderedCount: number;
+    sourceEstimateCount: number;
+    sourceZeroDomCount: number;
+    sourceFileTrustedCount: number;
+    sourceSamples: string[];
+}
+
+/** 创建空的统计上下文 */
+function createEmptyStats(): HeightAdjustmentStats {
+    return {
+        adjustedCount: 0,
+        increasedCount: 0,
+        decreasedCount: 0,
+        cappedCount: 0,
+        formulaCount: 0,
+        maxIncrease: 0,
+        maxDecrease: 0,
+        sourceDomCount: 0,
+        sourceRenderedCount: 0,
+        sourceEstimateCount: 0,
+        sourceZeroDomCount: 0,
+        sourceFileTrustedCount: 0,
+        sourceSamples: []
+    };
+}
 
 export class CanvasNodeManager {
     private app: App;
@@ -190,220 +227,175 @@ export class CanvasNodeManager {
 
             log(`[Node] 开始批量调整高度: ${canvasFilePath}`);
 
-            let adjustedCount = 0;
-            let increasedCount = 0;
-            let decreasedCount = 0;
-            let cappedCount = 0;
-            let formulaCount = 0;
-            let maxIncrease = 0;
-            let maxDecrease = 0;
-            let missingDomCount = 0;
-            let manualKeepCount = 0;
-            let manualSetCount = 0;
-            let manualResetCount = 0;
-            let sourceDomCount = 0;
-            let sourceRenderedCount = 0;
-            let sourceEstimateCount = 0;
-            let sourceZeroDomCount = 0;
-            let sourceFileTrustedCount = 0;
-            let sourceSampleCount = 0;
-            const sourceSamples: string[] = [];
-            let zeroDomOverrideCount = 0;
-            let zeroDomOverrideSampleCount = 0;
-            const zeroDomOverrideSamples: string[] = [];
-
+            const stats = createEmptyStats();
             const textDimensions = this.nodeTypeService.getTextDimensions();
             const maxHeight = textDimensions.maxHeight;
             const formulaDimensions = this.nodeTypeService.getFormulaDimensions();
 
-            let updatePass = 0;
             await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, async (canvasData) => {
-                updatePass += 1;
                 if (!canvasData.nodes) return false;
 
                 let changed = false;
-
                 const logDetail = false;
-
-                const canvasView = getCanvasView(this.app);
-                const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
-                const nodeDomMap = new Map<string, CanvasNodeLike>();
-
-                if (canvas?.nodes && canvas.nodes instanceof Map) {
-                    for (const [id, nodeData] of canvas.nodes) {
-                        if (nodeData?.nodeEl) {
-                            nodeDomMap.set(id, nodeData);
-                        }
-                    }
-                }
-
-                const getTextSignature = (content: string, width: number): string => {
-                    let hash = 0;
-                    for (let i = 0; i < content.length; i++) {
-                        hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
-                    }
-                    return `${content.length}:${hash}:${width}`;
-                };
+                const nodeDomMap = this.buildNodeDomMap();
+                let sourceSampleCount = 0;
 
                 for (const node of canvasData.nodes) {
                     if (!node.type || node.type === 'text') {
                         if (node.text) {
-                            const isFormula = this.nodeTypeService.isFormula(node.text);
-
-                            let newHeight: number;
-                            if (isFormula) {
-                                formulaCount++;
-                                newHeight = formulaDimensions.height;
-                                node.width = formulaDimensions.width;
-                                if (!node.data || typeof node.data !== 'object') {
-                                    node.data = {};
-                                }
-                                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
-                                heightMeta.manualHeight = false;
-                                heightMeta.lastWidth = node.width;
-                                heightMeta.lastAutoHeight = newHeight;
-                                heightMeta.lastSignature = getTextSignature(node.text, node.width);
-                                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
-                                log(`[Node.perNode] id=${node.id} formula: newH=${newHeight}`);
-                            } else {
-                                const width = typeof node.width === 'number' && node.width > 0
-                                    ? node.width
-                                    : textDimensions.width;
-                                if (!node.width || node.width <= 0) {
-                                    node.width = width;
-                                }
-
-                                // === 初始化/获取元数据 ===
-                                if (!node.data || typeof node.data !== 'object') {
-                                    node.data = {};
-                                }
-                                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
-                                
-                                // === DOM可见性检测 ===  
-                                const domNode = nodeDomMap.get(node.id || '');
-                                const nodeEl = domNode?.nodeEl;
-                                
-                                // [关键修复] 使用DOM测量（包括minHeight），无论是否虚拟化
-                                // 传入文件历史高度和元数据以启用智能验证机制
-                                const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
-                                    node.text,
-                                    nodeEl,
-                                    width,
-                                    logDetail,
-                                    node.height,  // 传入历史高度进行智能验证
-                                    heightMeta    // 传入元数据以检查可信历史值
-                                );
-                                newHeight = heightInfo.height;
-
-                                // 统计来源（增加 trusted-history）
-                                if (heightInfo.source === 'dom') sourceDomCount++;
-                                else if (heightInfo.source === 'rendered') sourceRenderedCount++;
-                                else if (heightInfo.source === 'zero-dom') sourceZeroDomCount++;
-                                else if (heightInfo.source === 'file-trusted') sourceFileTrustedCount++;
-                                else if (heightInfo.source === 'trusted-history') sourceFileTrustedCount++; // 归入 file-trusted 统计
-                                else sourceEstimateCount++;
-
-                                if (sourceSampleCount < 8 && Math.abs(heightInfo.height - (node.height ?? 0)) > 1) {
-                                    sourceSamples.push(`${node.id}:${heightInfo.source} ${node.height ?? 0}->${heightInfo.height}`);
-                                    sourceSampleCount++;
-                                }
-                                
-                                // 更新元数据
-                                const signature = getTextSignature(node.text, width);
-                                heightMeta.lastSignature = signature;
-                                heightMeta.lastWidth = width;
-                                heightMeta.lastAutoHeight = newHeight;
-                                heightMeta.manualHeight = false; // SSOT: 移除手动高度概念
-                                
-                                // [渐进式策略] 保存可信测量值
-                                if (heightInfo.shouldSaveTrusted) {
-                                    heightMeta.trustedHeight = newHeight;
-                                    heightMeta.trustedSignature = signature;
-                                    heightMeta.trustedTimestamp = Date.now();
-                                    
-                                    if (logDetail) {
-                                        log(`[NodeHeight] 保存可信测量: id=${node.id}, h=${newHeight}, sig=${signature.substring(0, 20)}...`);
-                                    }
-                                }
-                                
-                                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
-                            }
-
-                            const previousHeight = node.height ?? 0;
-                            const delta = newHeight - previousHeight;
-                            if (delta > 0) {
-                                increasedCount++;
-                                if (delta > maxIncrease) maxIncrease = delta;
-                            } else if (delta < 0) {
-                                decreasedCount++;
-                                const absDelta = Math.abs(delta);
-                                if (absDelta > maxDecrease) maxDecrease = absDelta;
-                            }
-                            if (newHeight >= maxHeight) cappedCount++;
-
-                            if (previousHeight !== newHeight) {
-                                node.height = newHeight;
-                                adjustedCount++;
+                            const result = await this.adjustSingleNodeHeight(
+                                node, 
+                                nodeDomMap, 
+                                textDimensions, 
+                                maxHeight, 
+                                formulaDimensions, 
+                                logDetail
+                            );
+                            
+                            // 更新统计
+                            if (result.heightChanged) {
+                                stats.adjustedCount++;
                                 changed = true;
                             }
-
-                            const memNodeData = node.id ? nodeDomMap.get(node.id) : undefined;
-                            if (memNodeData) {
-                                if (memNodeData.height !== newHeight) {
-                                    memNodeData.height = newHeight;
-                                    if (memNodeData.nodeEl) {
-                                        memNodeData.nodeEl.style.height = `${newHeight}px`;
-                                    }
-                                    const nodeWithRender = memNodeData as CanvasNodeLike & { render?: () => void };
-                                    if (typeof nodeWithRender.render === 'function') {
-                                        nodeWithRender.render();
-                                    }
-                                }
+                            if (result.isFormula) stats.formulaCount++;
+                            if (result.delta > 0) {
+                                stats.increasedCount++;
+                                if (result.delta > stats.maxIncrease) stats.maxIncrease = result.delta;
+                            } else if (result.delta < 0) {
+                                stats.decreasedCount++;
+                                if (Math.abs(result.delta) > stats.maxDecrease) stats.maxDecrease = Math.abs(result.delta);
                             }
+                            if (result.newHeight >= maxHeight) stats.cappedCount++;
+                            
+                            // 统计来源
+                            if (result.source === 'dom') stats.sourceDomCount++;
+                            else if (result.source === 'rendered') stats.sourceRenderedCount++;
+                            else if (result.source === 'zero-dom') stats.sourceZeroDomCount++;
+                            else if (result.source === 'file-trusted' || result.source === 'trusted-history') stats.sourceFileTrustedCount++;
+                            else stats.sourceEstimateCount++;
+                            
+                            // 收集样本
+                            if (sourceSampleCount < 8 && result.heightChanged) {
+                                stats.sourceSamples.push(`${node.id}:${result.source} ${result.oldHeight}->${result.newHeight}`);
+                                sourceSampleCount++;
+                            }
+                            
+                            // 同步内存节点
+                            this.syncMemoryNodeHeight(node.id, result.newHeight, nodeDomMap);
                         }
                     }
                 }
                 return changed;
             });
 
-            const canvasView = getCanvasView(this.app);
-            if (canvasView) {
-                const canvas = (canvasView as CanvasViewLike).canvas;
-                if (canvas) {
-                    // 强制重绘所有边，确保它们连接到正确的高度
-                    if (canvas.edges) {
-                        const edgesArray = canvas.edges instanceof Map
-                            ? Array.from(canvas.edges.values())
-                            : Array.isArray(canvas.edges)
-                                ? canvas.edges
-                                : [];
-                        for (const edge of edgesArray) {
-                            if (typeof (edge as any).render === 'function') {
-                                (edge as any).render();
-                            }
-                        }
-                    }
-                    
-                    if (typeof canvas.requestSave === 'function') canvas.requestSave();
-                    if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
-                }
-            }
-
-            if (adjustedCount > 0) {
-                new Notice(`已调整 ${adjustedCount} 个节点高度`);
-                log(`[Node] 批量调整完成: ${adjustedCount}`);
-            } else {
-                log(`[Node] 批量调整完成: 无需更新节点高度`);
-            }
-            log(`[Node] 批量调整统计: 增加=${increasedCount}, 减少=${decreasedCount}, maxIncrease=${maxIncrease.toFixed(1)}, maxDecrease=${maxDecrease.toFixed(1)}, capped=${cappedCount}, formula=${formulaCount}, missingDom=${missingDomCount}, manualKeep=${manualKeepCount}, manualSet=${manualSetCount}, manualReset=${manualResetCount}`);
-            log(`[Node] 高度来源统计: dom=${sourceDomCount}, rendered=${sourceRenderedCount}, file-trusted=${sourceFileTrustedCount}, estimate=${sourceEstimateCount}, zeroDom=${sourceZeroDomCount}, sample=${sourceSamples.join('|')}`);
-            if (zeroDomOverrideCount > 0) {
-                log(`[Node] DOM0高度清洗: count=${zeroDomOverrideCount}, sample=${zeroDomOverrideSamples.join('|')}`);
-            }
-            return adjustedCount;
+            this.refreshCanvasAfterHeightAdjust();
+            this.logHeightAdjustStats(stats);
+            return stats.adjustedCount;
         } catch (err) {
             log(`[Node] 批量调整失败:`, err);
             return 0;
+        }
+    }
+
+    /** 调整单个节点高度 */
+    private async adjustSingleNodeHeight(
+        node: CanvasNodeLike,
+        nodeDomMap: Map<string, CanvasNodeLike>,
+        textDimensions: { width: number; maxHeight: number },
+        maxHeight: number,
+        formulaDimensions: { width: number; height: number },
+        logDetail: boolean
+    ): Promise<{
+        newHeight: number;
+        oldHeight: number;
+        delta: number;
+        heightChanged: boolean;
+        isFormula: boolean;
+        source: string;
+    }> {
+        const isFormula = this.nodeTypeService.isFormula(node.text || '');
+        let newHeight: number;
+        let source = 'estimate';
+
+        if (isFormula) {
+            newHeight = formulaDimensions.height;
+            node.width = formulaDimensions.width;
+            if (!node.data || typeof node.data !== 'object') {
+                node.data = {};
+            }
+            const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+            heightMeta.manualHeight = false;
+            heightMeta.lastWidth = node.width;
+            heightMeta.lastAutoHeight = newHeight;
+            heightMeta.lastSignature = generateTextSignature(node.text || '', node.width);
+            (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
+            log(`[Node.perNode] id=${node.id} formula: newH=${newHeight}`);
+        } else {
+            const width = typeof node.width === 'number' && node.width > 0
+                ? node.width
+                : textDimensions.width;
+            if (!node.width || node.width <= 0) {
+                node.width = width;
+            }
+
+            if (!node.data || typeof node.data !== 'object') {
+                node.data = {};
+            }
+            const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+            
+            const domNode = nodeDomMap.get(node.id || '');
+            const nodeEl = domNode?.nodeEl;
+            
+            const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
+                node.text || '',
+                nodeEl,
+                width,
+                logDetail,
+                node.height,
+                heightMeta
+            );
+            newHeight = heightInfo.height;
+            source = heightInfo.source;
+
+            const signature = generateTextSignature(node.text || '', width);
+            heightMeta.lastSignature = signature;
+            heightMeta.lastWidth = width;
+            heightMeta.lastAutoHeight = newHeight;
+            heightMeta.manualHeight = false;
+            
+            if (heightInfo.shouldSaveTrusted) {
+                heightMeta.trustedHeight = newHeight;
+                heightMeta.trustedSignature = signature;
+                heightMeta.trustedTimestamp = Date.now();
+            }
+            
+            (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
+        }
+
+        const oldHeight = node.height ?? 0;
+        const delta = newHeight - oldHeight;
+        const heightChanged = oldHeight !== newHeight;
+        
+        if (heightChanged) {
+            node.height = newHeight;
+        }
+
+        return { newHeight, oldHeight, delta, heightChanged, isFormula, source };
+    }
+
+    /** 同步内存中的节点高度 */
+    private syncMemoryNodeHeight(nodeId: string | undefined, newHeight: number, nodeDomMap: Map<string, CanvasNodeLike>): void {
+        if (!nodeId) return;
+        const memNodeData = nodeDomMap.get(nodeId);
+        if (memNodeData && memNodeData.height !== newHeight) {
+            memNodeData.height = newHeight;
+            if (memNodeData.nodeEl) {
+                memNodeData.nodeEl.style.height = `${newHeight}px`;
+            }
+            const nodeWithRender = memNodeData as CanvasNodeLike & { render?: () => void };
+            if (typeof nodeWithRender.render === 'function') {
+                nodeWithRender.render();
+            }
         }
     }
 
@@ -553,7 +545,7 @@ export class CanvasNodeManager {
                 const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
                 
                 // 生成签名
-                const signature = this.generateTextSignature(node.text, width);
+                const signature = generateTextSignature(node.text, width);
                 
                 // 保存可信测量值
                 heightMeta.trustedHeight = measuredHeight;
@@ -585,11 +577,52 @@ export class CanvasNodeManager {
         return rectHeight === 0 && el.offsetHeight === 0 && el.clientHeight === 0 && el.scrollHeight === 0;
     }
 
-    private generateTextSignature(content: string, width: number): string {
-        let hash = 0;
-        for (let i = 0; i < content.length; i++) {
-            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
+    /** 构建节点 ID → DOM 节点的映射 */
+    private buildNodeDomMap(): Map<string, CanvasNodeLike> {
+        const nodeDomMap = new Map<string, CanvasNodeLike>();
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
+        if (canvas?.nodes && canvas.nodes instanceof Map) {
+            for (const [id, nodeData] of canvas.nodes) {
+                if (nodeData?.nodeEl) {
+                    nodeDomMap.set(id, nodeData);
+                }
+            }
         }
-        return `${content.length}:${hash}:${width}`;
+        return nodeDomMap;
+    }
+
+    /** 刷新 Canvas 边和视图 */
+    private refreshCanvasAfterHeightAdjust(): void {
+        const canvasView = getCanvasView(this.app);
+        if (!canvasView) return;
+        const canvas = (canvasView as CanvasViewLike).canvas;
+        if (!canvas) return;
+
+        // 重绘所有边
+        if (canvas.edges) {
+            const edgesArray = canvas.edges instanceof Map
+                ? Array.from(canvas.edges.values())
+                : Array.isArray(canvas.edges) ? canvas.edges : [];
+            for (const edge of edgesArray) {
+                if (typeof (edge as any).render === 'function') {
+                    (edge as any).render();
+                }
+            }
+        }
+        if (typeof canvas.requestSave === 'function') canvas.requestSave();
+        if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
+    }
+
+    /** 输出高度调整统计日志 */
+    private logHeightAdjustStats(stats: HeightAdjustmentStats): void {
+        if (stats.adjustedCount > 0) {
+            new Notice(`已调整 ${stats.adjustedCount} 个节点高度`);
+            log(`[Node] 批量调整完成: ${stats.adjustedCount}`);
+        } else {
+            log(`[Node] 批量调整完成: 无需更新节点高度`);
+        }
+        log(`[Node] 批量调整统计: 增加=${stats.increasedCount}, 减少=${stats.decreasedCount}, maxIncrease=${stats.maxIncrease.toFixed(1)}, maxDecrease=${stats.maxDecrease.toFixed(1)}, capped=${stats.cappedCount}, formula=${stats.formulaCount}`);
+        log(`[Node] 高度来源统计: dom=${stats.sourceDomCount}, rendered=${stats.sourceRenderedCount}, file-trusted=${stats.sourceFileTrustedCount}, estimate=${stats.sourceEstimateCount}, zeroDom=${stats.sourceZeroDomCount}, sample=${stats.sourceSamples.join('|')}`);
     }
 }

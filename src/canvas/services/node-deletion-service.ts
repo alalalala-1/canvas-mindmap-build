@@ -1,12 +1,11 @@
 import { App, ItemView, Notice } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CollapseStateManager } from '../../state/collapse-state';
-import { CanvasFileService, UpdateCallback } from './canvas-file-service';
-import { DeleteConfirmationModal } from '../../ui/delete-modal';
+import { CanvasFileService } from './canvas-file-service';
 import { CONSTANTS } from '../../constants';
 import { generateRandomId, getEdgeFromNodeId, getEdgeToNodeId, getCurrentCanvasFilePath, getCanvasView, getEdgesFromCanvas, getNodesFromCanvas, reloadCanvas } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager } from '../types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, ICanvasManager } from '../types';
 
 export class NodeDeletionService {
     private app: App;
@@ -29,25 +28,6 @@ export class NodeDeletionService {
 
     setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
-    }
-
-    async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
-        log(`[UI] 删除节点: ${selectedNode.id}`);
-        const edges = this.getEdgesFromCanvas(canvas);
-        const nodeId = selectedNode.id!;
-        const hasChildren = this.collapseStateManager.getChildNodes(nodeId, edges).length > 0;
-
-        const modal = new DeleteConfirmationModal(this.app, hasChildren);
-        modal.open();
-        const result = await modal.waitForResult();
-
-        if (result.action === 'cancel') return;
-
-        if (result.action === 'confirm' || result.action === 'single') {
-            await this.handleSingleDelete(selectedNode, canvas);
-        } else if (result.action === 'cascade') {
-            await this.handleCascadeDelete(selectedNode, canvas);
-        }
     }
 
     async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {

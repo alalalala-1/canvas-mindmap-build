@@ -43,7 +43,6 @@ export class CanvasEventManager {
     private collapseStateManager: CollapseStateManager;
     private floatingNodeService: FloatingNodeService;
     private canvasManager: CanvasManager;
-    private canvasFileService: CanvasFileService;
     private mutationObserver: MutationObserver | null = null;
     private focusMutationObserver: MutationObserver | null = null;
     private clickDebounceMap = new Map<string, number>();
@@ -72,7 +71,6 @@ export class CanvasEventManager {
         this.canvasManager = canvasManager;
         // 从 CanvasManager 获取 FloatingNodeService
         this.floatingNodeService = canvasManager.getFloatingNodeService();
-        this.canvasFileService = new CanvasFileService(app, settings);
     }
 
     /**
@@ -371,7 +369,7 @@ export class CanvasEventManager {
             return;
         }
         
-        const data = await this.canvasFileService.readCanvasData(filePath);
+        const data = await this.canvasManager.getCanvasFileService().readCanvasData(filePath);
         if (!data) {
             log(`[Event] Canvas 文件读取失败: ${filePath}`);
             return;

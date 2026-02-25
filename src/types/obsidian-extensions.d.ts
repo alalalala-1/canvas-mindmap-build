@@ -1,4 +1,4 @@
-import { CanvasNodeLike, CanvasEdgeLike } from './canvas/types';
+import { CanvasNodeLike, CanvasEdgeLike } from '../canvas/types';
 
 declare module 'obsidian' {
     interface Workspace {

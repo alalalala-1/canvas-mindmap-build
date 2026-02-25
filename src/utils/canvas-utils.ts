@@ -1,7 +1,7 @@
 import { App, ItemView, TFile, View } from 'obsidian';
 import { log } from './logger';
 import { CONSTANTS } from '../constants';
-import { Canvas, CanvasNode, CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;
@@ -961,16 +961,19 @@ export function parseFloatingNodeInfo(info: boolean | FloatingNodeRecord | undef
 /**
  * 安全地获取 Canvas 节点的 DOM 元素
  */
-export function getNodeDomElement(canvas: Canvas, nodeId: string): HTMLElement | null {
+export function getNodeDomElement(canvas: CanvasLike, nodeId: string): HTMLElement | null {
     if (!canvas?.nodes) return null;
-    const nodeData = canvas.nodes.get(nodeId);
-    return nodeData?.nodeEl || null;
+    if (canvas.nodes instanceof Map) {
+        const nodeData = canvas.nodes.get(nodeId);
+        return nodeData?.nodeEl || null;
+    }
+    return null;
 }
 
 /**
  * 检查节点是否在视图中可见
  */
-export function isNodeVisible(canvas: Canvas, nodeId: string): boolean {
+export function isNodeVisible(canvas: CanvasLike, nodeId: string): boolean {
     const nodeEl = getNodeDomElement(canvas, nodeId);
     if (!nodeEl) return false;
     return nodeEl.style.display !== 'none';
@@ -979,7 +982,7 @@ export function isNodeVisible(canvas: Canvas, nodeId: string): boolean {
 /**
  * 显示/隐藏节点
  */
-export function setNodeVisibility(canvas: Canvas, nodeId: string, visible: boolean): void {
+export function setNodeVisibility(canvas: CanvasLike, nodeId: string, visible: boolean): void {
     const nodeEl = getNodeDomElement(canvas, nodeId);
     if (nodeEl) {
         nodeEl.style.display = visible ? '' : 'none';
@@ -1022,38 +1025,7 @@ export function throttle<T extends (...args: unknown[]) => void>(
 }
 
 // ============================================================================
-// 类型检测
+// 类型检测 - 重导出自 content-type-utils.ts
 // ============================================================================
 
-/**
- * 检测内容是否为公式
- */
-export function isFormulaContent(content: string): boolean {
-    if (!content) return false;
-    const trimmed = content.trim();
-    return /^\$\$[\s\S]*?\$\$\s*(<!-- fromLink:[\s\S]*?-->)?\s*$/.test(trimmed);
-}
-
-/**
- * 检测内容是否为图片
- */
-export function isImageContent(content: string): boolean {
-    if (!content) return false;
-    const imageRegex = /!?\[\[.*?\]\]|!?\[.*?\]\(.*?\)/;
-    return imageRegex.test(content);
-}
-
-/**
- * 检测节点是否为文本节点
- */
-export function isTextNode(node: CanvasNode | CanvasDataNode | null | undefined): boolean {
-    if (!node) return true;
-    return !node.type || node.type === 'text';
-}
-
-/**
- * 检测节点是否为文件节点
- */
-export function isFileNode(node: CanvasNode | CanvasDataNode | null | undefined): boolean {
-    return node?.type === 'file';
-}
+export { isFormulaContent, isImageContent, isTextNode, isFileNode } from './content-type-utils';

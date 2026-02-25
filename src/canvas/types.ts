@@ -28,48 +28,6 @@ export interface FromLink {
     ch?: number;
 }
 
-export interface CanvasNode {
-    id: string;
-    nodeEl?: HTMLElement;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    text?: string;
-    type?: 'text' | 'file';
-    file?: string;
-    fromLink?: FromLink;
-    isCollapsed?: boolean;
-}
-
-export interface CanvasEdge {
-    id: string;
-    fromNode: string;
-    toNode: string;
-}
-
-export interface Canvas {
-    nodes: Map<string, CanvasNode>;
-    edges: Map<string, CanvasEdge>;
-    selection: Set<CanvasNode>;
-    selectedNodes?: CanvasNode[];
-    file?: { path: string };
-    fileData?: {
-        nodes: CanvasNode[];
-        edges: CanvasEdge[];
-    };
-    reload(): void;
-    requestSave(): void;
-    requestUpdate(): void;
-    on(event: string, callback: (...args: unknown[]) => void): void;
-    off?(event: string, callback: (...args: unknown[]) => void): void;
-}
-
-export interface CanvasView {
-    canvas?: Canvas;
-    file?: { path: string };
-}
-
 export type HeightMeta = {
     lastSignature?: string;
     lastWidth?: number;

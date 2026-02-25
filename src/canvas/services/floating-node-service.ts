@@ -20,10 +20,6 @@ export class FloatingNodeService {
     private recentConnectedNodes: Map<string, number> = new Map();
     private edgeWatchTimeouts: Map<string, Set<number>> = new Map();
     private floatingNodeIds: Set<string> = new Set();
-    private isClearingFloating: boolean = false;
-    private pendingClearNodes: string[] = [];
-    private pendingClearOptions: Map<string, { persistToFile: boolean; requestCanvasSave: boolean }> = new Map();
-    private clearCompleteResolver: (() => void) | null = null;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings) {
         this.canvasFileService = new CanvasFileService(app, settings);
@@ -345,71 +341,64 @@ export class FloatingNodeService {
             return false;
         }
 
-        this.isClearingFloating = true;
         let persistSuccess = false;
         const primaryNodeId = nodesToClear[0];
         if (!primaryNodeId) {
-            this.isClearingFloating = false;
             return false;
         }
- 
-        try {
-            this.removeFloatingNodeIds(nodesToClear);
-            this.clearFloatingStyles(nodesToClear);
-            this.clearFloatingMemory(this.currentCanvasFilePath, nodesToClear);
 
-            if (persistToFile) {
-                persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
-                if (requestCanvasSave) {
-                    this.clearFloatingCanvasData(nodesToClear, true, CONSTANTS.TIMING.RETRY_DELAY);
-                } else {
-                    this.clearFloatingCanvasData(nodesToClear, false);
-                }
-            } else {
-                this.clearFloatingCanvasData(nodesToClear, requestCanvasSave);
-            }
- 
-            log(`[FloatingNode] 清除浮动完成: ${nodesToClear.length} 个节点, success=${persistSuccess}`);
-        } finally {
-            this.isClearingFloating = false;
+        // 1. 立即执行内存和DOM操作（同步，不阻塞）
+        this.removeFloatingNodeIds(nodesToClear);
+        this.clearFloatingStyles(nodesToClear);
+        this.clearFloatingMemory(this.currentCanvasFilePath, nodesToClear);
+        this.clearFloatingCanvasData(nodesToClear, false);
 
-            // 通知等待的 Promise 完成
-            if (this.clearCompleteResolver) {
-                this.clearCompleteResolver();
-                this.clearCompleteResolver = null;
-            }
+        log(`[FloatingNode] 清除浮动完成(内存): ${nodesToClear.length} 个节点`);
 
-            // 处理队列中等待的节点
-            if (this.pendingClearNodes.length > 0) {
-                const pending = [...this.pendingClearNodes];
-                this.pendingClearNodes = [];
-                log(`[FloatingNode] 处理队列中的待清除节点: ${pending.length} 个`);
- 
-                for (const nodeId of pending) {
-                    const isStillFloating = await this.stateManager.isNodeFloatingFromCache(nodeId, this.currentCanvasFilePath);
-                    if (isStillFloating) {
-                        const options = this.pendingClearOptions.get(nodeId);
-                        this.pendingClearOptions.delete(nodeId);
-                        await this.executeClearFloating(
-                            [nodeId],
-                            options?.persistToFile ?? persistToFile,
-                            options?.requestCanvasSave ?? requestCanvasSave
-                        );
-                    }
-                }
-            }
+        // 2. 文件操作在后台异步执行，不阻塞调用者
+        if (persistToFile) {
+            // 使用 void 标记明确表示不等待，让文件操作在后台执行
+            void this.executeFilePersistence(primaryNodeId, nodesToClear, requestCanvasSave);
         }
- 
-        return persistSuccess;
+
+        return true;
     }
 
     /**
-     * 等待清除操作完成
+     * 后台执行文件持久化操作（不阻塞主线程）
      */
-    private waitForClearComplete(): Promise<void> {
-        return new Promise((resolve) => {
-            this.clearCompleteResolver = resolve;
-        });
+    private async executeFilePersistence(
+        primaryNodeId: string,
+        nodesToClear: string[],
+        requestCanvasSave: boolean
+    ): Promise<void> {
+        try {
+            const persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
+            log(`[FloatingNode] 后台文件持久化完成: ${primaryNodeId}, success=${persistSuccess}`);
+
+            if (requestCanvasSave && this.canvas && typeof this.canvas.requestSave === 'function') {
+                // 延迟调用 requestSave，确保边数据已写入
+                setTimeout(() => {
+                    if (typeof this.canvas?.requestSave === 'function') {
+                        this.canvas.requestSave();
+                    }
+                }, CONSTANTS.TIMING.RETRY_DELAY);
+            }
+        } catch (err) {
+            log(`[FloatingNode] 后台文件持久化失败:`, err);
+        }
+    }
+
+    /**
+     * 异步执行清除浮动状态（不阻塞调用者）
+     */
+    private executeClearFloatingAsync(
+        nodesToClear: string[],
+        persistToFile: boolean,
+        requestCanvasSave: boolean = true
+    ): void {
+        // 使用 void 操作符确保异步执行不阻塞调用者
+        void this.executeClearFloating(nodesToClear, persistToFile, requestCanvasSave);
     }
 
     private async isEdgePersistedInFile(toNodeId: string, edgeId?: string): Promise<boolean> {
@@ -506,23 +495,9 @@ export class FloatingNodeService {
                 }
             }
 
-            // 如果正在处理清除操作，将节点加入队列等待处理
-            if (this.isClearingFloating) {
-                log(`[FloatingNode] 正在处理清除操作，将节点 ${toNodeId} 加入队列等待 (队列长度: ${this.pendingClearNodes.length})`);
-                if (!this.pendingClearNodes.includes(toNodeId)) {
-                    this.pendingClearNodes.push(toNodeId);
-                }
-                this.pendingClearOptions.set(toNodeId, {
-                    persistToFile: shouldPersistToFile,
-                    requestCanvasSave: false
-                });
-                // 仍然等待清除完成
-                await this.waitForClearComplete();
-                log(`[FloatingNode] 等待完成，继续处理连线 ${fromNodeId} -> ${toNodeId}`);
-            } else {
-                log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
-                await this.executeClearFloating([toNodeId], shouldPersistToFile, false);
-            }
+            log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
+            // 异步执行清除，不阻塞连线操作
+            this.executeClearFloatingAsync([toNodeId], shouldPersistToFile, false);
         }
 
         // 4. 检查源节点是否原本是浮动节点，如果是，保持其红框样式

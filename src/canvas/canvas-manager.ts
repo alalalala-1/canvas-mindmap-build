@@ -186,6 +186,10 @@ export class CanvasManager implements ICanvasManager {
         return this.floatingNodeService;
     }
 
+    public getCanvasFileService(): CanvasFileService {
+        return this.canvasFileService;
+    }
+
     public async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
         await this.nodeManager.handleSingleDelete(node, canvas);
     }

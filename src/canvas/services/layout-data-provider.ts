@@ -4,6 +4,7 @@ import { VisibilityService } from './visibility-service';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { estimateTextNodeHeight, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, isImageContent, isFormulaContent, isRecord, reloadCanvas } from '../../utils/canvas-utils';
+import { generateTextSignature } from '../../utils/height-utils';
 import {
     CanvasDataLike,
     CanvasEdgeLike,
@@ -25,14 +26,6 @@ export class LayoutDataProvider {
         this.app = app;
         this.canvasFileService = canvasFileService;
         this.visibilityService = visibilityService;
-    }
-
-    private buildTextSignature(content: string, width: number): string {
-        let hash = 0;
-        for (let i = 0; i < content.length; i++) {
-            hash = (hash * 31 + content.charCodeAt(i)) >>> 0;
-        }
-        return `${content.length}:${hash}:${width}`;
     }
 
     /**
@@ -187,7 +180,7 @@ export class LayoutDataProvider {
                     const heightMeta = fileHeightMeta || nodeHeightMeta;
                     let trustedHeightUsed = false;
                     if (isTextNode && nodeTextContent && heightMeta?.trustedHeight && heightMeta.trustedSignature) {
-                        const currentSignature = this.buildTextSignature(nodeTextContent, nodeWidthForSignature);
+                        const currentSignature = generateTextSignature(nodeTextContent, nodeWidthForSignature);
                         if (heightMeta.trustedSignature === currentSignature) {
                             mergedNode.height = heightMeta.trustedHeight;
                             fileHeightValue = heightMeta.trustedHeight;
