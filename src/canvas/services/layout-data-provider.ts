@@ -116,6 +116,11 @@ export class LayoutDataProvider {
             measurePass += 1;
             const logDetail = measurePass === 1;
             const visibleNodes = new Map<string, CanvasNodeLike>();
+            
+            // 使用诊断类收集统计信息（逐步迁移中）
+            const diag = new LayoutDiagnostics(5);
+            
+            // 保留原有计数器变量（逐步迁移到 diag）
             let domHeightAppliedCount = 0;
             let domHeightMissingElCount = 0;
             let domHeightHiddenCount = 0;
