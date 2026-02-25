@@ -1,6 +1,7 @@
 import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
+import { LayoutDiagnostics } from './layout-diagnostics';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { estimateTextNodeHeight, getCurrentCanvasFilePath, getNodeIdFromEdgeEndpoint, isImageContent, isFormulaContent, isRecord, reloadCanvas } from '../../utils/canvas-utils';
