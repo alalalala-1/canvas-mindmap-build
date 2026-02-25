@@ -143,14 +143,15 @@
 | 2.2.d 提取节点处理逻辑 | ✅ 已完成 | adjustSingleNodeHeight, syncMemoryNodeHeight |
 | 2.2.e 编译验证 | ✅ 已完成 | `npm run build` 通过 |
 
-### 步骤 2.3: 精简 layout-data-provider.ts（基础设施完成，集成待后续）
+### 步骤 2.3: 精简 layout-data-provider.ts（基础设施完成，集成进行中）
 
 | 子步骤 | 状态 | 说明 |
 |--------|------|------|
 | 2.3.a 创建 LayoutDiagnostics | ✅ 已完成 | 新建 layout-diagnostics.ts |
 | 2.3.b 添加导入 | ✅ 已完成 | 在 layout-data-provider.ts 中添加 import |
-| 2.3.c 集成诊断类 | ⏳ 待后续 | 替换 30+ 个局部变量（高风险，需更谨慎的方法） |
-| 2.3.d 编译验证 | ✅ 已完成 | `npm run build` 通过 |
+| 2.3.c 扩展 LayoutDiagnostics | ✅ 已完成 | 添加 set(), updateMax(), addTo() 方法 |
+| 2.3.d 完整集成 | ⏳ 进行中 | 替换 30+ 个局部变量（高风险，分批次进行） |
+| 2.3.e 编译验证 | ✅ 已完成 | `npm run build` 通过 |
 
 ### 步骤 2.4: 阶段二最终验证 ✅
 

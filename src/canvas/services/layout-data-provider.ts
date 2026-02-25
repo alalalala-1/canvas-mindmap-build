@@ -191,8 +191,8 @@ export class LayoutDataProvider {
                             mergedNode.height = heightMeta.trustedHeight;
                             fileHeightValue = heightMeta.trustedHeight;
                             trustedHeightUsed = true;
-                            trustedHeightUsedCount++;
-                            signatureMatchedCount++;
+                            diag.increment('trustedUsed');
+                            diag.increment('sigMatched');
                             if (trustedHeightSamples.length < 5) {
                                 trustedHeightSamples.push(`${id}:${heightMeta.trustedHeight}`);
                             }
