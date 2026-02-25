@@ -5,6 +5,10 @@
 > 原则: **不恶化现有功能，适度重构，解决真实痛点**
 > 详细实施指南: **[REFACTORING_IMPLEMENTATION_GUIDE.md](./REFACTORING_IMPLEMENTATION_GUIDE.md)**（包含逐步骤代码修改说明）
 
+> 执行门禁（修订版新增）:
+> 1) 每次只做一个小改动点；2) 每步后执行 `npm run build`；3) 关键步骤追加 `npm test`；
+> 4) 手测关键链路（布局/折叠/删边/高度调整）通过后再进入下一步。
+
 ---
 
 ## 一、项目现状评估
@@ -63,7 +67,7 @@
 
 ---
 
-### 问题2: 签名计算函数被重复实现 3 次
+### 问题2: 签名计算函数被重复实现（多处）
 
 **严重程度**: 🟡 中
 
@@ -178,11 +182,11 @@ async addNodeToCanvas(content: string, sourceFile: TFile | null) {
 
 ---
 
-### 问题9: 三个文件是完全的死代码 🔴
+### 问题9: 三个文件是“候选死代码”（需门禁验证）🔴
 
 **严重程度**: 🔴 高（应立即清理）
 
-经搜索验证，以下三个文件**没有被任何其他文件引用**：
+经搜索验证，以下三个文件在 `src/**/*.ts` 中**未发现直接引用**，但删除前仍需通过构建/测试门禁确认：
 
 | 死代码文件 | 行数 | 说明 |
 |-----------|------|------|
@@ -190,7 +194,12 @@ async addNodeToCanvas(content: string, sourceFile: TFile | null) {
 | `src/utils/function-tracer.ts` | ~100 | 核心方法 `traceEnter()` 和 `traceExit()` 已被注释为 `return;`，完全禁用 |
 | `src/utils/json-utils.ts` | ~20 | `safeJsonParse()` 未被任何地方调用 |
 
-**影响**: 增加代码库的认知负担，维护时可能产生误导。
+**影响**: 增加代码库认知负担，维护时可能产生误导。
+
+**修订要求**: 仅在以下条件都满足时删除：
+- grep 无业务引用
+- `npm run build` 通过
+- `npm test` 通过
 
 ---
 
@@ -228,7 +237,13 @@ async addNodeToCanvas(content: string, sourceFile: TFile | null) {
 
 #### 重构1: 拆分 `canvas-utils.ts`
 
-**目标**: 将 ~600 行的工具文件按职责拆分为 4-5 个模块
+**目标**: 将 ~600 行的工具文件按职责拆分为多个模块，但采用**两阶段渐进拆分**，避免一次性大改。
+
+**修订策略（强制）**:
+1. **阶段A（低耦合优先）**: 先拆 `content-type-utils.ts`、`canvas-view-utils.ts`
+2. **阶段B（高耦合后拆）**: 再拆 `edge/node/data/ui/height`
+3. 每迁移一个模块都执行：`npm run build && npm test`
+4. 如出现循环依赖，优先合并模块或下沉公共函数，不强行继续拆分
 
 **新文件结构**:
 
@@ -305,9 +320,8 @@ src/utils/
 │
 ├── dom-utils.ts               # (已有，不变)
 ├── error-handler.ts           # (已有，不变)
-├── json-utils.ts              # (已有，不变)
 ├── logger.ts                  # (已有，微调)
-└── function-tracer.ts         # (已有，不变)
+└── json-utils.ts / function-tracer.ts  # 阶段零门禁通过后可删除
 ```
 
 **向后兼容**: 保留 `canvas-utils.ts` 作为重导出文件，现有的 import 语句无需修改。后续可逐步将各模块的 import 迁移到新文件。
@@ -323,7 +337,7 @@ src/utils/
 
 #### 重构2: 提取统一的签名计算函数
 
-**目标**: 消除 3-4 处重复的签名实现
+**目标**: 消除“多处”重复的签名实现（以搜索结果为准，不写死数量）
 
 **方案**: 在 `height-utils.ts`（或单独的 `signature-utils.ts`）中统一定义：
 
@@ -349,12 +363,14 @@ export function generateTextSignature(content: string, width: number): string {
 
 **目标**: 确保全局只有一个 `CanvasFileService` 实例
 
-**方案**: 在 `CanvasManager` 构造函数中通过参数注入到 `CanvasEventManager`
+**方案**: 先在 `CanvasManager` 构造函数中通过参数注入到 `CanvasEventManager`；`FloatingNodeService` 注入放到第二批。
 
-**需要修改的文件**:
+**需要修改的文件（第一批）**:
 - `canvas-event-manager.ts`: 构造函数增加 `canvasFileService` 参数，删除内部 `new` 语句
 - `canvas-manager.ts`: 将已有的 `canvasFileService` 实例传给 `CanvasEventManager`
-- `floating-node-service.ts`: 同样考虑接收外部注入的 `CanvasFileService`
+
+**需要修改的文件（第二批，可选）**:
+- `floating-node-service.ts`: 接收外部注入的 `CanvasFileService`（建议在第一批稳定后再做）
 
 ---
 
@@ -362,10 +378,11 @@ export function generateTextSignature(content: string, width: number): string {
 
 **目标**: 移除死代码，减少维护负担
 
-**方案**: 
-- 移除 `types.ts` 中未被引用的 `Canvas`, `CanvasNode`, `CanvasEdge`, `CanvasView` 接口
-- 保留 `dom-utils.ts` 中对 `Canvas` 的引用改为使用 `CanvasLike`
-- 移除 `canvas-utils.ts` 中的局部类型 `CanvasData`, `CanvasDataNode`, `CanvasDataEdge`，统一使用 `types.ts` 中的 `CanvasDataLike`
+**方案（修订顺序）**:
+1. 先改 `dom-utils.ts`：`Canvas` → `CanvasLike`，并兼容 `Map/Object`
+2. 再做全仓搜索确认无严格类型引用
+3. 最后删除 `types.ts` 中未被使用的严格类型
+4. `canvas-utils.ts` 局部类型先保守处理，不强制第一轮删除
 
 ---
 
@@ -373,7 +390,7 @@ export function generateTextSignature(content: string, width: number): string {
 
 #### 重构5: 精简 `layout-data-provider.ts` 的诊断代码
 
-**目标**: 将 ~350 行的 `getLayoutData()` 降至 ~150 行
+**目标（修订）**: 第一轮先降低复杂度并维持行为一致，再考虑行数目标。
 
 **方案**: 
 
@@ -400,7 +417,7 @@ private reconcileNodeHeight(
 ): number { ... }
 ```
 
-3. **核心 `getLayoutData()` 只保留数据流逻辑**
+3. **核心 `getLayoutData()` 先保留现有语义**，逐步提取，避免“一步压缩到目标行数”引入行为回归。
 
 ---
 
@@ -503,27 +520,28 @@ get layoutService(): LayoutManager { return this.layoutManager; }
 
 | 步骤 | 任务 | 预估时间 | 风险 |
 |------|------|----------|------|
-| 0.1 | 删除 `src/utils/canvas-data-extractor.ts`（未被引用的死代码） | 2分钟 | 无 |
-| 0.2 | 删除 `src/utils/function-tracer.ts`（核心功能已禁用的死代码） | 2分钟 | 无 |
-| 0.3 | 删除 `src/utils/json-utils.ts`（未被引用的死代码） | 2分钟 | 无 |
+| 0.1 | 候选死代码引用核查（grep） | 5分钟 | 低 |
+| 0.2 | 基线校验（build + test） | 5分钟 | 低 |
+| 0.3 | 删除候选死代码文件（满足门禁后） | 5分钟 | 低 |
 | 0.4 | 统一 `NodeTypeService` 中的公式检测逻辑 | 15分钟 | 极低 |
 | 0.5 | 移除 `NodeDeletionService.executeDeleteOperation` 重复方法（如确认未使用） | 10分钟 | 低 |
 | 0.6 | 修复 `obsidian-extensions.d.ts` 导入路径 | 5分钟 | 极低 |
-| 0.7 | 验证编译通过 | 5分钟 | - |
+| 0.7 | 验证编译与测试通过 | 10分钟 | - |
 
-**总计**: ~40分钟
+**总计**: ~55分钟
 
 ### 阶段一（第一优先级）
 
 | 步骤 | 任务 | 预估时间 | 风险 |
 |------|------|----------|------|
-| 1.1 | 拆分 `canvas-utils.ts` 并保留重导出兼容 | 2-3小时 | 低 |
-| 1.2 | 提取统一签名函数 | 30分钟 | 极低 |
-| 1.3 | 修复 CanvasFileService 重复实例化 | 30分钟 | 低 |
-| 1.4 | 清理未使用的严格类型 | 30分钟 | 极低 |
-| 1.5 | 验证编译和功能 | 30分钟 | - |
+| 1.1 | 拆分 `canvas-utils.ts`（阶段A：低耦合模块） | 1-1.5小时 | 低 |
+| 1.2 | 拆分 `canvas-utils.ts`（阶段B：高耦合模块） | 1.5-2.5小时 | 中 |
+| 1.3 | 提取统一签名函数 | 30分钟 | 极低 |
+| 1.4 | 修复 CanvasFileService 重复实例化（第一批） | 30分钟 | 低 |
+| 1.5 | 清理未使用的严格类型（按修订顺序） | 30分钟 | 低 |
+| 1.6 | 验证编译、测试和功能 | 30分钟 | - |
 
-**总计**: ~4-5小时
+**总计**: ~4.5-6小时
 
 ### 阶段二（第二优先级）
 
@@ -580,9 +598,9 @@ get layoutService(): LayoutManager { return this.layoutManager; }
 ## 七、文件变更汇总
 
 ### 删除文件（阶段零：死代码清理）
-- `src/utils/canvas-data-extractor.ts` — 未被引用，与 canvas-utils 功能重叠
-- `src/utils/function-tracer.ts` — 核心功能已禁用，完全死代码
-- `src/utils/json-utils.ts` — 未被引用的 safeJsonParse
+- `src/utils/canvas-data-extractor.ts` — 候选删除（满足门禁后执行）
+- `src/utils/function-tracer.ts` — 候选删除（满足门禁后执行）
+- `src/utils/json-utils.ts` — 候选删除（满足门禁后执行）
 
 ### 新建文件（阶段一、二）
 - `src/utils/canvas-view-utils.ts`
@@ -602,7 +620,7 @@ get layoutService(): LayoutManager { return this.layoutManager; }
 - `src/canvas/canvas-manager.ts` — 传递 CanvasFileService 实例
 - `src/canvas/canvas-node-manager.ts` — 移除重复签名函数，拆分大方法
 - `src/canvas/services/layout-data-provider.ts` — 提取诊断逻辑
-- `src/canvas/services/floating-node-service.ts` — 注入 CanvasFileService
+- `src/canvas/services/floating-node-service.ts` — 注入 CanvasFileService（第二批可选）
 - `src/canvas/services/node-height-service.ts` — 移除重复签名函数
 - `src/canvas/services/node-type-service.ts` — 统一公式检测逻辑
 - `src/canvas/services/node-deletion-service.ts` — 移除重复的 executeDeleteOperation

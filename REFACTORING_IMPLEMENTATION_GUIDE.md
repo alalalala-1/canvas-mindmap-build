@@ -6,13 +6,56 @@
 
 ---
 
+## 执行前总原则（必须先读）
+
+为确保“中等水平程序员也能 100% 正确执行”，所有步骤统一按以下门禁执行：
+
+1. **每次只改一个小点**（不要跨 3-4 个文件一次性大改）
+2. 每个小点完成后立即执行：
+   - `npm run build`
+   - `npm test`（若本次修改可能影响现有测试）
+3. 通过后再做最小手测（至少覆盖：布局、折叠、删边、高度调整）
+4. 通过后再进入下一小步
+
+推荐命令模板：
+
+```bash
+# 每步修改后都执行
+npm run build && npm test
+```
+
+> 说明：本指南后续所有“删除/拆分/迁移”步骤均以“先验证引用、再修改、再验证”为前提。
+
+---
+
 ## 阶段零：清理死代码（~40分钟）
 
 <!-- 步骤 0.1 ~ 0.7 详细说明将在下方逐步填充 -->
 
 ### 步骤 0.1: 删除死代码文件
 
-**操作**: 直接删除以下 3 个文件（已通过 `grep -r` 确认无任何引用）
+**操作目标**: 删除 3 个“候选死代码”文件，但必须先通过门禁验证。
+
+#### 0.1.a 删除前引用核查（必须）
+
+```bash
+grep -rn "canvas-data-extractor" src/ --include="*.ts"
+grep -rn "function-tracer" src/ --include="*.ts"
+grep -rn "safeJsonParse" src/ --include="*.ts"
+```
+
+预期：仅命中被删文件自身（或 0 命中）。如果被业务代码引用，**暂停删除**。
+
+#### 0.1.b 删除前基线校验（必须）
+
+```bash
+npm run build
+npm test
+```
+
+确保当前主干本身是可构建、可测试状态，避免把旧问题误判成删除引入的问题。
+
+#### 0.1.c 执行删除
 
 ```bash
 rm src/utils/canvas-data-extractor.ts
@@ -20,7 +63,15 @@ rm src/utils/function-tracer.ts
 rm src/utils/json-utils.ts
 ```
 
-**验证**: 运行 `npm run build`，应无任何编译错误。
+#### 0.1.d 删除后二次验证（必须）
+
+```bash
+npm run build
+npm test
+grep -rn "canvas-data-extractor\|function-tracer\|safeJsonParse" src/ --include="*.ts"
+```
+
+如果任何校验失败，优先回滚本步并定位真实依赖，再决定是否保留文件。
 
 ---
 
@@ -134,7 +185,15 @@ npm run build
 
 ### 步骤 1.1: 提取统一签名函数
 
-**目标**: 将 3-4 处重复的签名计算函数统一到 `src/utils/height-utils.ts`。
+**目标**: 将“多处”重复的签名计算函数统一到 `src/utils/height-utils.ts`（以当前代码搜索结果为准，不写死数量）。
+
+**第零步：先定位所有重复实现（必须）**
+
+```bash
+grep -rn "generateTextSignature\|buildTextSignature\|generateContentSignature" src/ --include="*.ts"
+```
+
+先记录命中的函数和文件，再开始迁移，避免漏改。
 
 **第一步: 创建 `src/utils/height-utils.ts`**
 
@@ -413,9 +472,12 @@ type CanvasViewLike = ItemView & { ... };
 **重要说明**: 这是最大的一步。核心思路是将函数移到新文件，但在 `canvas-utils.ts` 中保留重导出，确保所有现有 import 不受影响。
 
 **总体策略**:
-1. 创建新模块文件，将函数定义移过去
-2. 在 `canvas-utils.ts` 中添加 `export { ... } from './xxx'` 重导出
-3. 原文件中的函数定义删除（因为已被重导出替代）
+1. **分两阶段执行**（不要一次拆完）
+   - 阶段A：先拆低耦合模块（`content-type-utils.ts`、`canvas-view-utils.ts`）
+   - 阶段B：再拆高耦合模块（`node/edge/data/ui`）
+2. 每迁移一个模块都执行 `npm run build && npm test`
+3. 在 `canvas-utils.ts` 中添加 `export { ... } from './xxx'` 重导出
+4. 原文件中的函数定义在“确认无重复导出/无循环依赖”后再删除
 
 **由于此步骤涉及大量代码移动，建议逐个模块进行，每移动一个模块就编译验证一次。**
 
@@ -426,10 +488,9 @@ type CanvasViewLike = ItemView & { ... };
 **新建文件** `src/utils/content-type-utils.ts`，内容：
 
 ```typescript
-import { CanvasNode } from '../canvas/types';
+import { CanvasNodeLike } from '../canvas/types';
 
-// 注意：这里使用 CanvasNodeLike 或局部类型，因为严格类型可能已被删除
-type NodeLikeForCheck = { type?: string } | null | undefined;
+type NodeLikeForCheck = CanvasNodeLike | null | undefined;
 
 export function isFormulaContent(content: string): boolean {
     if (!content) return false;
@@ -452,6 +513,8 @@ export function isFileNode(node: NodeLikeForCheck): boolean {
     return node?.type === 'file';
 }
 ```
+
+> 关键修订：这里不能再使用 `CanvasNode` 严格类型，否则会与“后续删除严格类型定义”的步骤冲突。
 
 **然后在 `canvas-utils.ts` 中**:
 1. 删除 `isFormulaContent`、`isImageContent`、`isTextNode`、`isFileNode` 的函数定义
@@ -495,6 +558,13 @@ export { getCanvasView, getActiveCanvasView, getCurrentCanvasFilePath } from './
 - 如果新模块中的函数依赖 `canvas-utils.ts` 中其他函数，需要从对应的新模块 import，而不是从 `canvas-utils.ts` import（避免循环依赖）
 - 如 `collectAllDescendants` 依赖 `getChildNodeIds` 和 `parseFloatingNodeInfo`，它们应在同一个文件中
 - `debounce` 和 `throttle` 可以放入一个 `timing-utils.ts` 或留在 `canvas-utils.ts` 中
+- 每拆完一个模块，建议额外执行一次循环依赖检查：
+
+```bash
+grep -rn "from '../../utils/canvas-utils'\|from '../utils/canvas-utils'\|from './canvas-utils'" src/ --include="*.ts"
+```
+
+若新模块之间出现互相 import，优先合并到同一模块或下沉公共函数，避免形成环。
 
 **最终的 `canvas-utils.ts` 应只包含重导出**：
 
@@ -762,7 +832,9 @@ async adjustAllTextNodeHeights(): Promise<number> {
 
 **文件**: `src/canvas/services/layout-data-provider.ts`
 
-**目标**: 将 ~450 行的文件降至 ~200-250 行。
+**目标**: 在不改变行为的前提下，先降低复杂度，再考虑行数目标。
+
+> 修订说明：第一轮不要强制追求“450→250行”，优先保证功能与日志语义不回归。
 
 **这是风险最高的一步，建议在 git 分支上进行。**
 
