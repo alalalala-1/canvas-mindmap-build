@@ -21,6 +21,30 @@ export class LayoutDiagnostics {
         return this.counters.get(key) || 0;
     }
 
+    /**
+     * 设置计数器的值（用于 max 等需要直接设置的值）
+     */
+    set(key: string, value: number): void {
+        this.counters.set(key, value);
+    }
+
+    /**
+     * 更新最大值
+     */
+    updateMax(key: string, value: number): void {
+        const current = this.counters.get(key) || 0;
+        if (value > current) {
+            this.counters.set(key, value);
+        }
+    }
+
+    /**
+     * 累加到指定键（用于 sum）
+     */
+    addTo(key: string, value: number): void {
+        this.counters.set(key, (this.counters.get(key) || 0) + value);
+    }
+
     addSample(key: string, value: string): void {
         if (!this.samples.has(key)) {
             this.samples.set(key, []);
