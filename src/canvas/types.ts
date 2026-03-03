@@ -17,6 +17,7 @@ export interface ICanvasManager {
     handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     validateAndRepairNodeHeights(file: TFile): Promise<void>;
+    refreshTrustedHeightsForVisibleTextNodes(limit?: number): Promise<number>;
     // 删除操作标志控制（防止删边后被误判为新边）
     startDeletingOperation(): void;
     endDeletingOperation(canvas: CanvasLike | null): void;
@@ -164,6 +165,7 @@ export type PluginWithLastClicked = {
 
 export type CanvasManagerLike = {
     adjustAllTextNodeHeights: () => Promise<number>;
+    refreshTrustedHeightsForVisibleTextNodes?: (limit?: number) => Promise<number>;
 };
 
 export type CanvasEventMap = {
@@ -247,4 +249,11 @@ export interface LayoutData {
     canvasData: CanvasDataLike | null;
     floatingNodes: Set<string>;
     canvasFilePath: string;
+    visibilityStats?: {
+        visibleCount: number;
+        domVisibleCount: number;
+        domVisibleRate: number;
+        inViewportCount: number;
+        inViewportRate: number;
+    };
 }

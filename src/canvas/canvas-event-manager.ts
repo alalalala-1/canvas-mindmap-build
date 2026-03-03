@@ -56,6 +56,14 @@ export class CanvasEventManager {
     private focusLostDebounceId: number | null = null;
     private lastFocusedNodeId: string | null = null;
     private isDeleting: boolean = false;
+    
+    // [A2] 监听器防重日志
+    private workspaceEventsRegistered: boolean = false;
+    private workspaceEventsPath: string | null = null;
+    private setupTokenCounter: number = 0;
+    private isSettingUp: boolean = false;
+    private lastSetupPath: string | null = null;
+    private setupCallCount: number = 0;
 
     constructor(
         plugin: Plugin,
@@ -333,31 +341,69 @@ export class CanvasEventManager {
     // =========================================================================
     async setupCanvasEventListeners(canvasView: ItemView) {
         const canvas = this.getCanvasFromView(canvasView);
-        log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
+        const canvasFilePath = canvas?.file?.path || (canvasView as CanvasViewLike).file?.path;
         
-        if (!canvas) {
-            log(`[Event] canvas 不存在，跳过设置`);
+        // [A2] 监听器防重日志 - 记录调用次数和路径
+        this.setupCallCount++;
+        const currentToken = ++this.setupTokenCounter;
+        const isDuplicate = this.lastSetupPath === canvasFilePath && canvasFilePath !== null;
+        
+        log(`[Event] setupCanvasEventListeners(#${this.setupCallCount}): token=${currentToken}, path=${canvasFilePath || 'null'}, duplicate=${isDuplicate}, isSettingUp=${this.isSettingUp}`);
+        
+        // [B1] 幂等化 - 防止重复 setup
+        if (this.isSettingUp) {
+            log(`[Event] setupCanvasEventListeners: 跳过（正在设置中）`);
             return;
         }
-
-        const canvasFilePath = canvas.file?.path || (canvasView as CanvasViewLike).file?.path;
-        log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
-        this.currentCanvasFilePath = canvasFilePath || null;
-        if (canvas) {
-            const edges = getEdgesFromCanvas(canvas);
-            this.lastEdgeIds = buildEdgeIdSet(edges);
-            log(`[Event] 初始化边快照: edges=${edges.length}`);
+        
+        // 如果是同一路径且已注册过，跳过
+        if (isDuplicate && this.workspaceEventsRegistered) {
+            log(`[Event] setupCanvasEventListeners: 跳过（同一路径已注册）path=${canvasFilePath}, registered=${this.workspaceEventsRegistered}`);
+            return;
         }
         
-        if (canvasFilePath) {
-            log(`[Event] 正在初始化 FloatingNodeService...`);
-            await this.floatingNodeService.initialize(canvasFilePath, canvas);
-            log(`[Event] FloatingNodeService 初始化完成`);
-        } else {
-            log(`[Event] 警告: 无法获取 canvas 文件路径，跳过 FloatingNodeService 初始化`);
-        }
+        this.isSettingUp = true;
+        
+        try {
+            log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
+            
+            if (!canvas) {
+                log(`[Event] canvas 不存在，跳过设置`);
+                return;
+            }
 
-        this.registerCanvasWorkspaceEvents(canvas);
+            log(`[Event] canvasFilePath=${canvasFilePath || 'null'}`);
+            this.currentCanvasFilePath = canvasFilePath || null;
+            
+            // 更新路径记录
+            this.lastSetupPath = canvasFilePath || null;
+            
+            if (canvas) {
+                const edges = getEdgesFromCanvas(canvas);
+                this.lastEdgeIds = buildEdgeIdSet(edges);
+                log(`[Event] 初始化边快照: edges=${edges.length}`);
+            }
+            
+            if (canvasFilePath) {
+                log(`[Event] 正在初始化 FloatingNodeService...`);
+                await this.floatingNodeService.initialize(canvasFilePath, canvas);
+                log(`[Event] FloatingNodeService 初始化完成`);
+            } else {
+                log(`[Event] 警告: 无法获取 canvas 文件路径，跳过 FloatingNodeService 初始化`);
+            }
+
+            // [B1] 只有在工作区事件未注册时才注册
+            if (!this.workspaceEventsRegistered) {
+                this.registerCanvasWorkspaceEvents(canvas);
+                this.workspaceEventsRegistered = true;
+                this.workspaceEventsPath = canvasFilePath || null;
+                log(`[Event] setupCanvasEventListeners: 工作区事件首次注册, path=${canvasFilePath || 'null'}`);
+            } else {
+                log(`[Event] setupCanvasEventListeners: 跳过注册（已注册）, path=${this.workspaceEventsPath}`);
+            }
+        } finally {
+            this.isSettingUp = false;
+        }
     }
 
     private async handleCanvasFileModified(filePath: string): Promise<void> {
@@ -431,14 +477,16 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:change', () => {
-                log(`[Event] Canvas:Change 触发`);
+                // [诊断] 添加 invocationId 区分不同触发
+                const invocationId = `chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                log(`[Event] Canvas:Change start id=${invocationId}, trigger=file-change`);
                 if (this.canvasChangeTimeoutId !== null) {
-                    log(`[Event] Canvas:Change 清理上一次防抖任务`);
+                    log(`[Event] Canvas:Change 清理上一次防抖任务, id=${invocationId}`);
                     window.clearTimeout(this.canvasChangeTimeoutId);
                 }
                 this.canvasChangeTimeoutId = window.setTimeout(() => {
                     this.canvasChangeTimeoutId = null;
-                    log(`[Event] Canvas:Change 防抖执行`);
+                    log(`[Event] Canvas:Change run id=${invocationId}, trigger=file-change`);
                     void this.canvasManager.checkAndClearFloatingStateForNewEdges();
                     void this.canvasManager.checkAndAddCollapseButtons();
                 }, CONSTANTS.TIMING.BUTTON_CHECK_DEBOUNCE);

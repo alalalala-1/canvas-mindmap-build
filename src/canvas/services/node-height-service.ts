@@ -1,18 +1,21 @@
 import { App, ItemView, Component, MarkdownRenderer } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { CanvasNodeLike, CanvasLike, CanvasViewLike } from '../types';
+import { CanvasNodeLike, CanvasLike, CanvasViewLike, HeightMeta } from '../types';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
 import { generateTextSignature } from '../../utils/height-utils';
 
 export class NodeHeightService {
+    private static readonly RENDERED_CACHE_MAX_SIZE = 200;
+
     private app: App;
     private settings: CanvasMindmapBuildSettings;
     private canvasFileService: CanvasFileService;
     private measurementContainerEl: HTMLElement | null = null;
     private measurementSizerEl: HTMLElement | null = null;
     private measurementComponent: Component | null = null;
+    private renderedHeightCache = new Map<string, number>();
 
     constructor(
         app: App,
@@ -67,9 +70,8 @@ export class NodeHeightService {
         nodeEl?: Element,
         nodeWidthOverride?: number,
         logDetail: boolean = false,
-        fileHeight?: number,
         heightMeta?: { trustedHeight?: number; trustedSignature?: string; trustedTimestamp?: number }
-    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'file-trusted' | 'trusted-history'; estimated: number; shouldSaveTrusted?: boolean }> {
+    ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'trusted-history'; estimated: number; shouldSaveTrusted?: boolean }> {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
             ? nodeWidthOverride
@@ -79,14 +81,22 @@ export class NodeHeightService {
         // 生成当前内容签名
         const currentSignature = generateTextSignature(content, fallbackWidth);
 
+        const resolveEstimateFallback = (reason: string): { height: number; source: 'estimate' | 'zero-dom'; estimated: number } => {
+            return {
+                height: estimatedHeight,
+                source: reason === 'virtualized' ? 'zero-dom' : 'estimate',
+                estimated: estimatedHeight
+            };
+        };
+
         if (!nodeEl) {
-            return { height: estimatedHeight, source: 'estimate', estimated: estimatedHeight };
+            return resolveEstimateFallback('no-dom');
         }
 
         // [关键修复] 提前判断虚拟化状态
         const isVirtualized = this.isZeroSizedNode(nodeEl, false);
         
-        // [路径0] 最高优先级：可信历史值（内容未变化时）
+        // [路径0] 可信历史值（内容未变化时）
         if (heightMeta?.trustedHeight && heightMeta.trustedSignature === currentSignature) {
             const final = Math.min(heightMeta.trustedHeight, maxHeight);
             if (logDetail) {
@@ -95,26 +105,7 @@ export class NodeHeightService {
             return { height: final, source: 'trusted-history', estimated: estimatedHeight };
         }
         
-        // [路径1] 虚拟化节点：使用一般历史数据验证策略（降低阈值到30%）
-        if (isVirtualized && fileHeight && fileHeight > 0) {
-            const ratio = Math.abs(fileHeight - estimatedHeight) / estimatedHeight;
-            
-            // 差异小于30%，信任历史数据（从50%降到30%以减少振荡）
-            if (ratio < 0.3) {
-                const final = Math.min(fileHeight, maxHeight);
-                if (logDetail) {
-                    log(`[NodeHeight] virtualized-trust: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%, final=${final}`);
-                }
-                return { height: final, source: 'file-trusted', estimated: estimatedHeight };
-            }
-            
-            // 差异较大（30%+），记录并继续验证
-            if (logDetail) {
-                log(`[NodeHeight] virtualized-diff: est=${estimatedHeight}, file=${fileHeight}, ratio=${(ratio*100).toFixed(1)}%`);
-            }
-        }
-        
-        // [路径2] 非虚拟化节点 或 历史不可信：尝试DOM测量
+        // [路径1] 非虚拟化节点 或 历史不可信：尝试DOM测量
         const measuredHeight = this.measureActualContentHeight(nodeEl, content, fallbackWidth, false);
         if (measuredHeight > 0) {
             const final = Math.min(measuredHeight, maxHeight);
@@ -130,30 +121,35 @@ export class NodeHeightService {
             return { height: final, source, estimated: estimatedHeight, shouldSaveTrusted };
         }
 
-        // [路径3] DOM测量失败，尝试离屏渲染
+        // [路径2] DOM测量失败，尝试离屏渲染
         if (isVirtualized) {
+            const cached = this.getRenderedHeightCache(currentSignature);
+            if (cached > 0) {
+                const final = Math.min(cached, maxHeight);
+                return { height: final, source: 'rendered', estimated: estimatedHeight };
+            }
+
             const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
             if (renderedHeight > 0) {
+                this.setRenderedHeightCache(currentSignature, renderedHeight);
                 const final = Math.min(renderedHeight, maxHeight);
                 return { height: final, source: 'rendered', estimated: estimatedHeight };
             }
-            
-            // 离屏渲染也失败，如果有历史数据就用历史（总比估算好）
-            if (fileHeight && fileHeight > 0) {
-                const final = Math.min(fileHeight, maxHeight);
-                if (logDetail) {
-                    log(`[NodeHeight] rendered-fallback: file=${fileHeight}, final=${final}`);
-                }
-                return { height: final, source: 'file-trusted', estimated: estimatedHeight };
-            }
-            
-            // 最后fallback：估算
-            return { height: estimatedHeight, source: 'zero-dom', estimated: estimatedHeight };
+
+            // 离屏渲染失败：统一回退到 estimate
+            return resolveEstimateFallback('virtualized');
         }
 
-        // [路径4] 非虚拟化节点，DOM测量失败，尝试离屏渲染
+        // [路径3] 非虚拟化节点，DOM测量失败，尝试离屏渲染
+        const cached = this.getRenderedHeightCache(currentSignature);
+        if (cached > 0) {
+            const final = Math.min(cached, maxHeight);
+            return { height: final, source: 'rendered', estimated: estimatedHeight };
+        }
+
         const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
         if (renderedHeight > 0) {
+            this.setRenderedHeightCache(currentSignature, renderedHeight);
             const final = Math.min(renderedHeight, maxHeight);
             return { height: final, source: 'rendered', estimated: estimatedHeight };
         }
@@ -172,9 +168,10 @@ export class NodeHeightService {
             const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
 
             if (sizerEl) {
-                // [修复] 同时读取 minHeight 和 scrollHeight，取较大值
-                // 原因：minHeight 是"最小高度"，当内容很长时实际需要的 scrollHeight 会更大
-                // 这样可以确保长内容不会被截断
+                // [修复] 优先使用 minHeight（CSS min-height）
+                // 原因：scrollHeight = max(clientHeight, contentHeight)，当节点容器被CSS撑大时，
+                // scrollHeight 反映的是容器大小而非内容大小。minHeight 是 Obsidian 渲染引擎
+                // 设置的真实内容高度，这才是我们需要的。
                 let minH = 0;
                 if (sizerEl.style.minHeight) {
                     const parsed = parseFloat(sizerEl.style.minHeight);
@@ -186,13 +183,22 @@ export class NodeHeightService {
                 const scrollH = sizerEl.scrollHeight;
                 const sizerRect = sizerEl.getBoundingClientRect();
                 
-                // 取三者的最大值：minHeight, scrollHeight, rect.height
-                const maxMeasured = Math.max(minH, scrollH, sizerRect.height);
+                // 优先用 minH：它是 CSS 设置的真实内容高度，不会被容器膨胀影响
+                if (minH > 20) {
+                    const result = Math.ceil(minH + 16);
+                    if (logDetail) {
+                        log(`[NodeHeight] measure: minH优先=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
+                    }
+                    return result;
+                }
+                
+                // fallback：minH 不可用时，用 scrollH 或 rectHeight
+                const maxMeasured = Math.max(scrollH, sizerRect.height);
                 
                 if (maxMeasured > 20) {
                     const result = Math.ceil(maxMeasured + 16);
-                    if (logDetail && (minH > 0 || scrollH > 20)) {
-                        log(`[NodeHeight] measure: minH=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
+                    if (logDetail && (scrollH > 20 || sizerRect.height > 20)) {
+                        log(`[NodeHeight] measure: minH无数据, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
                     }
                     return result;
                 }
@@ -310,6 +316,22 @@ export class NodeHeightService {
             return result;
         } catch (err) {
             return 0;
+        }
+    }
+
+    private getRenderedHeightCache(signature: string): number {
+        return this.renderedHeightCache.get(signature) ?? 0;
+    }
+
+    private setRenderedHeightCache(signature: string, height: number): void {
+        this.renderedHeightCache.set(signature, height);
+        if (this.renderedHeightCache.size <= NodeHeightService.RENDERED_CACHE_MAX_SIZE) {
+            return;
+        }
+
+        const oldestKey = this.renderedHeightCache.keys().next().value;
+        if (oldestKey) {
+            this.renderedHeightCache.delete(oldestKey);
         }
     }
 

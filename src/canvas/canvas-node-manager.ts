@@ -66,6 +66,18 @@ export class CanvasNodeManager {
     private nodeTypeService: NodeTypeService;
     private nodeHeightService: NodeHeightService;
 
+    // 失焦测量统计（用于快速判断 trustedHeight 是否长期无法更新）
+    private blurMeasureStats = {
+        total: 0,
+        success: 0,
+        skippedNoDom: 0,
+        skippedVirtualized: 0,
+        skippedNonText: 0,
+        failedZeroHeight: 0,
+        skippedNoCanvasPath: 0,
+        error: 0
+    };
+
     constructor(
         app: App,
         plugin: Plugin,
@@ -219,74 +231,76 @@ export class CanvasNodeManager {
 
     async adjustAllTextNodeHeights(): Promise<number> {
         try {
-            const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
-            if (!canvasFilePath) {
-                log(`[Node] 批量调整跳过: 找不到当前 Canvas 路径`);
+            // ===== 改动2：使用 Obsidian 原生 API 而非直接文件写入 =====
+            // 获取 Canvas 内存节点进行操作
+            const canvasView = getCanvasView(this.app);
+            const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
+            if (!canvas?.nodes || !(canvas.nodes instanceof Map)) {
+                log(`[Node] 批量调整跳过: 无法获取 Canvas 节点`);
                 return 0;
             }
 
-            log(`[Node] 开始批量调整高度: ${canvasFilePath}`);
+            log(`[Node] 开始批量调整高度 (内存模式)`);
 
             const stats = createEmptyStats();
             const textDimensions = this.nodeTypeService.getTextDimensions();
             const maxHeight = textDimensions.maxHeight;
             const formulaDimensions = this.nodeTypeService.getFormulaDimensions();
 
-            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, async (canvasData) => {
-                if (!canvasData.nodes) return false;
+            // 遍历内存中的节点
+            let changed = false;
+            const logDetail = false;
 
-                let changed = false;
-                const logDetail = false;
-                const nodeDomMap = this.buildNodeDomMap();
-                let sourceSampleCount = 0;
+            for (const [nodeId, domNode] of canvas.nodes) {
+                const nodeMeta = this.getNodeTextAndType(domNode);
+                if (!nodeMeta.isTextLike || !nodeMeta.text) continue;
 
-                for (const node of canvasData.nodes) {
-                    if (!node.type || node.type === 'text') {
-                        if (node.text) {
-                            const result = await this.adjustSingleNodeHeight(
-                                node, 
-                                nodeDomMap, 
-                                textDimensions, 
-                                maxHeight, 
-                                formulaDimensions, 
-                                logDetail
-                            );
-                            
-                            // 更新统计
-                            if (result.heightChanged) {
-                                stats.adjustedCount++;
-                                changed = true;
-                            }
-                            if (result.isFormula) stats.formulaCount++;
-                            if (result.delta > 0) {
-                                stats.increasedCount++;
-                                if (result.delta > stats.maxIncrease) stats.maxIncrease = result.delta;
-                            } else if (result.delta < 0) {
-                                stats.decreasedCount++;
-                                if (Math.abs(result.delta) > stats.maxDecrease) stats.maxDecrease = Math.abs(result.delta);
-                            }
-                            if (result.newHeight >= maxHeight) stats.cappedCount++;
-                            
-                            // 统计来源
-                            if (result.source === 'dom') stats.sourceDomCount++;
-                            else if (result.source === 'rendered') stats.sourceRenderedCount++;
-                            else if (result.source === 'zero-dom') stats.sourceZeroDomCount++;
-                            else if (result.source === 'file-trusted' || result.source === 'trusted-history') stats.sourceFileTrustedCount++;
-                            else stats.sourceEstimateCount++;
-                            
-                            // 收集样本
-                            if (sourceSampleCount < 8 && result.heightChanged) {
-                                stats.sourceSamples.push(`${node.id}:${result.source} ${result.oldHeight}->${result.newHeight}`);
-                                sourceSampleCount++;
-                            }
-                            
-                            // 同步内存节点
-                            this.syncMemoryNodeHeight(node.id, result.newHeight, nodeDomMap);
-                        }
-                    }
+                // 计算新高度
+                const result = await this.adjustSingleNodeHeightMemory(
+                    domNode,
+                    textDimensions,
+                    maxHeight,
+                    formulaDimensions,
+                    logDetail
+                );
+
+                // 更新统计
+                if (result.heightChanged) {
+                    stats.adjustedCount++;
+                    changed = true;
                 }
-                return changed;
-            });
+                if (result.isFormula) stats.formulaCount++;
+                if (result.delta > 0) {
+                    stats.increasedCount++;
+                    if (result.delta > stats.maxIncrease) stats.maxIncrease = result.delta;
+                } else if (result.delta < 0) {
+                    stats.decreasedCount++;
+                    if (Math.abs(result.delta) > stats.maxDecrease) stats.maxDecrease = Math.abs(result.delta);
+                }
+                if (result.newHeight >= maxHeight) stats.cappedCount++;
+
+                // 统计来源
+                if (result.source === 'dom') stats.sourceDomCount++;
+                else if (result.source === 'rendered') stats.sourceRenderedCount++;
+                else if (result.source === 'zero-dom') stats.sourceZeroDomCount++;
+                else if (result.source === 'trusted-history') stats.sourceFileTrustedCount++;
+                else stats.sourceEstimateCount++;
+
+                // 使用 moveAndResize 更新节点
+                if (result.heightChanged && typeof domNode.moveAndResize === 'function') {
+                    domNode.moveAndResize({
+                        x: domNode.x ?? 0,
+                        y: domNode.y ?? 0,
+                        width: domNode.width ?? textDimensions.width,
+                        height: result.newHeight
+                    });
+                }
+            }
+
+            // 统一请求保存（由 Obsidian 决定何时写入）
+            if (changed && typeof canvas.requestSave === 'function') {
+                canvas.requestSave();
+            }
 
             this.refreshCanvasAfterHeightAdjust();
             this.logHeightAdjustStats(stats);
@@ -297,6 +311,69 @@ export class CanvasNodeManager {
         }
     }
 
+    /** 调整内存中单个节点高度（不写文件） */
+    private async adjustSingleNodeHeightMemory(
+        domNode: CanvasNodeLike,
+        textDimensions: { width: number; maxHeight: number },
+        maxHeight: number,
+        formulaDimensions: { width: number; height: number },
+        logDetail: boolean
+    ): Promise<{
+        newHeight: number;
+        oldHeight: number;
+        delta: number;
+        heightChanged: boolean;
+        isFormula: boolean;
+        source: string;
+    }> {
+        const text = domNode.text || '';
+        const isFormula = this.nodeTypeService.isFormula(text);
+        let newHeight: number;
+        let source = 'estimate';
+        const width = domNode.width || textDimensions.width;
+        const signature = generateTextSignature(text, width);
+
+        if (isFormula) {
+            newHeight = formulaDimensions.height;
+            source = 'formula';
+            log(`[Node.perNode] id=${domNode.id} formula: newH=${newHeight}`);
+        } else {
+            // 获取节点元数据
+            const heightMeta = this.getHeightMeta(domNode);
+
+            const nodeEl = domNode.nodeEl;
+            const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
+                text,
+                nodeEl,
+                width,
+                logDetail,
+                heightMeta
+            );
+            newHeight = heightInfo.height;
+            source = heightInfo.source;
+
+            // 更新元数据
+            heightMeta.lastSignature = signature;
+            heightMeta.lastWidth = width;
+            heightMeta.lastAutoHeight = newHeight;
+            heightMeta.manualHeight = false;
+
+            if (heightInfo.shouldSaveTrusted) {
+                heightMeta.trustedHeight = newHeight;
+                heightMeta.trustedSignature = signature;
+                heightMeta.trustedTimestamp = Date.now();
+            }
+
+            this.persistHeightMeta(domNode, heightMeta);
+        }
+
+        const oldHeight = domNode.height ?? 0;
+        const delta = newHeight - oldHeight;
+        const heightChanged = Math.abs(delta) >= 1;
+
+        return { newHeight, oldHeight, delta, heightChanged, isFormula, source };
+    }
+    
     /** 调整单个节点高度 */
     private async adjustSingleNodeHeight(
         node: CanvasNodeLike,
@@ -338,10 +415,7 @@ export class CanvasNodeManager {
                 node.width = width;
             }
 
-            if (!node.data || typeof node.data !== 'object') {
-                node.data = {};
-            }
-            const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
+            const heightMeta = this.getHeightMeta(node);
             
             const domNode = nodeDomMap.get(node.id || '');
             const nodeEl = domNode?.nodeEl;
@@ -351,7 +425,6 @@ export class CanvasNodeManager {
                 nodeEl,
                 width,
                 logDetail,
-                node.height,
                 heightMeta
             );
             newHeight = heightInfo.height;
@@ -369,7 +442,7 @@ export class CanvasNodeManager {
                 heightMeta.trustedTimestamp = Date.now();
             }
             
-            (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
+            this.persistHeightMeta(node, heightMeta);
         }
 
         const oldHeight = node.height ?? 0;
@@ -486,10 +559,12 @@ export class CanvasNodeManager {
 
     /**
      * [渐进式策略] 测量并保存节点的可信高度（在节点失焦时调用）
+     * 使用 Obsidian 原生 API 而非直接文件写入，避免触发重渲染循环
      * @param nodeId 节点ID
      */
     async measureAndPersistTrustedHeight(nodeId: string): Promise<void> {
         log(`[Node] measureAndPersistTrustedHeight 被调用, nodeId=${nodeId}`);
+        this.blurMeasureStats.total++;
         
         try {
             const canvasView = getCanvasView(this.app);
@@ -498,6 +573,8 @@ export class CanvasNodeManager {
             // 获取DOM节点（必须在视口内）
             const domNode = canvas?.nodes instanceof Map ? canvas.nodes.get(nodeId) : undefined;
             if (!domNode?.nodeEl) {
+                this.blurMeasureStats.skippedNoDom++;
+                this.logBlurMeasureSummary('no-dom');
                 log(`[Node] 失焦测量跳过: 节点不在DOM中 ${nodeId}`);
                 return;
             }
@@ -505,76 +582,201 @@ export class CanvasNodeManager {
             // 检查节点是否真的可见（非虚拟化）
             const isVirtualized = this.isNodeVirtualized(domNode.nodeEl);
             if (isVirtualized) {
+                this.blurMeasureStats.skippedVirtualized++;
+                this.logBlurMeasureSummary('virtualized');
                 log(`[Node] 失焦测量跳过: 节点已虚拟化 ${nodeId}`);
                 return;
             }
             
-            if (!domNode.text || domNode.type !== 'text') {
-                log(`[Node] 失焦测量跳过: 非文本节点 ${nodeId}`);
+            const nodeMeta = this.getNodeTextAndType(domNode);
+            if (!nodeMeta.isTextLike || !nodeMeta.text) {
+                this.blurMeasureStats.skippedNonText++;
+                this.logBlurMeasureSummary('non-text');
+                log(`[Node] 失焦测量跳过: 非文本或无文本 ${nodeId}, type=${nodeMeta.typeRaw || 'undefined'}`);
                 return;
             }
             
             // 测量当前高度
             const width = domNode.width || this.settings.textNodeWidth || 400;
-            const measuredHeight = this.nodeHeightService.calculateTextNodeHeight(domNode.text, domNode.nodeEl, width);
+            const measuredHeight = this.nodeHeightService.calculateTextNodeHeight(nodeMeta.text, domNode.nodeEl, width);
             
             if (measuredHeight <= 0) {
+                this.blurMeasureStats.failedZeroHeight++;
+                this.logBlurMeasureSummary('zero-height');
                 log(`[Node] 失焦测量失败: 测量高度为0 ${nodeId}`);
                 return;
             }
             
+            this.blurMeasureStats.success++;
+            this.logBlurMeasureSummary('success');
             log(`[Node] 失焦测量成功: id=${nodeId}, h=${measuredHeight}`);
             
-            // 持久化到文件
-            const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
-            if (!canvasFilePath) {
-                log(`[Node] 失焦保存跳过: 找不到Canvas路径`);
+            // ===== 关键修改：使用 Obsidian 原生 API 而非直接文件写入 =====
+            // 这样可以更新内存中的节点高度，由 Obsidian 的渲染引擎统一管理
+            // 避免触发文件变化 → 重渲染 → Observer → 再次测量 → 再次写入 的死循环
+            
+            // 检查是否需要更新高度
+            const currentHeight = domNode.height ?? 0;
+            if (Math.abs(currentHeight - measuredHeight) < 1) {
+                log(`[Node] 失焦更新跳过: 高度差异小于1px ${nodeId}, cur=${currentHeight}, new=${measuredHeight}`);
                 return;
             }
             
-            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
-                if (!canvasData.nodes) return false;
-                
-                const node = canvasData.nodes.find(n => n.id === nodeId);
-                if (!node || !node.text) return false;
-                
-                // 初始化元数据
-                if (!node.data || typeof node.data !== 'object') {
-                    node.data = {};
-                }
-                const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
-                
-                // 生成签名
-                const signature = generateTextSignature(node.text, width);
-                
-                // 保存可信测量值
-                heightMeta.trustedHeight = measuredHeight;
-                heightMeta.trustedSignature = signature;
-                heightMeta.trustedTimestamp = Date.now();
-                heightMeta.lastWidth = width;
-                heightMeta.lastAutoHeight = measuredHeight;
-                
-                (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
-                
-                // 同时更新node.height
-                const changed = node.height !== measuredHeight;
-                if (changed) {
-                    node.height = measuredHeight;
-                    log(`[Node] 失焦保存: id=${nodeId}, ${node.height}->${measuredHeight}`);
-                }
-                
-                return changed;
-            });
+            // 使用 moveAndResize 更新内存中的节点（不触发文件写入循环）
+            if (typeof domNode.moveAndResize === 'function') {
+                domNode.moveAndResize({
+                    x: domNode.x ?? 0,
+                    y: domNode.y ?? 0,
+                    width: domNode.width ?? width,
+                    height: measuredHeight
+                });
+                log(`[Node] 失焦更新: id=${nodeId}, ${currentHeight}->${measuredHeight} (moveAndResize)`);
+            } else {
+                // 备用方案：直接设置属性
+                domNode.height = measuredHeight;
+                log(`[Node] 失焦更新: id=${nodeId}, ${currentHeight}->${measuredHeight} (direct)`);
+            }
+            
+            // 请求 Canvas 保存（由 Obsidian 决定何时写入文件）
+            if (canvas && typeof canvas.requestSave === 'function') {
+                canvas.requestSave();
+            }
+            
+            // 同时在节点 data 中更新元数据（内存中）
+            const heightMeta = this.getHeightMeta(domNode);
+            const signature = generateTextSignature(nodeMeta.text, width);
+            heightMeta.trustedHeight = measuredHeight;
+            heightMeta.trustedSignature = signature;
+            heightMeta.trustedTimestamp = Date.now();
+            heightMeta.lastWidth = width;
+            heightMeta.lastAutoHeight = measuredHeight;
+            this.persistHeightMeta(domNode, heightMeta);
             
         } catch (err) {
+            this.blurMeasureStats.error++;
+            this.logBlurMeasureSummary('error');
             log(`[Node] 失焦测量异常: ${err}`);
         }
+    }
+
+    private logBlurMeasureSummary(trigger: string): void {
+        const total = this.blurMeasureStats.total;
+        if (total % 20 !== 0 && trigger !== 'success') return;
+        log(`[Node] BlurMeasureSummary: trigger=${trigger}, total=${total}, success=${this.blurMeasureStats.success}, noDom=${this.blurMeasureStats.skippedNoDom}, virtualized=${this.blurMeasureStats.skippedVirtualized}, nonText=${this.blurMeasureStats.skippedNonText}, zeroH=${this.blurMeasureStats.failedZeroHeight}, noPath=${this.blurMeasureStats.skippedNoCanvasPath}, error=${this.blurMeasureStats.error}`);
     }
 
     private isNodeVirtualized(nodeEl: Element): boolean {
         const el = nodeEl as HTMLElement;
         const rectHeight = el.getBoundingClientRect().height;
         return rectHeight === 0 && el.offsetHeight === 0 && el.clientHeight === 0 && el.scrollHeight === 0;
+    }
+
+    private getNodeTextAndType(node: CanvasNodeLike | undefined): { text: string; isTextLike: boolean; typeRaw?: string } {
+        if (!node) return { text: '', isTextLike: false, typeRaw: undefined };
+        const data = typeof node.getData === 'function' ? node.getData() : undefined;
+        const dataText = typeof data?.text === 'string' ? data.text : '';
+        const text = (typeof node.text === 'string' && node.text.length > 0) ? node.text : dataText;
+        const typeRaw = typeof node.type === 'string'
+            ? node.type
+            : (typeof data?.type === 'string' ? data.type : undefined);
+        const isTextLike = !typeRaw || typeRaw === 'text';
+        return { text, isTextLike, typeRaw };
+    }
+
+    /**
+     * 从内存 data 和 Obsidian 节点持久化 data 中读取高度元数据
+     */
+    private getHeightMeta(node: CanvasNodeLike): HeightMeta {
+        const memoryMeta = (node.data && typeof node.data === 'object')
+            ? (node.data as { heightMeta?: HeightMeta }).heightMeta
+            : undefined;
+        const persistedData = typeof node.getData === 'function' ? node.getData() : undefined;
+        const persistedMeta = (persistedData && typeof persistedData === 'object')
+            ? (persistedData as { heightMeta?: HeightMeta }).heightMeta
+            : undefined;
+
+        return {
+            ...(persistedMeta || {}),
+            ...(memoryMeta || {})
+        };
+    }
+
+    /**
+     * 同步写入高度元数据到内存与节点持久化 data，确保重开 canvas 后可恢复 trusted-history
+     */
+    private persistHeightMeta(node: CanvasNodeLike, heightMeta: HeightMeta): void {
+        if (!node.data || typeof node.data !== 'object') {
+            node.data = {};
+        }
+        (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
+
+        if (typeof node.setData === 'function') {
+            const baseData = (typeof node.getData === 'function' ? node.getData() : {}) || {};
+            node.setData({
+                ...baseData,
+                heightMeta
+            });
+        }
+    }
+
+    /**
+     * 主动刷新当前可见文本节点的 trustedHeight（小批量）
+     * 用于降低长期依赖估算高度且失焦测量触发不足的问题
+     */
+    async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8): Promise<number> {
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
+        if (!canvas?.nodes || !(canvas.nodes instanceof Map)) {
+            return 0;
+        }
+
+        const candidateIds: string[] = [];
+        let noDomCount = 0;
+        let virtualizedCount = 0;
+        let nonTextCount = 0;
+        let noTextCount = 0;
+        const candidateSamples: string[] = [];
+        const skippedSamples: string[] = [];
+
+        for (const [id, node] of canvas.nodes) {
+            if (candidateIds.length >= limit) break;
+
+            const nodeMeta = this.getNodeTextAndType(node);
+            if (!node.nodeEl) {
+                noDomCount++;
+                if (skippedSamples.length < 4) skippedSamples.push(`${id}:no-dom`);
+                continue;
+            }
+            if (this.isNodeVirtualized(node.nodeEl)) {
+                virtualizedCount++;
+                if (skippedSamples.length < 4) skippedSamples.push(`${id}:virtualized`);
+                continue;
+            }
+            if (!nodeMeta.isTextLike) {
+                nonTextCount++;
+                if (skippedSamples.length < 4) skippedSamples.push(`${id}:type=${nodeMeta.typeRaw || 'undefined'}`);
+                continue;
+            }
+            if (!nodeMeta.text) {
+                noTextCount++;
+                if (skippedSamples.length < 4) skippedSamples.push(`${id}:empty-text`);
+                continue;
+            }
+
+            candidateIds.push(id);
+            if (candidateSamples.length < 4) {
+                candidateSamples.push(`${id}:type=${nodeMeta.typeRaw || 'undefined'} len=${nodeMeta.text.length}`);
+            }
+        }
+
+        let refreshed = 0;
+        for (const nodeId of candidateIds) {
+            await this.measureAndPersistTrustedHeight(nodeId);
+            refreshed++;
+        }
+
+        log(`[Node] ProactiveTrustedRefresh: refreshed=${refreshed}, candidates=${candidateIds.length}, limit=${limit}, noDom=${noDomCount}, virtualized=${virtualizedCount}, nonText=${nonTextCount}, noText=${noTextCount}, candidateSample=${candidateSamples.join('|') || 'none'}, skippedSample=${skippedSamples.join('|') || 'none'}`);
+        return refreshed;
     }
 
     /** 构建节点 ID → DOM 节点的映射 */
@@ -623,6 +825,6 @@ export class CanvasNodeManager {
             log(`[Node] 批量调整完成: 无需更新节点高度`);
         }
         log(`[Node] 批量调整统计: 增加=${stats.increasedCount}, 减少=${stats.decreasedCount}, maxIncrease=${stats.maxIncrease.toFixed(1)}, maxDecrease=${stats.maxDecrease.toFixed(1)}, capped=${stats.cappedCount}, formula=${stats.formulaCount}`);
-        log(`[Node] 高度来源统计: dom=${stats.sourceDomCount}, rendered=${stats.sourceRenderedCount}, file-trusted=${stats.sourceFileTrustedCount}, estimate=${stats.sourceEstimateCount}, zeroDom=${stats.sourceZeroDomCount}, sample=${stats.sourceSamples.join('|')}`);
+        log(`[Node] 高度来源统计: dom=${stats.sourceDomCount}, rendered=${stats.sourceRenderedCount}, trusted=${stats.sourceFileTrustedCount}, estimate=${stats.sourceEstimateCount}, zeroDom=${stats.sourceZeroDomCount}, sample=${stats.sourceSamples.join('|')}`);
     }
 }

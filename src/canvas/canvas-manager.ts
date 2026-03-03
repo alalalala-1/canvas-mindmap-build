@@ -86,8 +86,12 @@ export class CanvasManager implements ICanvasManager {
     // =========================================================================
     // 公共接口方法
     // =========================================================================
-    async arrangeCanvas() {
-        await this.layoutManager.arrangeCanvas();
+    /**
+     * 手动触发画布布局整理
+     * @param source 触发来源标识
+     */
+    async arrangeCanvas(source: string = 'manual') {
+        await this.layoutManager.arrangeCanvas(source);
     }
 
     public async addNodeToCanvas(content: string, sourceFile: TFile | null) {
@@ -108,6 +112,10 @@ export class CanvasManager implements ICanvasManager {
 
     public async adjustAllTextNodeHeights(): Promise<number> {
         return await this.nodeManager.adjustAllTextNodeHeights();
+    }
+
+    public async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8): Promise<number> {
+        return await this.nodeManager.refreshTrustedHeightsForVisibleTextNodes(limit);
     }
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {
