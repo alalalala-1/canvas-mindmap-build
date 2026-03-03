@@ -13,7 +13,7 @@ import {
     estimateTextNodeHeight,
     getCanvasView,
     getCurrentCanvasFilePath,
-    stripInvisibleMarkup
+    resolveArrangedTextWidth
 } from '../utils/canvas-utils';
 import { generateTextSignature } from '../utils/height-utils';
 import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
@@ -344,7 +344,7 @@ export class CanvasNodeManager {
         let source = 'estimate';
         const width = isFormula
             ? (domNode.width || textDimensions.width)
-            : this.resolveArrangedTextWidth(text, textDimensions.width);
+            : resolveArrangedTextWidth(text, textDimensions.width);
 
         const oldWidth = domNode.width ?? textDimensions.width;
         const widthChanged = Math.abs(oldWidth - width) >= 1;
@@ -437,7 +437,7 @@ export class CanvasNodeManager {
             (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
             log(`[Node.perNode] id=${node.id} formula: newH=${newHeight}`);
         } else {
-            const width = this.resolveArrangedTextWidth(node.text || '', textDimensions.width);
+            const width = resolveArrangedTextWidth(node.text || '', textDimensions.width);
             newWidth = width;
             widthChanged = Math.abs(oldWidth - width) >= 1;
             node.width = width;
@@ -481,48 +481,6 @@ export class CanvasNodeManager {
         }
 
         return { newHeight, newWidth, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
-    }
-
-    /**
-     * Arrange 宽度策略：默认使用设置页宽度；内容过短时使用 50% 宽度
-     */
-    private resolveArrangedTextWidth(text: string, configuredWidth: number): number {
-        const baseWidth = Math.max(120, configuredWidth || this.settings.textNodeWidth || 400);
-        const minWidth = Math.max(80, Math.round(baseWidth * 0.5));
-        const raw = stripInvisibleMarkup(text || '').trim();
-        if (!raw) return minWidth;
-
-        const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
-        const plainLines = lines.map(line => line.replace(/^#{1,6}\s+/, '').replace(/\*\*|\*|__|_|`/g, ''));
-        const totalChars = plainLines.reduce((sum, line) => sum + line.length, 0);
-
-        // 用户语义是“内容长度太短”才缩窄：多行或总字符明显较多时直接用全宽
-        if (lines.length >= 3) return baseWidth;
-        if (totalChars >= 48) return baseWidth;
-        if (lines.length === 2 && totalChars >= 24) return baseWidth;
-
-        const estimatedContentWidth = this.estimateContentWidth(raw);
-        return estimatedContentWidth < minWidth ? minWidth : baseWidth;
-    }
-
-    /**
-     * 粗略估算文本内容单行像素宽度（用于短文本窄化）
-     */
-    private estimateContentWidth(text: string): number {
-        const lines = stripInvisibleMarkup(text || '').split('\n').map(line => line.trim());
-        let maxWidth = 0;
-        for (const line of lines) {
-            if (!line) continue;
-            const plain = line.replace(/^#{1,6}\s+/, '').replace(/\*\*|\*|__|_|`/g, '');
-            let lineWidth = 0;
-            for (const ch of plain) {
-                if (/[\u4e00-\u9fa5]/.test(ch)) lineWidth += 14;
-                else if (ch === ' ') lineWidth += 4;
-                else lineWidth += 8;
-            }
-            if (lineWidth > maxWidth) maxWidth = lineWidth;
-        }
-        return maxWidth;
     }
 
     /** 同步内存中的节点高度 */

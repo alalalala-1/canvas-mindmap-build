@@ -1,7 +1,7 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
 import { CONSTANTS } from '../constants';
-import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint } from '../utils/canvas-utils';
+import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint, getArrangedTextWidthDecision } from '../utils/canvas-utils';
 
 /**
  * 过滤有效的浮动节点，只保留当前节点集合中存在的浮动节点
@@ -150,6 +150,12 @@ function initializeLayoutNodes(
     settings: CanvasArrangerSettings
 ): Map<string, LayoutNode> {
     const layoutNodes = new Map<string, LayoutNode>();
+    const widthDecisionCounts = new Map<string, number>();
+    const widthDecisionSamples: string[] = [];
+    const shrinkSamples: string[] = [];
+    let textLikeCount = 0;
+    let widthChangedCount = 0;
+    let shrinkCount = 0;
 
     // [SSOT原则] Layout不负责高度决策，直接使用传入的height值
     // 高度由adjustAllTextNodeHeights唯一管理，已写入nodeData.height
@@ -161,16 +167,62 @@ function initializeLayoutNodes(
             ? nodeData.height
             : (settings.textNodeMaxHeight || CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT);
 
+        const nodeType = nodeData.type;
+        const isTextLike = !nodeType || nodeType === 'text';
+        let nodeWidth = nodeData.width || settings.textNodeWidth;
+
+        if (isTextLike) {
+            textLikeCount++;
+
+            const decision = getArrangedTextWidthDecision(nodeData.text, settings.textNodeWidth);
+            const incomingWidth = typeof nodeData.width === 'number' ? nodeData.width : 0;
+            nodeWidth = decision.width;
+
+            widthDecisionCounts.set(decision.reason, (widthDecisionCounts.get(decision.reason) || 0) + 1);
+            if (decision.reason === 'shrink-50') {
+                shrinkCount++;
+                if (shrinkSamples.length < 20) {
+                    shrinkSamples.push(
+                        `${nodeId}: in=${incomingWidth}->out=${decision.width}, base=${decision.baseWidth}, min=${decision.minWidth}, lines=${decision.linesCount}, chars=${decision.totalChars}, est=${decision.estimatedContentWidth}, text="${decision.snippet}"`
+                    );
+                }
+            }
+
+            if (incomingWidth !== decision.width) {
+                widthChangedCount++;
+                if (widthDecisionSamples.length < 12) {
+                    widthDecisionSamples.push(
+                        `${nodeId}: in=${incomingWidth}->out=${decision.width}, base=${decision.baseWidth}, min=${decision.minWidth}, lines=${decision.linesCount}, chars=${decision.totalChars}, est=${decision.estimatedContentWidth}, reason=${decision.reason}, text="${decision.snippet}"`
+                    );
+                }
+            }
+        }
+
         layoutNodes.set(nodeId, {
             id: nodeId,
             x: nodeData.x || 0,
             y: nodeData.y || 0,
-            width: nodeData.width || settings.textNodeWidth,
+            width: nodeWidth,
             height: nodeHeight,
             children: [],
             _subtreeHeight: 0
         });
     });
+
+    if (textLikeCount > 0) {
+        const reasonSummary = Array.from(widthDecisionCounts.entries())
+            .map(([reason, count]) => `${reason}:${count}`)
+            .join(', ');
+        log(`[Layout] WidthDecisionSummary: textLike=${textLikeCount}, changed=${widthChangedCount}, shrink=${shrinkCount}, reasons={${reasonSummary}}`);
+
+        if (widthDecisionSamples.length > 0) {
+            log(`[Layout] WidthDecisionSamples(${widthDecisionSamples.length}/${widthChangedCount}): ${widthDecisionSamples.join(' | ')}`);
+        }
+
+        if (shrinkSamples.length > 0) {
+            log(`[Layout] WidthShrinkSamples(${shrinkSamples.length}/${shrinkCount}): ${shrinkSamples.join(' | ')}`);
+        }
+    }
 
     log(`[Layout] HeightInit: total=${layoutNodes.size}, 直接使用传入高度值`);
 
@@ -191,8 +243,8 @@ function buildLayoutParentMap(
     const processedEdges = new Set<string>();
     
     for (const edge of edges) {
-        const fromId = getNodeIdFromEdgeEndpoint(edge.from);
-        const toId = getNodeIdFromEdgeEndpoint(edge.to);
+        const fromId = getNodeIdFromEdgeEndpoint(edge.from) || edge.fromNode || null;
+        const toId = getNodeIdFromEdgeEndpoint(edge.to) || edge.toNode || null;
 
         if (!fromId || !toId) continue;
 

@@ -72,6 +72,14 @@ export class CanvasUIManager {
             }
         }
 
+        const unmatchedNodeIdsFromFileData = new Set<string>();
+        for (const fileNode of canvas.fileData?.nodes || []) {
+            if (!fileNode.id) continue;
+            if (this.isFromLinkUnmatchedNode(fileNode)) {
+                unmatchedNodeIdsFromFileData.add(fileNode.id);
+            }
+        }
+
         for (const node of nodes) {
             const nodeId = node.id;
             if (!nodeId) continue;
@@ -86,6 +94,7 @@ export class CanvasUIManager {
             }
 
             nodeEl.setAttribute('data-node-id', nodeId);
+            this.applyFromLinkUnmatchedStyle(nodeEl, node, unmatchedNodeIdsFromFileData);
 
             const hasChildren = nodesWithChildren.has(nodeId);
 
@@ -101,6 +110,25 @@ export class CanvasUIManager {
 
             await this.addCollapseButtonToNodeIfNeeded(nodeEl, nodeId, edges);
         }
+    }
+
+    private applyFromLinkUnmatchedStyle(
+        nodeEl: HTMLElement,
+        node: CanvasNodeLike,
+        unmatchedNodeIdsFromFileData: Set<string>
+    ): void {
+        const nodeId = node.id || '';
+        const unmatched = this.isFromLinkUnmatchedNode(node)
+            || (nodeId ? unmatchedNodeIdsFromFileData.has(nodeId) : false);
+        nodeEl.classList.toggle('cmb-fromlink-unmatched', unmatched);
+    }
+
+    private isFromLinkUnmatchedNode(node: CanvasNodeLike): boolean {
+        const data = node.data;
+        if (!data || typeof data !== 'object') return false;
+        const repair = (data as Record<string, unknown>).fromLinkRepair;
+        if (!repair || typeof repair !== 'object') return false;
+        return (repair as Record<string, unknown>).unmatched === true;
     }
 
     private async addCollapseButtonToNodeIfNeeded(

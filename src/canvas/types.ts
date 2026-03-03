@@ -47,6 +47,10 @@ export type FloatingNodeMetadata = {
     floatingTimestamp?: number;
     isSubtreeNode?: boolean;
     heightMeta?: HeightMeta;
+    fromLinkRepair?: {
+        unmatched?: boolean;
+        updatedAt?: number;
+    };
 };
 
 export type CanvasNodeLike = {

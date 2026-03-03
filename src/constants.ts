@@ -71,6 +71,7 @@ export const CONSTANTS = {
         RETRY_DELAY_SHORT: 300,
         RETRY_DELAY_MEDIUM: 600,
         RETRY_DELAY_LONG: 1000,
+        FROM_LINK_NAV_DEBOUNCE: 2000,
     },
 
     TOUCH: {

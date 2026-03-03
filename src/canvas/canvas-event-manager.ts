@@ -56,6 +56,8 @@ export class CanvasEventManager {
     private focusLostDebounceId: number | null = null;
     private lastFocusedNodeId: string | null = null;
     private isDeleting: boolean = false;
+    private lastFromLinkNavAt: number = 0;
+    private lastFromLinkNavKey: string = '';
     
     // [A2] 监听器防重日志
     private workspaceEventsRegistered: boolean = false;
@@ -307,6 +309,19 @@ export class CanvasEventManager {
             }
             return;
         }
+
+        const now = Date.now();
+        const navKey = `${clickedNode.id || 'unknown'}|${fromLink.file}|${fromLink.from.line}:${fromLink.from.ch}-${fromLink.to.line}:${fromLink.to.ch}`;
+        if (
+            this.lastFromLinkNavKey === navKey
+            && now - this.lastFromLinkNavAt < CONSTANTS.TIMING.FROM_LINK_NAV_DEBOUNCE
+        ) {
+            log(`[Event] fromLink 跳转防抖: skip duplicate within ${CONSTANTS.TIMING.FROM_LINK_NAV_DEBOUNCE}ms -> ${fromLink.file}`);
+            return;
+        }
+
+        this.lastFromLinkNavKey = navKey;
+        this.lastFromLinkNavAt = now;
         
         log(`[Event] UI: 跳转 fromLink -> ${fromLink.file}`);
         try {

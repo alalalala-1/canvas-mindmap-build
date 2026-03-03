@@ -8,6 +8,7 @@ import { CanvasUIManager } from './canvas-ui-manager';
 import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasFileService } from './services/canvas-file-service';
 import { EdgeDeletionService } from './services/edge-deletion-service';
+import { FromLinkRepairService } from './services/fromlink-repair-service';
 import { log } from '../utils/logger';
 import {
     getCanvasView,
@@ -32,6 +33,7 @@ export class CanvasManager implements ICanvasManager {
     private uiManager: CanvasUIManager;
     private floatingNodeService: FloatingNodeService;
     private edgeDeletionService: EdgeDeletionService;
+    private fromLinkRepairService: FromLinkRepairService;
     private buttonCheckTimeoutId: number | null = null;
 
     constructor(
@@ -68,6 +70,7 @@ export class CanvasManager implements ICanvasManager {
         this.uiManager = new CanvasUIManager(app, settings, collapseStateManager);
         this.edgeDeletionService = new EdgeDeletionService(app, plugin, settings, this.canvasFileService, this.floatingNodeService);
         this.edgeDeletionService.setCanvasManager(this);
+        this.fromLinkRepairService = new FromLinkRepairService(app, this.canvasFileService);
 
         // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
         this.layoutManager.setFloatingNodeService(this.floatingNodeService);
@@ -124,6 +127,10 @@ export class CanvasManager implements ICanvasManager {
 
     async deleteSelectedEdge() {
         await this.edgeDeletionService.deleteSelectedEdge();
+    }
+
+    async repairNodeFromLinks(): Promise<void> {
+        await this.fromLinkRepairService.repairFromLinksForCurrentCanvas();
     }
 
     // =========================================================================

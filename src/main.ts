@@ -59,6 +59,12 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             callback: () => this.canvasManager.adjustAllTextNodeHeights(),
         });
 
+        this.addCommand({
+            id: 'repair-node-fromlinks',
+            name: 'Repair node fromLinks (修复节点源链接)',
+            callback: () => this.canvasManager.repairNodeFromLinks(),
+        });
+
         this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
     }
 

@@ -220,6 +220,153 @@ export function stripInvisibleMarkup(text: string): string {
         .replace(/<[^>]+>/g, '');
 }
 
+/**
+ * 粗略估算文本内容单行像素宽度（用于短文本窄化）
+ */
+export function estimateContentWidth(text: string): number {
+    const lines = stripInvisibleMarkup(text || '').split('\n').map(line => line.trim());
+    let maxWidth = 0;
+
+    for (const line of lines) {
+        if (!line) continue;
+
+        const plain = line
+            .replace(/^#{1,6}\s+/, '')
+            .replace(/\*\*|\*|__|_|`/g, '');
+
+        let lineWidth = 0;
+        for (const ch of plain) {
+            if (/[\u4e00-\u9fa5]/.test(ch)) lineWidth += 14;
+            else if (ch === ' ') lineWidth += 4;
+            else lineWidth += 8;
+        }
+
+        if (lineWidth > maxWidth) maxWidth = lineWidth;
+    }
+
+    return maxWidth;
+}
+
+export type ArrangedTextWidthDecisionReason =
+    | 'empty'
+    | 'guard-lines'
+    | 'guard-total-chars'
+    | 'guard-two-lines'
+    | 'shrink-50'
+    | 'full-width';
+
+export type ArrangedTextWidthDecision = {
+    width: number;
+    baseWidth: number;
+    minWidth: number;
+    shrinkThreshold: number;
+    estimatedContentWidth: number;
+    linesCount: number;
+    totalChars: number;
+    reason: ArrangedTextWidthDecisionReason;
+    snippet: string;
+};
+
+/**
+ * 解释 Arrange 文本宽度决策（用于调试日志）
+ */
+export function getArrangedTextWidthDecision(
+    text: string | undefined,
+    configuredWidth: number
+): ArrangedTextWidthDecision {
+    const baseWidth = Math.max(120, configuredWidth || CONSTANTS.LAYOUT.TEXT_NODE_WIDTH);
+    const minWidth = Math.max(80, Math.round(baseWidth * 0.5));
+    const raw = stripInvisibleMarkup(text || '').trim();
+    const snippet = raw.replace(/\s+/g, ' ').slice(0, 60);
+
+    if (!raw) {
+        return {
+            width: minWidth,
+            baseWidth,
+            minWidth,
+            shrinkThreshold: 0,
+            estimatedContentWidth: 0,
+            linesCount: 0,
+            totalChars: 0,
+            reason: 'empty',
+            snippet
+        };
+    }
+
+    const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+    const plainLines = lines.map(line => line.replace(/^#{1,6}\s+/, '').replace(/\*\*|\*|__|_|`/g, ''));
+    const totalChars = plainLines.reduce((sum, line) => sum + line.length, 0);
+
+    if (lines.length >= 3) {
+        return {
+            width: baseWidth,
+            baseWidth,
+            minWidth,
+            shrinkThreshold: 0,
+            estimatedContentWidth: 0,
+            linesCount: lines.length,
+            totalChars,
+            reason: 'guard-lines',
+            snippet
+        };
+    }
+
+    if (totalChars >= 48) {
+        return {
+            width: baseWidth,
+            baseWidth,
+            minWidth,
+            shrinkThreshold: 0,
+            estimatedContentWidth: 0,
+            linesCount: lines.length,
+            totalChars,
+            reason: 'guard-total-chars',
+            snippet
+        };
+    }
+
+    if (lines.length === 2 && totalChars >= 24) {
+        return {
+            width: baseWidth,
+            baseWidth,
+            minWidth,
+            shrinkThreshold: 0,
+            estimatedContentWidth: 0,
+            linesCount: lines.length,
+            totalChars,
+            reason: 'guard-two-lines',
+            snippet
+        };
+    }
+
+    const estimatedContentWidth = estimateContentWidth(raw);
+
+    // minWidth 包含左右 padding（约 16px），再额外留出安全系数，
+    // 仅“非常短”的文本才缩窄，避免粗体/中英混排被误判后换行。
+    const contentAreaWidth = Math.max(0, minWidth - 16);
+    const shrinkThreshold = Math.max(72, Math.round(contentAreaWidth * 0.6));
+    const shouldShrink = estimatedContentWidth <= shrinkThreshold;
+
+    return {
+        width: shouldShrink ? minWidth : baseWidth,
+        baseWidth,
+        minWidth,
+        shrinkThreshold,
+        estimatedContentWidth,
+        linesCount: lines.length,
+        totalChars,
+        reason: shouldShrink ? 'shrink-50' : 'full-width',
+        snippet
+    };
+}
+
+/**
+ * Arrange 宽度策略：默认使用设置页宽度；内容过短时使用 50% 宽度
+ */
+export function resolveArrangedTextWidth(text: string | undefined, configuredWidth: number): number {
+    return getArrangedTextWidthDecision(text, configuredWidth).width;
+}
+
 function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as CanvasNodeLike;
