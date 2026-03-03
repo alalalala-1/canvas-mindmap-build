@@ -310,9 +310,22 @@ export class CanvasEventManager {
         
         log(`[Event] UI: 跳转 fromLink -> ${fromLink.file}`);
         try {
-            const sourceFile = this.app.vault.getAbstractFileByPath(fromLink.file);
+            let sourceFile = this.app.vault.getAbstractFileByPath(fromLink.file);
+
+            // 精确路径失败时，尝试按末级文件名回退查找（兼容文件被移动/重命名目录）
             if (!(sourceFile instanceof TFile)) {
-                new Notice('找不到源文件');
+                const fileName = fromLink.file.split('/').pop();
+                if (fileName) {
+                    const allFiles = this.app.vault.getFiles();
+                    sourceFile = allFiles.find(file => file.path.endsWith(`/${fromLink.file}`))
+                        ?? allFiles.find(file => file.name === fileName)
+                        ?? sourceFile;
+                }
+            }
+
+            if (!(sourceFile instanceof TFile)) {
+                log(`[Event] fromLink 找不到源文件: ${fromLink.file}`);
+                new Notice(`找不到源文件: ${fromLink.file}`);
                 return;
             }
 

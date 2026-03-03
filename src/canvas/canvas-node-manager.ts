@@ -12,7 +12,8 @@ import { CONSTANTS } from '../constants';
 import {
     estimateTextNodeHeight,
     getCanvasView,
-    getCurrentCanvasFilePath
+    getCurrentCanvasFilePath,
+    stripInvisibleMarkup
 } from '../utils/canvas-utils';
 import { generateTextSignature } from '../utils/height-utils';
 import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
@@ -20,6 +21,7 @@ import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta 
 /** 高度调整的统计上下文 */
 interface HeightAdjustmentStats {
     adjustedCount: number;
+    widthAdjustedCount: number;
     increasedCount: number;
     decreasedCount: number;
     cappedCount: number;
@@ -38,6 +40,7 @@ interface HeightAdjustmentStats {
 function createEmptyStats(): HeightAdjustmentStats {
     return {
         adjustedCount: 0,
+        widthAdjustedCount: 0,
         increasedCount: 0,
         decreasedCount: 0,
         cappedCount: 0,
@@ -258,6 +261,7 @@ export class CanvasNodeManager {
                 // 计算新高度
                 const result = await this.adjustSingleNodeHeightMemory(
                     domNode,
+                    nodeMeta.text,
                     textDimensions,
                     maxHeight,
                     formulaDimensions,
@@ -267,6 +271,10 @@ export class CanvasNodeManager {
                 // 更新统计
                 if (result.heightChanged) {
                     stats.adjustedCount++;
+                    changed = true;
+                }
+                if (result.widthChanged) {
+                    stats.widthAdjustedCount++;
                     changed = true;
                 }
                 if (result.isFormula) stats.formulaCount++;
@@ -287,11 +295,11 @@ export class CanvasNodeManager {
                 else stats.sourceEstimateCount++;
 
                 // 使用 moveAndResize 更新节点
-                if (result.heightChanged && typeof domNode.moveAndResize === 'function') {
+                if ((result.heightChanged || result.widthChanged) && typeof domNode.moveAndResize === 'function') {
                     domNode.moveAndResize({
                         x: domNode.x ?? 0,
                         y: domNode.y ?? 0,
-                        width: domNode.width ?? textDimensions.width,
+                        width: result.newWidth,
                         height: result.newHeight
                     });
                 }
@@ -314,23 +322,36 @@ export class CanvasNodeManager {
     /** 调整内存中单个节点高度（不写文件） */
     private async adjustSingleNodeHeightMemory(
         domNode: CanvasNodeLike,
+        textContent: string,
         textDimensions: { width: number; maxHeight: number },
         maxHeight: number,
         formulaDimensions: { width: number; height: number },
         logDetail: boolean
     ): Promise<{
         newHeight: number;
+        newWidth: number;
+        oldWidth: number;
+        widthChanged: boolean;
         oldHeight: number;
         delta: number;
         heightChanged: boolean;
         isFormula: boolean;
         source: string;
     }> {
-        const text = domNode.text || '';
+        const text = textContent || domNode.text || '';
         const isFormula = this.nodeTypeService.isFormula(text);
         let newHeight: number;
         let source = 'estimate';
-        const width = domNode.width || textDimensions.width;
+        const width = isFormula
+            ? (domNode.width || textDimensions.width)
+            : this.resolveArrangedTextWidth(text, textDimensions.width);
+
+        const oldWidth = domNode.width ?? textDimensions.width;
+        const widthChanged = Math.abs(oldWidth - width) >= 1;
+        if (widthChanged) {
+            domNode.width = width;
+        }
+
         const signature = generateTextSignature(text, width);
 
         if (isFormula) {
@@ -371,7 +392,7 @@ export class CanvasNodeManager {
         const delta = newHeight - oldHeight;
         const heightChanged = Math.abs(delta) >= 1;
 
-        return { newHeight, oldHeight, delta, heightChanged, isFormula, source };
+        return { newHeight, newWidth: width, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
     }
     
     /** 调整单个节点高度 */
@@ -384,6 +405,9 @@ export class CanvasNodeManager {
         logDetail: boolean
     ): Promise<{
         newHeight: number;
+        newWidth: number;
+        oldWidth: number;
+        widthChanged: boolean;
         oldHeight: number;
         delta: number;
         heightChanged: boolean;
@@ -393,10 +417,15 @@ export class CanvasNodeManager {
         const isFormula = this.nodeTypeService.isFormula(node.text || '');
         let newHeight: number;
         let source = 'estimate';
+        let newWidth = node.width || textDimensions.width;
+        const oldWidth = node.width ?? textDimensions.width;
+        let widthChanged = false;
 
         if (isFormula) {
             newHeight = formulaDimensions.height;
             node.width = formulaDimensions.width;
+            newWidth = formulaDimensions.width;
+            widthChanged = Math.abs(oldWidth - newWidth) >= 1;
             if (!node.data || typeof node.data !== 'object') {
                 node.data = {};
             }
@@ -408,12 +437,10 @@ export class CanvasNodeManager {
             (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
             log(`[Node.perNode] id=${node.id} formula: newH=${newHeight}`);
         } else {
-            const width = typeof node.width === 'number' && node.width > 0
-                ? node.width
-                : textDimensions.width;
-            if (!node.width || node.width <= 0) {
-                node.width = width;
-            }
+            const width = this.resolveArrangedTextWidth(node.text || '', textDimensions.width);
+            newWidth = width;
+            widthChanged = Math.abs(oldWidth - width) >= 1;
+            node.width = width;
 
             const heightMeta = this.getHeightMeta(node);
             
@@ -453,7 +480,49 @@ export class CanvasNodeManager {
             node.height = newHeight;
         }
 
-        return { newHeight, oldHeight, delta, heightChanged, isFormula, source };
+        return { newHeight, newWidth, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
+    }
+
+    /**
+     * Arrange 宽度策略：默认使用设置页宽度；内容过短时使用 50% 宽度
+     */
+    private resolveArrangedTextWidth(text: string, configuredWidth: number): number {
+        const baseWidth = Math.max(120, configuredWidth || this.settings.textNodeWidth || 400);
+        const minWidth = Math.max(80, Math.round(baseWidth * 0.5));
+        const raw = stripInvisibleMarkup(text || '').trim();
+        if (!raw) return minWidth;
+
+        const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+        const plainLines = lines.map(line => line.replace(/^#{1,6}\s+/, '').replace(/\*\*|\*|__|_|`/g, ''));
+        const totalChars = plainLines.reduce((sum, line) => sum + line.length, 0);
+
+        // 用户语义是“内容长度太短”才缩窄：多行或总字符明显较多时直接用全宽
+        if (lines.length >= 3) return baseWidth;
+        if (totalChars >= 48) return baseWidth;
+        if (lines.length === 2 && totalChars >= 24) return baseWidth;
+
+        const estimatedContentWidth = this.estimateContentWidth(raw);
+        return estimatedContentWidth < minWidth ? minWidth : baseWidth;
+    }
+
+    /**
+     * 粗略估算文本内容单行像素宽度（用于短文本窄化）
+     */
+    private estimateContentWidth(text: string): number {
+        const lines = stripInvisibleMarkup(text || '').split('\n').map(line => line.trim());
+        let maxWidth = 0;
+        for (const line of lines) {
+            if (!line) continue;
+            const plain = line.replace(/^#{1,6}\s+/, '').replace(/\*\*|\*|__|_|`/g, '');
+            let lineWidth = 0;
+            for (const ch of plain) {
+                if (/[\u4e00-\u9fa5]/.test(ch)) lineWidth += 14;
+                else if (ch === ' ') lineWidth += 4;
+                else lineWidth += 8;
+            }
+            if (lineWidth > maxWidth) maxWidth = lineWidth;
+        }
+        return maxWidth;
     }
 
     /** 同步内存中的节点高度 */
@@ -824,7 +893,7 @@ export class CanvasNodeManager {
         } else {
             log(`[Node] 批量调整完成: 无需更新节点高度`);
         }
-        log(`[Node] 批量调整统计: 增加=${stats.increasedCount}, 减少=${stats.decreasedCount}, maxIncrease=${stats.maxIncrease.toFixed(1)}, maxDecrease=${stats.maxDecrease.toFixed(1)}, capped=${stats.cappedCount}, formula=${stats.formulaCount}`);
+        log(`[Node] 批量调整统计: 增加=${stats.increasedCount}, 减少=${stats.decreasedCount}, widthChanged=${stats.widthAdjustedCount}, maxIncrease=${stats.maxIncrease.toFixed(1)}, maxDecrease=${stats.maxDecrease.toFixed(1)}, capped=${stats.cappedCount}, formula=${stats.formulaCount}`);
         log(`[Node] 高度来源统计: dom=${stats.sourceDomCount}, rendered=${stats.sourceRenderedCount}, trusted=${stats.sourceFileTrustedCount}, estimate=${stats.sourceEstimateCount}, zeroDom=${stats.sourceZeroDomCount}, sample=${stats.sourceSamples.join('|')}`);
     }
 }

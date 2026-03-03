@@ -208,6 +208,18 @@ export function parseFromLink(text?: string, color?: string): {
     return null;
 }
 
+/**
+ * 剥离节点文本中“不参与可见内容计算”的标记：
+ * - HTML 注释（如 fromLink metadata）
+ * - HTML 标签（如 mark/span/br 等）
+ */
+export function stripInvisibleMarkup(text: string): string {
+    if (!text) return '';
+    return text
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/<[^>]+>/g, '');
+}
+
 function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
     if (!value || typeof value !== 'object') return false;
     const candidate = value as CanvasNodeLike;
@@ -521,7 +533,8 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
     
     const chineseCharRegex = /[\u4e00-\u9fa5]/;
     let totalHeight = 0;
-    const textLines = content.split('\n');
+    const visibleContent = stripInvisibleMarkup(content);
+    const textLines = visibleContent.split('\n');
 
     for (const line of textLines) {
         const trimmedLine = line.trim();

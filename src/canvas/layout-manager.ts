@@ -184,19 +184,28 @@ export class LayoutManager {
                 if (delta > maxDelta) maxDelta = delta;
                 totalDelta += delta;
 
-                // [SSOT原则] Layout只负责位置(x,y)，不修改width/height
-                // width/height由adjustAllTextNodeHeights唯一管理，已在文件中
-                // [C2] 使用安全的尺寸获取方法，防止 0 宽高
-                const { width: currentWidth, height: currentHeight } = this.getSafeNodeSize(originalNode, currentData);
+                // [修复] 位置更新时优先使用布局结果中的宽高，避免用 getData() 里的旧值把新宽度“弹回去”
+                // fallback 仅在布局结果缺失宽高时启用
+                const layoutWidth = typeof newPosition.width === 'number' && newPosition.width > 0 ? newPosition.width : 0;
+                const layoutHeight = typeof newPosition.height === 'number' && newPosition.height > 0 ? newPosition.height : 0;
+                const fallbackSize = (layoutWidth === 0 || layoutHeight === 0)
+                    ? this.getSafeNodeSize(originalNode, currentData)
+                    : null;
+                const currentWidth = layoutWidth || fallbackSize?.width || 150;
+                const currentHeight = layoutHeight || fallbackSize?.height || 60;
                 
                 // 统计尺寸来源
                 const nodeAny = originalNode as any;
-                if (typeof currentData.width === 'number' && currentData.width > 0) {
-                    // 来自 currentData
+                const dataWidthOk = typeof currentData.width === 'number' && currentData.width > 0;
+                const dataHeightOk = typeof currentData.height === 'number' && currentData.height > 0;
+                if (!dataWidthOk || !dataHeightOk) {
+                    zeroFromData++;
+                }
+
+                if (layoutWidth > 0 || layoutHeight > 0) {
+                    fromLayout++;
                 } else if (typeof nodeAny.width === 'number' && nodeAny.width > 0) {
                     fromNode++;
-                } else if (typeof newPosition.width === 'number' && newPosition.width > 0) {
-                    fromLayout++;
                 } else {
                     defaulted++;
                 }
@@ -612,6 +621,14 @@ export class LayoutManager {
             let updatedCount = 0;
             if (success) {
                 updatedCount = await this.updateNodePositions(result, allNodes, canvas, arrangeId);
+
+                // [修复] 当本轮主要是尺寸变化（宽高）时，Canvas 引擎可能尚未完成节点几何到边锚点的传播
+                // 先让 requestUpdate/requestSave 的异步渲染周期跑一帧，避免 edge.render() 读到旧锚点导致“临时断连”
+                await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => {
+                        window.setTimeout(() => resolve(), 50);
+                    });
+                });
 
                 setTimeout(() => {
                     const memoryEdgesAfter = this.getCanvasEdges(canvas);
@@ -1071,6 +1088,7 @@ export class LayoutManager {
     ): boolean {
         let changed = false;
         let changedCount = 0;
+        let sizeChangedCount = 0;
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
@@ -1090,11 +1108,23 @@ export class LayoutManager {
             if (delta > maxDelta) maxDelta = delta;
             totalDelta += delta;
             const epsilon = CONSTANTS.LAYOUT.POSITION_WRITE_EPSILON;
-            if (Math.abs(prevX - newPos.x) > epsilon || Math.abs(prevY - newPos.y) > epsilon) {
+
+            const posChanged = Math.abs(prevX - newPos.x) > epsilon || Math.abs(prevY - newPos.y) > epsilon;
+
+            const prevW = typeof node.width === 'number' ? node.width : 0;
+            const prevH = typeof node.height === 'number' ? node.height : 0;
+            const nextW = typeof newPos.width === 'number' && newPos.width > 0 ? newPos.width : prevW;
+            const nextH = typeof newPos.height === 'number' && newPos.height > 0 ? newPos.height : prevH;
+            const sizeChanged = Math.abs(prevW - nextW) > epsilon || Math.abs(prevH - nextH) > epsilon;
+
+            if (posChanged || sizeChanged) {
                 node.x = newPos.x;
                 node.y = newPos.y;
+                if (nextW > 0) node.width = nextW;
+                if (nextH > 0) node.height = nextH;
                 changed = true;
-                changedCount++;
+                if (posChanged) changedCount++;
+                if (sizeChanged) sizeChangedCount++;
             }
 
             // [已移除] FileHeight修正逻辑 - 导致与adjustAllTextNodeHeights产生死循环
@@ -1104,7 +1134,7 @@ export class LayoutManager {
             // 高度在arrangeLayout之前已由adjustAllTextNodeHeights处理完毕，此处不再修改
         }
         const avgDelta = changedCount > 0 ? totalDelta / changedCount : 0;
-        log(`[Layout] FilePos: changed=${changedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
+        log(`[Layout] FilePos: changed=${changedCount}, sizeChanged=${sizeChangedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
         return changed;
     }
 
