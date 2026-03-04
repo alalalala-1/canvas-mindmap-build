@@ -151,6 +151,7 @@ export type CanvasViewLike = {
 export type MarkdownViewLike = {
     file?: { path?: string };
     editor?: {
+        focus?: () => void;
         setSelection: (from: { line: number; ch: number }, to: { line: number; ch: number }) => void;
         scrollIntoView: (range: { from: { line: number; ch: number }; to: { line: number; ch: number } }, center?: boolean) => void;
         listSelections?: () => Array<{ anchor: { line: number; ch: number }; head: { line: number; ch: number } }>;

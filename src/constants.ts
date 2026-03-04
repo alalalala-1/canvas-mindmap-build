@@ -61,6 +61,10 @@ export const CONSTANTS = {
         RETRY_DELAY_MEDIUM: 600,
         RETRY_DELAY_LONG: 1000,
         FROM_LINK_NAV_DEBOUNCE: 2000,
+        /** 移动端 fromLink 跳转后的初始等待时间（墨水屏等慢速设备需要更长时间） */
+        MOBILE_SELECTION_DELAY: 400,
+        /** 移动端 fromLink 选区的重试延迟（防止视图动画完成后选区被重置） */
+        MOBILE_SELECTION_RETRY_DELAY: 300,
     },
 
     TOUCH: {

@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Plugin, TFile } from 'obsidian';
+import { App, ItemView, Notice, Platform, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { DeleteConfirmationModal } from '../ui/delete-modal';
@@ -355,10 +355,29 @@ export class CanvasEventManager {
             }
 
             const view = mdLeaf.view as MarkdownViewLike;
+
+            // 移动端（尤其是墨水屏）渲染较慢，需要更长的初始延迟才能让编辑器就绪
+            const initialDelay = Platform.isMobile
+                ? CONSTANTS.TIMING.MOBILE_SELECTION_DELAY
+                : CONSTANTS.TIMING.SCROLL_DELAY;
+
+            const applySelection = () => {
+                const editor = view.editor;
+                if (!editor) return;
+                // 强制聚焦编辑器，确保选区能被接受
+                editor.focus?.();
+                editor.setSelection(fromLink!.from, fromLink!.to);
+                editor.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
+                log(`[Event] fromLink 选区已应用: L${fromLink!.from.line}:${fromLink!.from.ch}-${fromLink!.to.ch}`);
+            };
+
             setTimeout(() => {
-                view.editor?.setSelection(fromLink!.from, fromLink!.to);
-                view.editor?.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
-            }, CONSTANTS.TIMING.SCROLL_DELAY);
+                applySelection();
+                // 移动端额外重试一次，防止视图切换动画完成后选区被重置
+                if (Platform.isMobile) {
+                    setTimeout(applySelection, CONSTANTS.TIMING.MOBILE_SELECTION_RETRY_DELAY);
+                }
+            }, initialDelay);
         } catch (err) {
             log(`[Event] UI: 跳转失败: ${err}`);
         }
