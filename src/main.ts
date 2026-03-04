@@ -47,18 +47,6 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             callback: () => this.canvasManager.arrangeCanvas(),
         });
 
-        this.addCommand({ 
-            id: 'delete-selected-edge',
-            name: 'Delete selected edge',
-            callback: () => this.canvasManager.deleteSelectedEdge(),
-        });
-
-        this.addCommand({
-            id: 'adjust-all-text-node-heights',
-            name: 'Adjust all text node heights',
-            callback: () => this.canvasManager.adjustAllTextNodeHeights(),
-        });
-
         this.addCommand({
             id: 'repair-node-fromlinks',
             name: 'Repair node fromLinks (修复节点源链接)',
