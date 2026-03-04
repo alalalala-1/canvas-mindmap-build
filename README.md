@@ -173,6 +173,13 @@
 
 ## 更新日志
 
+### v1.3.0
+- 架构重构：拆分 `CollapseToggleService`（折叠/展开逻辑）和 `EdgeGeometryService`（边几何刷新）
+- `layout-manager.ts` 从 1484 行精简至 722 行（减少 51%），职责更清晰
+- 删除冗余工具层（`edge-utils`、`node-utils`、`ui-utils`、`canvas-data-utils`）
+- 所有核心流程验证通过：布局幂等、高度稳定、边几何收敛、折叠展开正确
+- 清理仓库无关文件（IDE/AI 工具目录、临时调试脚本）
+
 ### v1.2.0
 - 新增浮动节点管理功能（红框标识、状态持久化）
 - 新增边删除确认对话框
