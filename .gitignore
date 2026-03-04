@@ -20,6 +20,7 @@ data.json
 # IDE / AI assistant internal files
 .cline/
 .trae/
+AGENTS.md
 
 # Debug / temp scripts
 _debug_*.py
