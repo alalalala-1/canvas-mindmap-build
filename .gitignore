@@ -17,6 +17,9 @@ data.json
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
 
+# obsidian-releases fork (local clone, not part of this project)
+obsidian-releases/
+
 # IDE / AI assistant internal files
 .cline/
 .trae/
