@@ -5,5 +5,6 @@
 	"minAppVersion": "0.15.0",
 	"description": "Turn your Markdown notes into Canvas mindmaps. Add nodes from selected text, collapse/expand subtrees, auto-arrange layout, and jump back to source with one click.",
 	"author": "Saga",
+	"authorUrl": "https://github.com/alalalala-1",
 	"isDesktopOnly": false
 }
