@@ -20,3 +20,13 @@ data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# IDE / AI assistant internal files
+.cline/
+.trae/
+
+# Debug / temp scripts
+_debug_*.py
+
+# Test canvas files
+test-canvas*.json
