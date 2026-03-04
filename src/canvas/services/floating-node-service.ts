@@ -21,8 +21,8 @@ export class FloatingNodeService {
     private edgeWatchTimeouts: Map<string, Set<number>> = new Map();
     private floatingNodeIds: Set<string> = new Set();
 
-    constructor(app: App, settings: CanvasMindmapBuildSettings) {
-        this.canvasFileService = new CanvasFileService(app, settings);
+    constructor(app: App, settings: CanvasMindmapBuildSettings, canvasFileService: CanvasFileService) {
+        this.canvasFileService = canvasFileService;
         this.stateManager = new FloatingNodeStateManager(app, this.canvasFileService);
         this.styleManager = new FloatingNodeStyleManager();
         this.edgeDetector = new EdgeChangeDetector();

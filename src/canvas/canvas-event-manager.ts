@@ -702,8 +702,5 @@ export class CanvasEventManager {
             this.mutationObserver.disconnect();
             this.mutationObserver = null;
         }
-        
-        const buttons = document.querySelectorAll('.cmb-collapse-button');
-        buttons.forEach(btn => btn.remove());
     }
 }

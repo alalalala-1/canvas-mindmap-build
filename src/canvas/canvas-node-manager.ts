@@ -395,110 +395,6 @@ export class CanvasNodeManager {
         return { newHeight, newWidth: width, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
     }
     
-    /** 调整单个节点高度 */
-    private async adjustSingleNodeHeight(
-        node: CanvasNodeLike,
-        nodeDomMap: Map<string, CanvasNodeLike>,
-        textDimensions: { width: number; maxHeight: number },
-        maxHeight: number,
-        formulaDimensions: { width: number; height: number },
-        logDetail: boolean
-    ): Promise<{
-        newHeight: number;
-        newWidth: number;
-        oldWidth: number;
-        widthChanged: boolean;
-        oldHeight: number;
-        delta: number;
-        heightChanged: boolean;
-        isFormula: boolean;
-        source: string;
-    }> {
-        const isFormula = this.nodeTypeService.isFormula(node.text || '');
-        let newHeight: number;
-        let source = 'estimate';
-        let newWidth = node.width || textDimensions.width;
-        const oldWidth = node.width ?? textDimensions.width;
-        let widthChanged = false;
-
-        if (isFormula) {
-            newHeight = formulaDimensions.height;
-            node.width = formulaDimensions.width;
-            newWidth = formulaDimensions.width;
-            widthChanged = Math.abs(oldWidth - newWidth) >= 1;
-            if (!node.data || typeof node.data !== 'object') {
-                node.data = {};
-            }
-            const heightMeta = (node.data as { heightMeta?: HeightMeta }).heightMeta || {};
-            heightMeta.manualHeight = false;
-            heightMeta.lastWidth = node.width;
-            heightMeta.lastAutoHeight = newHeight;
-            heightMeta.lastSignature = generateTextSignature(node.text || '', node.width);
-            (node.data as { heightMeta?: HeightMeta }).heightMeta = heightMeta;
-            log(`[Node.perNode] id=${node.id} formula: newH=${newHeight}`);
-        } else {
-            const width = resolveArrangedTextWidth(node.text || '', textDimensions.width);
-            newWidth = width;
-            widthChanged = Math.abs(oldWidth - width) >= 1;
-            node.width = width;
-
-            const heightMeta = this.getHeightMeta(node);
-            
-            const domNode = nodeDomMap.get(node.id || '');
-            const nodeEl = domNode?.nodeEl;
-            
-            const heightInfo = await this.nodeHeightService.calculateTextNodeHeightInfoAsync(
-                node.text || '',
-                nodeEl,
-                width,
-                logDetail,
-                heightMeta
-            );
-            newHeight = heightInfo.height;
-            source = heightInfo.source;
-
-            const signature = generateTextSignature(node.text || '', width);
-            heightMeta.lastSignature = signature;
-            heightMeta.lastWidth = width;
-            heightMeta.lastAutoHeight = newHeight;
-            heightMeta.manualHeight = false;
-            
-            if (heightInfo.shouldSaveTrusted) {
-                heightMeta.trustedHeight = newHeight;
-                heightMeta.trustedSignature = signature;
-                heightMeta.trustedTimestamp = Date.now();
-            }
-            
-            this.persistHeightMeta(node, heightMeta);
-        }
-
-        const oldHeight = node.height ?? 0;
-        const delta = newHeight - oldHeight;
-        const heightChanged = oldHeight !== newHeight;
-        
-        if (heightChanged) {
-            node.height = newHeight;
-        }
-
-        return { newHeight, newWidth, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
-    }
-
-    /** 同步内存中的节点高度 */
-    private syncMemoryNodeHeight(nodeId: string | undefined, newHeight: number, nodeDomMap: Map<string, CanvasNodeLike>): void {
-        if (!nodeId) return;
-        const memNodeData = nodeDomMap.get(nodeId);
-        if (memNodeData && memNodeData.height !== newHeight) {
-            memNodeData.height = newHeight;
-            if (memNodeData.nodeEl) {
-                memNodeData.nodeEl.style.height = `${newHeight}px`;
-            }
-            const nodeWithRender = memNodeData as CanvasNodeLike & { render?: () => void };
-            if (typeof nodeWithRender.render === 'function') {
-                nodeWithRender.render();
-            }
-        }
-    }
-
     async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
         return this.nodeDeletionService.handleSingleDelete(node, canvas);
     }
@@ -804,21 +700,6 @@ export class CanvasNodeManager {
 
         log(`[Node] ProactiveTrustedRefresh: refreshed=${refreshed}, candidates=${candidateIds.length}, limit=${limit}, noDom=${noDomCount}, virtualized=${virtualizedCount}, nonText=${nonTextCount}, noText=${noTextCount}, candidateSample=${candidateSamples.join('|') || 'none'}, skippedSample=${skippedSamples.join('|') || 'none'}`);
         return refreshed;
-    }
-
-    /** 构建节点 ID → DOM 节点的映射 */
-    private buildNodeDomMap(): Map<string, CanvasNodeLike> {
-        const nodeDomMap = new Map<string, CanvasNodeLike>();
-        const canvasView = getCanvasView(this.app);
-        const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
-        if (canvas?.nodes && canvas.nodes instanceof Map) {
-            for (const [id, nodeData] of canvas.nodes) {
-                if (nodeData?.nodeEl) {
-                    nodeDomMap.set(id, nodeData);
-                }
-            }
-        }
-        return nodeDomMap;
     }
 
     /** 刷新 Canvas 边和视图 */

@@ -11,8 +11,7 @@ import { EdgeDeletionService } from './services/edge-deletion-service';
 import { FromLinkRepairService } from './services/fromlink-repair-service';
 import { log } from '../utils/logger';
 import {
-    getCanvasView,
-    getCurrentCanvasFilePath
+    getCanvasView
 } from '../utils/canvas-utils';
 
 import { VisibilityService } from './services/visibility-service';
@@ -62,7 +61,7 @@ export class CanvasManager implements ICanvasManager {
             this.visibilityService,
             this.layoutDataProvider
         );
-        this.floatingNodeService = new FloatingNodeService(app, settings);
+        this.floatingNodeService = new FloatingNodeService(app, settings, this.canvasFileService);
         this.floatingNodeService.setCanvasManager(this);
         this.eventManager = new CanvasEventManager(plugin, app, settings, collapseStateManager, this);
         this.nodeManager = new CanvasNodeManager(app, plugin, settings, collapseStateManager, this.canvasFileService);
@@ -228,9 +227,5 @@ export class CanvasManager implements ICanvasManager {
     // =========================================================================
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
-    }
-
-    private getCurrentCanvasFilePath(): string | undefined {
-        return getCurrentCanvasFilePath(this.app);
     }
 }
