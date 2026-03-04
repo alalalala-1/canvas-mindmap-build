@@ -57,10 +57,9 @@
 
 | 命令 | 说明 |
 |------|------|
-| Add to Canvas Mindmap | 将选中内容添加为节点 |
-| Arrange Canvas Mindmap Layout | 自动整理布局 |
-| Delete Selected Edge | 删除选中的连线 |
-| Adjust All Text Node Heights | 批量调整文本节点高度 |
+| Add to canvas mindmap | 将选中的文字/图片/公式添加为 Canvas 节点 |
+| Arrange canvas mindmap layout | 自动整理画布节点布局 |
+| Repair node fromLinks | 修复节点与源文件的跳转链接 |
 
 ---
 
