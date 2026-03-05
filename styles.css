@@ -1,5 +1,8 @@
 /* Canvas Mindmap Build Plugin - Collapse Button Styles */
 
+
+
+
 .cmb-collapse-button {
     /* 基础定位和尺寸 - 正方形按钮 */
     position: absolute !important;
@@ -175,6 +178,50 @@
 }
 
 /* ============================================================================
+   Canvas节点定位修复（永久生效，防止inset污染导致的错连）
+   目标：强制Canvas节点只使用transform定位，禁止inset的top/left分量影响位置
+   原理：Canvas引擎主要使用transform定位，inset的非零top值是样式污染导致的异常
+   修复：强制inset:auto和top/left:0，让Canvas完全依赖transform定位链路
+   ============================================================================ */
+
+.canvas-node {
+    position: absolute !important;
+    inset: auto !important;
+    /* 关键顺序：inset 为 shorthand，会覆盖 top/left，故 top/left 放后写入 */
+    top: 0 !important;
+    left: 0 !important;
+    right: auto !important;
+    bottom: auto !important;
+    /* 节点边框样式 - 深蓝色2px + 15px倒角 */
+    border: 2px solid #1e3a8a !important;
+    border-radius: 15px !important;
+    /* 裁剪内部内容，强制倒角生效 */
+    overflow: hidden !important;
+}
+
+/* 节点内容区域倒角 - 与外框协调 */
+.canvas-node .canvas-node-content {
+    border-radius: 13px !important;
+}
+
+/* 节点容器层倒角 - 确保多层结构都有倒角 */
+.canvas-node > div {
+    border-radius: 13px !important;
+}
+
+/* ============================================================================
+   Canvas连线样式 - 深蓝色2px（与节点边框颜色一致）
+   ============================================================================ */
+
+.canvas-edge path,
+.canvas-edge line,
+svg.canvas-edges path,
+svg.canvas-edges line {
+    stroke: #1e3a8a !important;
+    stroke-width: 2px !important;
+}
+
+/* ============================================================================
    浮动节点样式
    ============================================================================ */
 
@@ -193,7 +240,7 @@
 }
 
 .cmb-floating-node .canvas-node-content {
-    border-radius: 4px !important;
+    border-radius: 6px !important;
 }
 
 /* ==========================================================================
@@ -218,6 +265,7 @@
     /* 优化触摸滚动性能 */
     -webkit-overflow-scrolling: touch !important;
     overscroll-behavior: contain !important;
+    /* 内容区域倒角已在上面统一定义 */
 }
 
 /* Webkit 浏览器滚动条样式 */

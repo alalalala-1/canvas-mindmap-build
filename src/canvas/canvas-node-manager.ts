@@ -383,6 +383,7 @@ export class CanvasNodeManager {
                 heightMeta.trustedHeight = newHeight;
                 heightMeta.trustedSignature = signature;
                 heightMeta.trustedTimestamp = Date.now();
+                heightMeta.trustedEpoch = 3; // Epoch 3: 修复rendered缓存绕过 + settings引用断裂
             }
 
             this.persistHeightMeta(domNode, heightMeta);
@@ -392,7 +393,20 @@ export class CanvasNodeManager {
         const delta = newHeight - oldHeight;
         const heightChanged = Math.abs(delta) >= 1;
 
+        // [诊断] 记录所有非formula节点的调整细节
+        if (!isFormula) {
+            const textPreview = text.substring(0, 15).replace(/\n/g, ' ');
+            // 对rendered来源或高变化>5的节点输出详情
+            if (source === 'rendered' || Math.abs(delta) > 5) {
+                const estimatedHeight = estimateTextNodeHeight(text, width, maxHeight);
+                const deviation = newHeight - estimatedHeight;
+                log(`[Node.perNode] id=${domNode.id}, src=${source}, oldH=${oldHeight}, newH=${newHeight}, delta=${delta.toFixed(1)}, est=${estimatedHeight}, dev=${deviation.toFixed(1)}, w=${width}, text="${textPreview}"`);
+            }
+        }
+
         return { newHeight, newWidth: width, oldWidth, widthChanged, oldHeight, delta, heightChanged, isFormula, source };
+
+
     }
     
     async handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
@@ -571,6 +585,7 @@ export class CanvasNodeManager {
             heightMeta.trustedHeight = measuredHeight;
             heightMeta.trustedSignature = signature;
             heightMeta.trustedTimestamp = Date.now();
+            heightMeta.trustedEpoch = 3; // Epoch 3: 修复rendered缓存绕过 + settings引用断裂
             heightMeta.lastWidth = width;
             heightMeta.lastAutoHeight = measuredHeight;
             this.persistHeightMeta(domNode, heightMeta);

@@ -39,6 +39,7 @@ export type HeightMeta = {
     trustedHeight?: number;         // 可信测量高度（DOM完全可见时测得）
     trustedTimestamp?: number;      // 可信测量时间戳
     trustedSignature?: string;      // 可信测量时的内容指纹（内容+宽度）
+    trustedEpoch?: number;          // 可信测量的版本号（用于批量淘汰旧缓存）
 };
 
 export type FloatingNodeMetadata = {

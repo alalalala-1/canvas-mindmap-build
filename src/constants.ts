@@ -65,7 +65,20 @@ export const CONSTANTS = {
         MOBILE_SELECTION_DELAY: 400,
         /** 移动端 fromLink 选区的重试延迟（防止视图动画完成后选区被重置） */
         MOBILE_SELECTION_RETRY_DELAY: 300,
+        /** arrange 完成后的延迟边刷新时间（等待虚拟化节点 DOM 渲染完毕） */
+        EDGE_REFRESH_DEFERRED_DELAY: 800,
+        /** 移动端/墨水屏 arrange 完成后的延迟边刷新时间（更长，适应慢速设备） */
+        EDGE_REFRESH_DEFERRED_DELAY_MOBILE: 1500,
+        /** viewport 变化后的边刷新防抖时间（设备旋转/分屏切换时触发） */
+        VIEWPORT_CHANGE_DEBOUNCE: 400,
+        /** 移动端 viewport 变化后额外等待时间（等待系统完成旋转动画） */
+        VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE: 600,
+        /** 边几何 pass2 之间的等待时间（低置信度场景使用更长时间） */
+        EDGE_REFRESH_PASS_INTERVAL: 50,
+        /** 低置信度场景下 edge refresh 额外 pass 的等待间隔 */
+        EDGE_REFRESH_EXTRA_PASS_INTERVAL: 300,
     },
+
 
     TOUCH: {
         DURATION_THRESHOLD: 300,

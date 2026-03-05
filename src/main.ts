@@ -15,7 +15,8 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
     constructor(app: App, manifest: PluginManifest) {
         super(app, manifest);
-        this.settings = DEFAULT_SETTINGS;
+        // [修复] 创建DEFAULT_SETTINGS的副本，避免所有模块共享同一个引用
+        this.settings = { ...DEFAULT_SETTINGS };
         this.canvasManager = new CanvasManager(this, app, this.settings, this.collapseStateManager);
     }
 
@@ -70,14 +71,17 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             let mergedSettings = { ...DEFAULT_SETTINGS, ...validatedData };
             mergedSettings = migrateSettings(mergedSettings);
 
-            this.settings = mergedSettings;
+            // [修复] 使用Object.assign更新同一对象，保持所有模块的settings引用有效
+            // 之前用 this.settings = mergedSettings 会断开CanvasManager等模块的引用
+            Object.assign(this.settings, mergedSettings);
             this.lastClickedNodeId = typeof dataObj.lastClickedNodeId === 'string' ? dataObj.lastClickedNodeId : null;
 
             updateLoggerConfig(this.settings);
             log('[Settings] 加载成功');
         } catch (e) {
             log('[Settings] 加载失败:', e);
-            this.settings = { ...DEFAULT_SETTINGS };
+            // [修复] 失败时也用Object.assign，保持引用
+            Object.assign(this.settings, DEFAULT_SETTINGS);
             new Notice('加载插件设置失败，使用默认设置');
         }
     }

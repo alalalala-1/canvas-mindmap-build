@@ -88,6 +88,11 @@ export const DEFAULT_ARRANGER_SETTINGS: CanvasArrangerSettings = {
     formulaNodeHeight: CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT,
 };
 
+export interface ArrangeLayoutOptions {
+    forceResetCoordinates?: boolean;
+    forceReason?: string;
+}
+
 /**
  * 从边的端点获取节点ID
  * @param endpoint 边的端点，可能是字符串或对象
@@ -147,7 +152,8 @@ function collectFloatingSubtree(nodeId: string, childrenMap: Map<string, string[
  */
 function initializeLayoutNodes(
     nodes: Map<string, CanvasNodeLike>,
-    settings: CanvasArrangerSettings
+    settings: CanvasArrangerSettings,
+    forceResetCoordinates: boolean = false
 ): Map<string, LayoutNode> {
     const layoutNodes = new Map<string, LayoutNode>();
     const widthDecisionCounts = new Map<string, number>();
@@ -200,8 +206,8 @@ function initializeLayoutNodes(
 
         layoutNodes.set(nodeId, {
             id: nodeId,
-            x: nodeData.x || 0,
-            y: nodeData.y || 0,
+            x: forceResetCoordinates ? 0 : (nodeData.x || 0),
+            y: forceResetCoordinates ? 0 : (nodeData.y || 0),
             width: nodeWidth,
             height: nodeHeight,
             children: [],
@@ -622,16 +628,24 @@ export function arrangeLayout(
     settings: CanvasArrangerSettings,
     originalEdges?: CanvasEdgeLike[],
     allNodes?: Map<string, CanvasNodeLike>,
-    canvasData?: CanvasDataLike
+    canvasData?: CanvasDataLike,
+    options?: ArrangeLayoutOptions
 ): Map<string, LayoutPosition> {
-    log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边`);
+    const forceResetCoordinates = options?.forceResetCoordinates === true;
+    const forceReason = options?.forceReason || 'none';
+    log(`[Layout] 开始: ${nodes.size} 节点, ${edges.length} 边, forceReset=${forceResetCoordinates}, reason=${forceReason}`);
+    // [诊断] 输出settings值，确认间距是否正确传递
+    log(`[Layout] Settings: hSpacing=${settings.horizontalSpacing}, vSpacing=${settings.verticalSpacing}, textW=${settings.textNodeWidth}, textMaxH=${settings.textNodeMaxHeight}`);
+    if (forceResetCoordinates) {
+        log(`[Layout] ForceResetCoordinates: 已启用，布局时忽略输入x/y（使用结构重排）`);
+    }
 
     const floatingInfo = getFloatingNodesInfo(canvasData);
     const { floatingNodes, originalParents } = filterValidFloatingNodes(
         nodes, floatingInfo.floatingNodes, floatingInfo.originalParents
     );
 
-    const layoutNodes = initializeLayoutNodes(nodes, settings);
+    const layoutNodes = initializeLayoutNodes(nodes, settings, forceResetCoordinates);
     const layoutParentMap = buildLayoutParentMap(edges, layoutNodes);
 
     const edgesForCompleteMap = originalEdges && originalEdges.length > 0 ? originalEdges : edges;
@@ -695,6 +709,29 @@ export function arrangeLayout(
             });
         }
     });
+
+    // 输出输入/输出坐标对比，便于判断“布局是否真的产生移动”
+    let moved = 0;
+    let maxDelta = 0;
+    const diffSamples: string[] = [];
+    const epsilon = CONSTANTS.LAYOUT.POSITION_WRITE_EPSILON;
+    result.forEach((pos, id) => {
+        const inputNode = nodes.get(id);
+        if (!inputNode) return;
+        const inX = typeof inputNode.x === 'number' ? inputNode.x : 0;
+        const inY = typeof inputNode.y === 'number' ? inputNode.y : 0;
+        const dx = Math.abs(pos.x - inX);
+        const dy = Math.abs(pos.y - inY);
+        const delta = Math.hypot(dx, dy);
+        if (delta > epsilon) {
+            moved++;
+            if (delta > maxDelta) maxDelta = delta;
+            if (diffSamples.length < 5) {
+                diffSamples.push(`${id}: (${inX.toFixed(1)},${inY.toFixed(1)}) -> (${pos.x.toFixed(1)},${pos.y.toFixed(1)}), d=${delta.toFixed(1)}`);
+            }
+        }
+    });
+    log(`[Layout] ResultDiff: moved=${moved}/${result.size}, maxDelta=${maxDelta.toFixed(1)}, forceReset=${forceResetCoordinates}, sample=${diffSamples.join(' | ') || 'none'}`);
 
     return result;
 }

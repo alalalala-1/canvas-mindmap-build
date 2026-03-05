@@ -8,6 +8,9 @@ import { generateTextSignature } from '../../utils/height-utils';
 
 export class NodeHeightService {
     private static readonly RENDERED_CACHE_MAX_SIZE = 200;
+    // [修复] Epoch版本号：更改此值会使所有旧的trusted缓存失效，强制重新测量
+    // Epoch 3: 修复rendered缓存绕过偏差校验 + settings引用断裂
+    private static readonly CURRENT_EPOCH = 3;
 
     private app: App;
     private settings: CanvasMindmapBuildSettings;
@@ -16,6 +19,12 @@ export class NodeHeightService {
     private measurementSizerEl: HTMLElement | null = null;
     private measurementComponent: Component | null = null;
     private renderedHeightCache = new Map<string, number>();
+
+    private parsePx(value: string): number | null {
+        if (!value || value === 'auto') return null;
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
 
     constructor(
         app: App,
@@ -70,7 +79,7 @@ export class NodeHeightService {
         nodeEl?: Element,
         nodeWidthOverride?: number,
         logDetail: boolean = false,
-        heightMeta?: { trustedHeight?: number; trustedSignature?: string; trustedTimestamp?: number }
+        heightMeta?: HeightMeta
     ): Promise<{ height: number; source: 'dom' | 'rendered' | 'estimate' | 'zero-dom' | 'trusted-history'; estimated: number; shouldSaveTrusted?: boolean }> {
         const maxHeight = this.settings.textNodeMaxHeight || 800;
         const fallbackWidth = typeof nodeWidthOverride === 'number' && nodeWidthOverride > 0
@@ -96,11 +105,12 @@ export class NodeHeightService {
         // [关键修复] 提前判断虚拟化状态
         const isVirtualized = this.isZeroSizedNode(nodeEl, false);
         
-        // [路径0] 可信历史值（内容未变化时）
-        if (heightMeta?.trustedHeight && heightMeta.trustedSignature === currentSignature) {
+        // [路径0] 可信历史值（内容未变化且epoch匹配时）
+        const epochMatches = heightMeta?.trustedEpoch === NodeHeightService.CURRENT_EPOCH;
+        if (heightMeta?.trustedHeight && heightMeta.trustedSignature === currentSignature && epochMatches) {
             const final = Math.min(heightMeta.trustedHeight, maxHeight);
             if (logDetail) {
-                log(`[NodeHeight] trusted-history: trusted=${heightMeta.trustedHeight}, final=${final}`);
+                log(`[NodeHeight] trusted-history: trusted=${heightMeta.trustedHeight}, final=${final}, epoch=${heightMeta.trustedEpoch}`);
             }
             return { height: final, source: 'trusted-history', estimated: estimatedHeight };
         }
@@ -108,8 +118,15 @@ export class NodeHeightService {
         // [路径1] 非虚拟化节点 或 历史不可信：尝试DOM测量
         const measuredHeight = this.measureActualContentHeight(nodeEl, content, fallbackWidth, false);
         if (measuredHeight > 0) {
-            const final = Math.min(measuredHeight, maxHeight);
+            let finalMeasured = measuredHeight;
             const source = isVirtualized ? 'rendered' : 'dom';
+            
+            // [修复] 虚拟化节点的DOM测量是"回声值"（文件高度→Canvas引擎minHeight→测回来），不可靠，需要偏差校验
+            if (isVirtualized && measuredHeight > estimatedHeight * 1.3) {
+                finalMeasured = estimatedHeight;
+            }
+            
+            const final = Math.min(finalMeasured, maxHeight);
             
             // [渐进式策略] 非虚拟化节点的DOM测量是高可信的，标记应该保存
             const shouldSaveTrusted = !isVirtualized;
@@ -125,14 +142,24 @@ export class NodeHeightService {
         if (isVirtualized) {
             const cached = this.getRenderedHeightCache(currentSignature);
             if (cached > 0) {
-                const final = Math.min(cached, maxHeight);
+                // [修复] 缓存命中也需要偏差校验：缓存可能来自旧版本（偏大的rendered值）
+                let finalCached = cached;
+                if (cached > estimatedHeight * 1.3) {
+                    finalCached = estimatedHeight;
+                }
+                const final = Math.min(finalCached, maxHeight);
                 return { height: final, source: 'rendered', estimated: estimatedHeight };
             }
 
             const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
             if (renderedHeight > 0) {
-                this.setRenderedHeightCache(currentSignature, renderedHeight);
-                const final = Math.min(renderedHeight, maxHeight);
+                // [修复] rendered偏大校验：离屏渲染可能系统性偏大，当超出estimate的30%时使用estimate作为保守上限
+                let finalRendered = renderedHeight;
+                if (renderedHeight > estimatedHeight * 1.3) {
+                    finalRendered = estimatedHeight;
+                }
+                this.setRenderedHeightCache(currentSignature, finalRendered);
+                const final = Math.min(finalRendered, maxHeight);
                 return { height: final, source: 'rendered', estimated: estimatedHeight };
             }
 
@@ -143,14 +170,24 @@ export class NodeHeightService {
         // [路径3] 非虚拟化节点，DOM测量失败，尝试离屏渲染
         const cached = this.getRenderedHeightCache(currentSignature);
         if (cached > 0) {
-            const final = Math.min(cached, maxHeight);
+            // [修复] 缓存命中也需要偏差校验：缓存可能来自旧版本（偏大的rendered值）
+            let finalCached = cached;
+            if (cached > estimatedHeight * 1.3) {
+                finalCached = estimatedHeight;
+            }
+            const final = Math.min(finalCached, maxHeight);
             return { height: final, source: 'rendered', estimated: estimatedHeight };
         }
 
         const renderedHeight = await this.measureRenderedMarkdownHeight(content, fallbackWidth, nodeEl, false);
         if (renderedHeight > 0) {
-            this.setRenderedHeightCache(currentSignature, renderedHeight);
-            const final = Math.min(renderedHeight, maxHeight);
+            // [修复] rendered偏大校验：离屏渲染可能系统性偏大，当超出estimate的30%时使用estimate作为保守上限
+            let finalRendered = renderedHeight;
+            if (renderedHeight > estimatedHeight * 1.3) {
+                finalRendered = estimatedHeight;
+            }
+            this.setRenderedHeightCache(currentSignature, finalRendered);
+            const final = Math.min(finalRendered, maxHeight);
             return { height: final, source: 'rendered', estimated: estimatedHeight };
         }
 
@@ -160,18 +197,25 @@ export class NodeHeightService {
     /**
      * 测量 DOM 元素的实际内容高度
      *
-     * [修复] 直接使用sizer.scrollHeight - 它已经是完整的内容高度（包含所有内部padding）
+     * [修复] 动态测量chrome（padding/border）+ 下溢保护，替换硬编码+16
      */
     private measureActualContentHeight(nodeEl: Element, content: string, fallbackWidth: number, logDetail: boolean = false): number {
         try {
             const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement;
             const sizerEl = nodeEl.querySelector('.markdown-preview-sizer') as HTMLElement;
 
+            const nodeElHtml = nodeEl as HTMLElement;
+            const nodeOffsetH = nodeElHtml.offsetHeight;
+            const nodeRectH = nodeElHtml.getBoundingClientRect().height;
+            const nodeBestH = Math.max(nodeOffsetH, nodeRectH);
+
+            const computed = window.getComputedStyle(nodeElHtml);
+            const computedTopPx = this.parsePx(computed.top);
+            const computedPos = computed.position || 'unknown';
+            const styleAnomalous = computedPos !== 'absolute'
+                || (computedTopPx !== null && Math.abs(computedTopPx) > 0.1);
+
             if (sizerEl) {
-                // [修复] 优先使用 minHeight（CSS min-height）
-                // 原因：scrollHeight = max(clientHeight, contentHeight)，当节点容器被CSS撑大时，
-                // scrollHeight 反映的是容器大小而非内容大小。minHeight 是 Obsidian 渲染引擎
-                // 设置的真实内容高度，这才是我们需要的。
                 let minH = 0;
                 if (sizerEl.style.minHeight) {
                     const parsed = parseFloat(sizerEl.style.minHeight);
@@ -182,26 +226,116 @@ export class NodeHeightService {
 
                 const scrollH = sizerEl.scrollHeight;
                 const sizerRect = sizerEl.getBoundingClientRect();
+
+                // [修复] 动态测量chrome：contentEl的padding + nodeEl的border
+                const measureChrome = (): number => {
+                    let chrome = 16; // 默认值兜底
+                    try {
+                        const contentComputed = contentEl ? window.getComputedStyle(contentEl) : null;
+                        const nodeComputed = window.getComputedStyle(nodeElHtml);
+                        
+                        // contentEl(.canvas-node-content)的padding
+                        const contentPaddingTop = contentComputed ? parseFloat(contentComputed.paddingTop) || 0 : 0;
+                        const contentPaddingBottom = contentComputed ? parseFloat(contentComputed.paddingBottom) || 0 : 0;
+                        
+                        // nodeEl(.canvas-node)的border
+                        const borderTop = parseFloat(nodeComputed.borderTopWidth) || 0;
+                        const borderBottom = parseFloat(nodeComputed.borderBottomWidth) || 0;
+                        
+                        chrome = Math.ceil(
+                            contentPaddingTop + contentPaddingBottom 
+                            + borderTop + borderBottom
+                        );
+                        // 防御性兜底：chrome不可能是0或负数
+                        if (chrome <= 0) chrome = 16;
+                    } catch {
+                        chrome = 16;
+                    }
+                    return chrome;
+                };
                 
-                // 优先用 minH：它是 CSS 设置的真实内容高度，不会被容器膨胀影响
-                if (minH > 20) {
-                    const result = Math.ceil(minH + 16);
+                const dynamicChrome = measureChrome();
+
+                const nodeCandidate = nodeBestH > 20 ? Math.ceil(nodeBestH) : 0;
+                const minCandidate = minH > 20 ? Math.ceil(minH + dynamicChrome) : 0;
+                let contentCandidateRaw = Math.max(scrollH, sizerRect.height);
+                // [修复] scrollH可能被容器高度膨胀，minH是Canvas引擎设置的真实内容高度，优先使用
+                if (minH > 20 && contentCandidateRaw > minH + 10) {
+                    contentCandidateRaw = minH;
+                }
+                const contentCandidate = contentCandidateRaw > 20 ? Math.ceil(contentCandidateRaw + dynamicChrome) : 0;
+
+                let result = 0;
+                let source = 'none';
+                const decisionTags: string[] = [];
+
+                const hasNode = nodeCandidate > 0;
+                const hasContent = contentCandidate > 0;
+                const hasMin = minCandidate > 0;
+                const bestContent = hasContent
+                    ? (hasMin ? Math.max(contentCandidate, minCandidate) : contentCandidate)
+                    : (hasMin ? minCandidate : 0);
+                
+                // [修复] 优先使用实际内容测量（contentCandidate），nodeCandidate只作为fallback
+                // nodeCandidate 是数据文件的回声值，不可靠；contentCandidate 是真实DOM测量
+                
+                // 下溢保护：nodeCandidate明显不足时
+                const underflowRisk = hasNode && bestContent > 0 && (nodeCandidate < bestContent - 10);
+                
+                // 统一决策路径（content优先）：
+                if (hasContent) {
+                    result = bestContent;
+                    source = 'content';
+                    decisionTags.push('prefer-content-always');
+                } else if (hasMin) {
+                    result = minCandidate;
+                    source = 'min';
+                    decisionTags.push('fallback-min');
+                } else if (hasNode) {
+                    result = nodeCandidate;
+                    source = styleAnomalous ? 'node(pos-anomaly-ignored)' : 'node(fallback)';
+                    decisionTags.push('fallback-node-no-content');
+                }
+                
+                if (result > 20) {
                     if (logDetail) {
-                        log(`[NodeHeight] measure: minH优先=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
+                        log(
+                            `[NodeHeight] measure: minH=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, ` +
+                            `nodeOffsetH=${nodeOffsetH}, nodeRectH=${nodeRectH.toFixed(1)}, pos=${computedPos}, top=${computed.top}, ` +
+                            `chrome=${dynamicChrome}, candidates(node/min/content)=${nodeCandidate}/${minCandidate}/${contentCandidate}, ` +
+                            `styleAnomaly=${styleAnomalous}, underflowRisk=${underflowRisk}, source=${source}, ` +
+                            `decision=${decisionTags.join('+') || 'none'}, final=${result}`
+                        );
+                    }
+                    return result;
+                }
+
+                // fallback：nodeEl 高度不可用时，用 sizer.minHeight + 动态chrome
+                if (minH > 20) {
+                    const dynamicChrome = measureChrome();
+                    const result = Math.ceil(minH + dynamicChrome);
+                    if (logDetail) {
+                        log(`[NodeHeight] measure: nodeEl不可用，minH优先=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
                     }
                     return result;
                 }
                 
-                // fallback：minH 不可用时，用 scrollH 或 rectHeight
+                // fallback2：minH 不可用时，用 scrollH 或 rectHeight + 动态chrome
                 const maxMeasured = Math.max(scrollH, sizerRect.height);
                 
                 if (maxMeasured > 20) {
-                    const result = Math.ceil(maxMeasured + 16);
+                    const dynamicChrome = measureChrome();
+                    const result = Math.ceil(maxMeasured + dynamicChrome);
                     if (logDetail && (scrollH > 20 || sizerRect.height > 20)) {
-                        log(`[NodeHeight] measure: minH无数据, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, final=${result}`);
+                        log(`[NodeHeight] measure: minH无数据, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
                     }
                     return result;
                 }
+            }
+
+            // 即使无 sizerEl，也可以用 nodeEl 高度
+            if (nodeBestH > 20) {
+                return Math.ceil(nodeBestH);
             }
 
             // ===【路径2】contentEl.scrollHeight===

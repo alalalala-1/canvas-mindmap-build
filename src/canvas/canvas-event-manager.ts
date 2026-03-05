@@ -8,6 +8,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { CanvasManager } from './canvas-manager';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
+
 import {
     getCanvasView,
     getActiveCanvasView,
@@ -58,6 +59,21 @@ export class CanvasEventManager {
     private isDeleting: boolean = false;
     private lastFromLinkNavAt: number = 0;
     private lastFromLinkNavKey: string = '';
+    private lastOpenStabilizeKickAt: number = 0;
+    private lastOpenStabilizeKickKey: string = '';
+    private nodeMountedBatchTimeoutId: number | null = null;
+    private nodeMountedPendingCount: number = 0;
+    private nodeMountedPendingFilePath: string | null = null;
+    private nodeMountedLastFlushAt: number = 0;
+    private nodeMountedInteractionActiveUntil: number = 0;
+    private nodeMountedOpenProtectionUntil: number = 0;
+    private nodeMountedDelayByInteractionCount: number = 0;
+    private nodeMountedDelayByCooldownCount: number = 0;
+    private hasInteractionTrackerSetup: boolean = false;
+    private readonly nodeMountedBatchDebounceMs: number = 180;
+    private readonly nodeMountedCooldownMs: number = 900;
+    private readonly nodeMountedInteractionIdleMs: number = 280;
+    private readonly nodeMountedOpenProtectionMs: number = 1000;
     
     // [A2] 监听器防重日志
     private workspaceEventsRegistered: boolean = false;
@@ -66,6 +82,23 @@ export class CanvasEventManager {
     private isSettingUp: boolean = false;
     private lastSetupPath: string | null = null;
     private setupCallCount: number = 0;
+
+    // [ViewportFix] Viewport 变化监听（屏幕旋转/分屏切换）
+    private viewportChangeDebounceId: number | null = null;
+    private lastViewportWidth: number = 0;
+    private lastViewportHeight: number = 0;
+    private isViewportListenerSetup: boolean = false;
+    // [ViewportFix] 当 Canvas 在 viewport 变化期间不可用时，记录 pending 刷新
+    private pendingViewportRefresh: boolean = false;
+    private lastViewportChangeTrigger: string = '';
+    private pendingViewportToken: number = 0;
+    private pendingViewportTraceId: string = '';
+    private viewportTokenCounter: number = 0;
+    private activeViewportToken: number = 0;
+    private viewportTraceSeq: number = 0;
+    private viewportState: 'idle' | 'debouncing' | 'pending-canvas' | 'converging' | 'stable' = 'idle';
+    private readonly viewportStablePassRequired: number = 2;
+
 
     constructor(
         plugin: Plugin,
@@ -89,6 +122,9 @@ export class CanvasEventManager {
     async initialize() {
         log(`[Event] CanvasEventManager.initialize() 被调用`);
         this.registerEventListeners();
+        this.setupInteractionTracker();
+        // [ViewportFix] 注册 viewport 变化监听（屏幕旋转/分屏切换）
+        this.setupViewportChangeListener();
         
         // 如果当前已经有 canvas 打开，立即启动 observer 和事件监听器
         const canvasView = getCanvasView(this.app);
@@ -101,6 +137,7 @@ export class CanvasEventManager {
             log(`[Event] 当前没有打开的 canvas，等待 active-leaf-change 事件`);
         }
     }
+
 
     private registerEventListeners() {
         this.plugin.registerEvent(
@@ -138,8 +175,82 @@ export class CanvasEventManager {
                         setTimeout(() => {
                             void this.canvasManager.checkAndAddCollapseButtons();
                         }, CONSTANTS.TIMING.RENDER_DELAY);
+
+                        // [OpenFix] Canvas 打开后触发轻量自愈，覆盖“重开后连线再次错位”的复发场景。
+                        // 该流程仅修复视觉层 offset/edge，不写布局坐标。
+                        const canvasFilePath = this.getCanvasFromView(canvasView)?.file?.path
+                            || (canvasView as CanvasViewLike).file?.path
+                            || null;
+                        this.markOpenProtectionWindow('active-leaf-change');
+                        this.scheduleOpenStabilizationWithDedup('active-leaf-change', canvasFilePath);
+
+                        // [ViewportFix] Canvas 重新激活时，检查是否有待处理的 viewport 刷新
+                        // 场景：屏幕旋转时 Canvas 临时关闭，debounce 触发时 canvas 不可用，需要在重新激活后补充刷新
+                        if (this.pendingViewportRefresh) {
+                            const pendingTrigger = this.lastViewportChangeTrigger;
+                            const pendingToken = this.pendingViewportToken || this.activeViewportToken;
+                            const pendingTraceId = this.pendingViewportTraceId || this.createViewportTraceId('pending');
+                            this.logViewportTrace(pendingTraceId, 'pending-resume', pendingToken, canvasView, {
+                                trigger: pendingTrigger,
+                                reason: 'canvas-reactivated'
+                            });
+                            this.pendingViewportRefresh = false;
+                            // 额外等待 Canvas 完成自身初始化渲染后再刷新
+                            const pendingDelay = Platform.isMobile
+                                ? CONSTANTS.TIMING.VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE + 200
+                                : 300;
+                            window.setTimeout(() => {
+                                const activeCanvas = this.getCanvasFromView(canvasView);
+                                if (!activeCanvas) {
+                                    this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
+                                        trigger: pendingTrigger,
+                                        reason: 'canvas-unavailable-after-delay'
+                                    });
+                                    return;
+                                }
+                                const edges = getEdgesFromCanvas(activeCanvas);
+                                if (edges.length === 0) {
+                                    this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
+                                        trigger: pendingTrigger,
+                                        reason: 'edges-empty'
+                                    });
+                                    return;
+                                }
+                                void this.convergeCanvasEdgesAfterViewportChange(
+                                    activeCanvas,
+                                    `viewport-pending-${pendingTrigger}`,
+                                    pendingTraceId,
+                                    pendingToken,
+                                    canvasView
+                                );
+                            }, pendingDelay);
+                        }
                     }
                 }
+            })
+        );
+
+        // [OpenFix-2] file-open 兜底触发：覆盖部分设备/路径下 active-leaf-change 未可靠触发的重开场景。
+        this.plugin.registerEvent(
+            this.app.workspace.on('file-open', (file) => {
+                const filePath = file instanceof TFile ? file.path : 'null';
+                const isCanvasFile = file instanceof TFile && (file.extension === 'canvas' || file.path.endsWith('.canvas'));
+                log(`[Event] file-open 触发, file=${filePath}, isCanvas=${isCanvasFile}`);
+
+                if (!isCanvasFile) return;
+
+                window.setTimeout(() => {
+                    const canvasView = getCanvasView(this.app);
+                    if (!canvasView || canvasView.getViewType() !== 'canvas') {
+                        log(`[Event] file-open skip: canvas view not ready, file=${filePath}`);
+                        return;
+                    }
+
+                    this.setupMutationObserver();
+                    void this.setupCanvasEventListeners(canvasView);
+                    this.markOpenProtectionWindow('file-open');
+                    this.scheduleOpenStabilizationWithDedup('file-open', filePath);
+                }, 120);
             })
         );
 
@@ -194,6 +305,89 @@ export class CanvasEventManager {
         this.plugin.registerDomEvent(document, 'click', handleNodeClick, { capture: true });
     }
 
+    private setupInteractionTracker(): void {
+        if (this.hasInteractionTrackerSetup) return;
+        this.hasInteractionTrackerSetup = true;
+
+        const markActive = (reason: string) => {
+            const now = Date.now();
+            const nextUntil = now + this.nodeMountedInteractionIdleMs;
+            if (nextUntil > this.nodeMountedInteractionActiveUntil) {
+                this.nodeMountedInteractionActiveUntil = nextUntil;
+            }
+            if (this.nodeMountedPendingCount > 0 && this.nodeMountedBatchTimeoutId === null) {
+                this.scheduleNodeMountedBatchFlush(this.nodeMountedBatchDebounceMs, `interaction-${reason}`);
+            }
+        };
+
+        this.plugin.registerDomEvent(document, 'pointerdown', () => markActive('pointerdown'), { capture: true, passive: true });
+        this.plugin.registerDomEvent(document, 'pointermove', () => markActive('pointermove'), { capture: true, passive: true });
+        this.plugin.registerDomEvent(document, 'wheel', () => markActive('wheel'), { capture: true, passive: true });
+        this.plugin.registerDomEvent(document, 'touchmove', () => markActive('touchmove'), { capture: true, passive: true });
+        this.plugin.registerDomEvent(window, 'scroll', () => markActive('scroll'), { capture: true, passive: true });
+    }
+
+    private markOpenProtectionWindow(reason: string): void {
+        this.nodeMountedOpenProtectionUntil = Date.now() + this.nodeMountedOpenProtectionMs;
+        log(`[Event] OpenStabilizeProtectWindow: reason=${reason}, holdMs=${this.nodeMountedOpenProtectionMs}`);
+    }
+
+    private scheduleNodeMountedBatchFlush(delayMs: number, reason: string): void {
+        if (this.nodeMountedBatchTimeoutId !== null) {
+            window.clearTimeout(this.nodeMountedBatchTimeoutId);
+        }
+
+        this.nodeMountedBatchTimeoutId = window.setTimeout(() => {
+            this.nodeMountedBatchTimeoutId = null;
+            this.flushNodeMountedBatch(reason);
+        }, Math.max(0, delayMs));
+    }
+
+    private queueNodeMountedStabilization(filePath: string | null, mountedCount: number): void {
+        this.nodeMountedPendingCount += Math.max(1, mountedCount);
+        if (!this.nodeMountedPendingFilePath && filePath) {
+            this.nodeMountedPendingFilePath = filePath;
+        }
+        this.scheduleNodeMountedBatchFlush(this.nodeMountedBatchDebounceMs, 'debounce');
+    }
+
+    private flushNodeMountedBatch(reason: string): void {
+        if (this.nodeMountedPendingCount <= 0) return;
+
+        const now = Date.now();
+        const cooldownRemaining = Math.max(0, this.nodeMountedCooldownMs - (now - this.nodeMountedLastFlushAt));
+        const interactionRemaining = Math.max(0, this.nodeMountedInteractionActiveUntil - now);
+        const protectionRemaining = Math.max(0, this.nodeMountedOpenProtectionUntil - now);
+
+        const deferBy = Math.max(cooldownRemaining, interactionRemaining, protectionRemaining);
+        if (deferBy > 0) {
+            if (interactionRemaining >= cooldownRemaining && interactionRemaining >= protectionRemaining) {
+                this.nodeMountedDelayByInteractionCount++;
+            } else {
+                this.nodeMountedDelayByCooldownCount++;
+            }
+            this.scheduleNodeMountedBatchFlush(deferBy + 30, `defer-${reason}`);
+            return;
+        }
+
+        const batchSize = this.nodeMountedPendingCount;
+        const filePath = this.nodeMountedPendingFilePath || this.currentCanvasFilePath;
+        const delayedByInteraction = this.nodeMountedDelayByInteractionCount;
+        const delayedByCooldown = this.nodeMountedDelayByCooldownCount;
+
+        this.nodeMountedPendingCount = 0;
+        this.nodeMountedPendingFilePath = null;
+        this.nodeMountedDelayByInteractionCount = 0;
+        this.nodeMountedDelayByCooldownCount = 0;
+        this.nodeMountedLastFlushAt = now;
+
+        log(
+            `[Event] OpenStabilizeNodeMountedBatch: source=node-mounted-idle-batch, batchSize=${batchSize}, ` +
+            `delayedByInteraction=${delayedByInteraction}, delayedByCooldown=${delayedByCooldown}, reason=${reason}, file=${filePath || 'unknown'}`
+        );
+        this.scheduleOpenStabilizationWithDedup('node-mounted-idle-batch', filePath || null);
+    }
+
     private async handleZoomToFitVisibleNodes(): Promise<boolean> {
         const canvasView = getCanvasView(this.app);
         if (!canvasView) return false;
@@ -213,6 +407,19 @@ export class CanvasEventManager {
         return withTemporaryCanvasSelection(canvas, visibleNodes, () => {
             return tryZoomToSelection(this.app, canvasView, canvas);
         });
+    }
+
+    private scheduleOpenStabilizationWithDedup(source: string, filePath: string | null): void {
+        const key = `${source}:${filePath || 'unknown'}`;
+        const now = Date.now();
+        if (this.lastOpenStabilizeKickKey === key && now - this.lastOpenStabilizeKickAt < 600) {
+            log(`[Event] OpenStabilizeDedup: skip duplicate trigger, source=${source}, file=${filePath || 'unknown'}`);
+            return;
+        }
+
+        this.lastOpenStabilizeKickKey = key;
+        this.lastOpenStabilizeKickAt = now;
+        this.canvasManager.scheduleOpenStabilization(source);
     }
 
     private async handleDeleteButtonClick(canvasView: ItemView): Promise<void> {
@@ -569,6 +776,7 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
+                this.nodeMountedInteractionActiveUntil = Date.now() + this.nodeMountedInteractionIdleMs;
                 void this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );
@@ -601,11 +809,13 @@ export class CanvasEventManager {
 
         this.mutationObserver = new MutationObserver((mutations) => {
             let shouldCheckButtons = false;
+            let mountedNodeCount = 0;
             for (const mutation of mutations) {
                 if (mutation.type === 'childList') {
                     for (const node of Array.from(mutation.addedNodes)) {
                         if (node instanceof HTMLElement && node.classList.contains('canvas-node')) {
                             shouldCheckButtons = true;
+                            mountedNodeCount++;
                         }
                     }
                 }
@@ -613,6 +823,15 @@ export class CanvasEventManager {
 
             if (shouldCheckButtons) {
                 void this.canvasManager.checkAndAddCollapseButtons();
+            }
+
+            // [OpenFix-3] 节点晚到挂载兜底：虚拟化节点在 reopen 后分批进入 DOM，
+            // 这里去重触发一次 open stabilization，收敛边端点与样式层。
+            if (mountedNodeCount > 0) {
+                const canvasView = getCanvasView(this.app);
+                const filePath = (canvasView ? this.getCanvasFromView(canvasView)?.file?.path : null)
+                    || this.currentCanvasFilePath;
+                this.queueNodeMountedStabilization(filePath || null, mountedNodeCount);
             }
         });
 
@@ -706,6 +925,420 @@ export class CanvasEventManager {
     }
 
     // =========================================================================
+    // [ViewportFix] Viewport 变化监听（屏幕旋转/分屏切换）
+    // =========================================================================
+    /**
+     * 注册 resize 和 orientationchange 事件监听。
+     * 当设备旋转或分屏切换时，Canvas 内大量节点会被虚拟化，
+     * 需要在 Canvas 引擎重新渲染节点后刷新所有边的几何位置。
+     */
+    private setupViewportChangeListener(): void {
+        if (this.isViewportListenerSetup) return;
+        this.isViewportListenerSetup = true;
+
+        // 记录初始尺寸
+        this.lastViewportWidth = window.innerWidth;
+        this.lastViewportHeight = window.innerHeight;
+
+        const handleViewportChange = (trigger: string) => {
+            const newWidth = window.innerWidth;
+            const newHeight = window.innerHeight;
+            const widthDelta = Math.abs(newWidth - this.lastViewportWidth);
+            const heightDelta = Math.abs(newHeight - this.lastViewportHeight);
+
+            // 忽略微小变化（例如键盘弹出等），只响应显著的尺寸变化
+            const minChangeThreshold = 50;
+            if (widthDelta < minChangeThreshold && heightDelta < minChangeThreshold) return;
+
+            const viewportToken = ++this.viewportTokenCounter;
+            this.activeViewportToken = viewportToken;
+            const traceId = this.createViewportTraceId(trigger);
+            this.viewportState = 'debouncing';
+
+            this.logViewportTrace(traceId, 'detected', viewportToken, getCanvasView(this.app), {
+                trigger,
+                prev: `${this.lastViewportWidth}x${this.lastViewportHeight}`,
+                next: `${newWidth}x${newHeight}`,
+                widthDelta,
+                heightDelta
+            });
+            this.lastViewportWidth = newWidth;
+            this.lastViewportHeight = newHeight;
+
+            // 防抖处理
+            if (this.viewportChangeDebounceId !== null) {
+                window.clearTimeout(this.viewportChangeDebounceId);
+            }
+
+            const debounceDelay = CONSTANTS.TIMING.VIEWPORT_CHANGE_DEBOUNCE;
+            // 移动端额外增加等待时间（等待旋转动画完成）
+            const extraDelay = Platform.isMobile ? CONSTANTS.TIMING.VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE : 0;
+
+            // [修复] 设置 pending 标记：如果 debounce 触发时 canvas 不可用，
+            // canvas 重新激活时会补充执行刷新（解决旋转时 canvas 临时关闭导致刷新错过的问题）
+            this.pendingViewportRefresh = true;
+            this.lastViewportChangeTrigger = trigger;
+            this.pendingViewportToken = viewportToken;
+            this.pendingViewportTraceId = traceId;
+
+            this.viewportChangeDebounceId = window.setTimeout(() => {
+                this.viewportChangeDebounceId = null;
+
+                if (viewportToken !== this.activeViewportToken) {
+                    this.logViewportTrace(traceId, 'canceled', viewportToken, getCanvasView(this.app), {
+                        trigger,
+                        reason: 'token-overridden-before-debounce-run',
+                        activeToken: this.activeViewportToken
+                    });
+                    return;
+                }
+
+                this.logViewportTrace(traceId, 'debounce-fired', viewportToken, getCanvasView(this.app), {
+                    trigger,
+                    debounceDelay,
+                    extraDelay
+                });
+
+                // 获取当前活跃的 canvas
+                const canvasView = getCanvasView(this.app);
+                if (!canvasView) {
+                    // Canvas 不可用，保留 pendingViewportRefresh=true，等 canvas 重新激活时处理
+                    this.viewportState = 'pending-canvas';
+                    this.logViewportTrace(traceId, 'pending-canvas', viewportToken, null, {
+                        trigger,
+                        reason: 'canvas-view-unavailable'
+                    });
+                    return;
+                }
+
+                const canvas = (canvasView as CanvasViewLike).canvas;
+                if (!canvas) {
+                    this.viewportState = 'pending-canvas';
+                    this.logViewportTrace(traceId, 'pending-canvas', viewportToken, canvasView, {
+                        trigger,
+                        reason: 'canvas-instance-unavailable'
+                    });
+                    return;
+                }
+
+                const edges = getEdgesFromCanvas(canvas);
+                if (edges.length === 0) {
+                    this.pendingViewportRefresh = false;
+                    this.pendingViewportToken = 0;
+                    this.pendingViewportTraceId = '';
+                    this.viewportState = 'stable';
+                    this.logViewportTrace(traceId, 'skip', viewportToken, canvasView, {
+                        trigger,
+                        reason: 'edges-empty'
+                    });
+                    return;
+                }
+
+                this.logViewportTrace(traceId, 'refresh-scheduled', viewportToken, canvasView, {
+                    trigger,
+                    edges: edges.length,
+                    extraDelay
+                });
+                this.pendingViewportRefresh = false; // 即将执行刷新，清除 pending 标记
+                this.pendingViewportToken = 0;
+                this.pendingViewportTraceId = '';
+
+                // 若有额外延迟（移动端旋转动画），先等待
+                const doRefresh = () => {
+                    void this.convergeCanvasEdgesAfterViewportChange(
+                        canvas,
+                        `viewport-${trigger}`,
+                        traceId,
+                        viewportToken,
+                        canvasView
+                    );
+                };
+
+                if (extraDelay > 0) {
+                    window.setTimeout(doRefresh, extraDelay);
+                } else {
+                    doRefresh();
+                }
+            }, debounceDelay);
+        };
+
+        // 监听 resize 事件（分屏切换/窗口大小变化）
+        this.plugin.registerDomEvent(window, 'resize', () => handleViewportChange('resize'));
+
+        // 监听 orientationchange 事件（设备旋转）
+        if ('onorientationchange' in window) {
+            this.plugin.registerDomEvent(window, 'orientationchange', () => {
+                // orientationchange 触发时 innerWidth/Height 尚未更新，等一帧再读
+                requestAnimationFrame(() => handleViewportChange('orientationchange'));
+            });
+        }
+
+        log(`[ViewportFix] Viewport 变化监听已注册 (mobile=${Platform.isMobile})`);
+    }
+
+    private createViewportTraceId(trigger: string): string {
+        this.viewportTraceSeq += 1;
+        return `vp-${Date.now().toString(36)}-${this.viewportTraceSeq.toString(36)}-${trigger}`;
+    }
+
+    private getCanvasLeafRect(view: ItemView | null): DOMRect | null {
+        const leaf = (view as unknown as { leaf?: { containerEl?: HTMLElement } })?.leaf;
+        const containerEl = leaf?.containerEl;
+        if (!containerEl) return null;
+        return containerEl.getBoundingClientRect();
+    }
+
+    private inferSplitMode(leafRect: DOMRect | null): string {
+        if (!leafRect) return 'unknown';
+        const ww = Math.max(window.innerWidth, 1);
+        const wh = Math.max(window.innerHeight, 1);
+        const wr = leafRect.width / ww;
+        const hr = leafRect.height / wh;
+
+        if (wr >= 0.75 && hr >= 0.75) return 'full';
+        if (wr < 0.75 && hr >= 0.75) return 'split-left-right';
+        if (wr >= 0.75 && hr < 0.75) return 'split-top-bottom';
+        return 'split-grid';
+    }
+
+    private getOrientationLabel(): string {
+        const orientationType = (window.screen as Screen & { orientation?: { type?: string } }).orientation?.type;
+        if (orientationType) {
+            return orientationType.includes('portrait') ? 'portrait' : 'landscape';
+        }
+        return window.innerHeight >= window.innerWidth ? 'portrait' : 'landscape';
+    }
+
+    private getVisualViewportInfo(): { width: number; height: number; scale: number } | null {
+        const vv = window.visualViewport;
+        if (!vv) return null;
+        return {
+            width: Math.round(vv.width),
+            height: Math.round(vv.height),
+            scale: Number(vv.scale.toFixed(3))
+        };
+    }
+
+    private logViewportTrace(
+        traceId: string,
+        phase: string,
+        token: number,
+        canvasView: ItemView | null,
+        extra?: Record<string, unknown>
+    ): void {
+        const leafRect = this.getCanvasLeafRect(canvasView);
+        const leafRectStr = leafRect
+            ? `${leafRect.left.toFixed(0)},${leafRect.top.toFixed(0)}->${leafRect.right.toFixed(0)},${leafRect.bottom.toFixed(0)} (${leafRect.width.toFixed(0)}x${leafRect.height.toFixed(0)})`
+            : 'n/a';
+
+        const splitMode = this.inferSplitMode(leafRect);
+        const orientation = this.getOrientationLabel();
+        const vv = this.getVisualViewportInfo();
+        const vvStr = vv ? `${vv.width}x${vv.height}@${vv.scale}` : 'n/a';
+
+        const payload = {
+            traceId,
+            phase,
+            token,
+            state: this.viewportState,
+            viewport: `${window.innerWidth}x${window.innerHeight}`,
+            orientation,
+            dpr: Number(window.devicePixelRatio.toFixed(2)),
+            visualViewport: vvStr,
+            splitMode,
+            leafRect: leafRectStr,
+            pending: this.pendingViewportRefresh,
+            activeToken: this.activeViewportToken,
+            ...extra
+        };
+
+        log(`[ViewportTrace] ${JSON.stringify(payload)}`);
+    }
+
+    private captureEdgeSignatures(canvas: CanvasLike): Map<string, { bezier: string; pathD: string; endpoint: string }> {
+        const map = new Map<string, { bezier: string; pathD: string; endpoint: string }>();
+        const edges = getEdgesFromCanvas(canvas);
+
+        for (const edge of edges) {
+            const edgeId = edge.id || `${edge.fromNode || 'from'}->${edge.toNode || 'to'}`;
+            const bezier = (edge as any).bezier;
+            const bezierSig = bezier
+                ? `${bezier.from?.x?.toFixed?.(1) || 'na'},${bezier.from?.y?.toFixed?.(1) || 'na'}->${bezier.to?.x?.toFixed?.(1) || 'na'},${bezier.to?.y?.toFixed?.(1) || 'na'}`
+                : 'no-bezier';
+
+            let pathEl: Element | null = (edge as any).pathEl || null;
+            if (!pathEl) {
+                const lineGroupEl = (edge as any).lineGroupEl as Element | null;
+                if (lineGroupEl) {
+                    pathEl = lineGroupEl.querySelector('path');
+                }
+            }
+            const pathD = pathEl ? pathEl.getAttribute('d') || 'no-d' : 'no-path';
+
+            const fromNode = edge.fromNode || extractNodeId(edge.from);
+            const toNode = edge.toNode || extractNodeId(edge.to);
+            const fromSide = edge.fromSide || (typeof edge.from === 'object' ? (edge.from as any)?.side : undefined) || 'unknown';
+            const toSide = edge.toSide || (typeof edge.to === 'object' ? (edge.to as any)?.side : undefined) || 'unknown';
+            const endpoint = `${fromNode || 'unknown'}:${fromSide}->${toNode || 'unknown'}:${toSide}`;
+
+            map.set(edgeId, { bezier: bezierSig, pathD, endpoint });
+        }
+
+        return map;
+    }
+
+    private diffEdgeSignatures(
+        before: Map<string, { bezier: string; pathD: string; endpoint: string }>,
+        after: Map<string, { bezier: string; pathD: string; endpoint: string }>
+    ): { bezierChanged: number; pathChanged: number; endpointChanged: number } {
+        let bezierChanged = 0;
+        let pathChanged = 0;
+        let endpointChanged = 0;
+
+        for (const [edgeId, beforeSig] of before.entries()) {
+            const afterSig = after.get(edgeId);
+            if (!afterSig) continue;
+            if (beforeSig.bezier !== afterSig.bezier) bezierChanged++;
+            if (beforeSig.pathD !== afterSig.pathD) pathChanged++;
+            if (beforeSig.endpoint !== afterSig.endpoint) endpointChanged++;
+        }
+
+        return { bezierChanged, pathChanged, endpointChanged };
+    }
+
+    private async waitForEngineFrame(delayMs: number): Promise<void> {
+        await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+                window.setTimeout(() => resolve(), delayMs);
+            });
+        });
+    }
+
+    private async convergeCanvasEdgesAfterViewportChange(
+        canvas: CanvasLike,
+        reason: string,
+        traceId: string,
+        token: number,
+        canvasView: ItemView | null
+    ): Promise<void> {
+        if (token !== this.activeViewportToken) {
+            this.logViewportTrace(traceId, 'converge-skip', token, canvasView, {
+                reason,
+                stopReason: 'token-mismatch-before-start',
+                activeToken: this.activeViewportToken
+            });
+            return;
+        }
+
+        const initialEdges = getEdgesFromCanvas(canvas);
+        if (initialEdges.length === 0) {
+            this.viewportState = 'stable';
+            this.logViewportTrace(traceId, 'converge-skip', token, canvasView, {
+                reason,
+                stopReason: 'edges-empty-before-start'
+            });
+            return;
+        }
+
+        this.viewportState = 'converging';
+        const maxPass = Platform.isMobile ? 5 : 3;
+        const passInterval = Platform.isMobile
+            ? CONSTANTS.TIMING.EDGE_REFRESH_EXTRA_PASS_INTERVAL
+            : Math.max(80, CONSTANTS.TIMING.EDGE_REFRESH_PASS_INTERVAL);
+
+        this.logViewportTrace(traceId, 'converge-start', token, canvasView, {
+            reason,
+            edges: initialEdges.length,
+            maxPass,
+            passInterval,
+            stablePassRequired: this.viewportStablePassRequired
+        });
+
+        let stablePasses = 0;
+        for (let pass = 1; pass <= maxPass; pass++) {
+            if (token !== this.activeViewportToken) {
+                this.viewportState = 'idle';
+                this.logViewportTrace(traceId, 'converge-stop', token, canvasView, {
+                    reason,
+                    stopReason: 'token-canceled-during-pass',
+                    pass,
+                    activeToken: this.activeViewportToken
+                });
+                return;
+            }
+
+            const edges = getEdgesFromCanvas(canvas);
+            const before = this.captureEdgeSignatures(canvas);
+
+            let rendered = 0;
+            for (const edge of edges) {
+                if (typeof (edge as any).render === 'function') {
+                    try {
+                        (edge as any).render();
+                        rendered++;
+                    } catch {
+                        // 单边失败不阻断收敛
+                    }
+                }
+            }
+
+            if (typeof (canvas as any).requestUpdate === 'function') {
+                (canvas as any).requestUpdate();
+            }
+
+            await this.waitForEngineFrame(passInterval);
+
+            const after = this.captureEdgeSignatures(canvas);
+            const diff = this.diffEdgeSignatures(before, after);
+            const converged = diff.bezierChanged === 0 && diff.pathChanged === 0 && diff.endpointChanged === 0;
+            stablePasses = converged ? stablePasses + 1 : 0;
+
+            this.logViewportTrace(traceId, 'converge-pass', token, canvasView, {
+                reason,
+                pass,
+                rendered,
+                edges: edges.length,
+                bezierChanged: diff.bezierChanged,
+                pathChanged: diff.pathChanged,
+                endpointChanged: diff.endpointChanged,
+                stablePasses,
+                converged
+            });
+
+            if (stablePasses >= this.viewportStablePassRequired) {
+                this.viewportState = 'stable';
+                this.logViewportTrace(traceId, 'converge-stop', token, canvasView, {
+                    reason,
+                    pass,
+                    stopReason: 'stable'
+                });
+                return;
+            }
+        }
+
+        this.viewportState = 'stable';
+        this.logViewportTrace(traceId, 'converge-stop', token, canvasView, {
+            reason,
+            stopReason: 'max-pass-reached',
+            maxPass
+        });
+    }
+
+    /**
+     * 仅触发 Canvas 引擎自身刷新，不手动 render 边，避免与引擎内部状态冲突。
+     */
+    private triggerCanvasEngineEdgeRefresh(canvas: CanvasLike, reason: string): void {
+        const c = canvas as any;
+        if (typeof c.requestUpdate !== 'function') return;
+
+        c.requestUpdate();
+        requestAnimationFrame(() => {
+            c.requestUpdate();
+            log(`[ViewportFix] EngineRefresh: reason=${reason}`);
+        });
+    }
+
+    // =========================================================================
     // 辅助方法
     // =========================================================================
 
@@ -721,5 +1354,28 @@ export class CanvasEventManager {
             this.mutationObserver.disconnect();
             this.mutationObserver = null;
         }
+        if (this.nodeMountedBatchTimeoutId !== null) {
+            window.clearTimeout(this.nodeMountedBatchTimeoutId);
+            this.nodeMountedBatchTimeoutId = null;
+        }
+        if (this.viewportChangeDebounceId !== null) {
+            window.clearTimeout(this.viewportChangeDebounceId);
+            this.viewportChangeDebounceId = null;
+        }
     }
+
+}
+
+function extractNodeId(endpoint: unknown): string | undefined {
+    if (typeof endpoint === 'string') return endpoint;
+    if (endpoint && typeof endpoint === 'object') {
+        const endpointRecord = endpoint as Record<string, unknown>;
+        if (typeof endpointRecord.nodeId === 'string') return endpointRecord.nodeId;
+        const node = endpointRecord.node;
+        if (node && typeof node === 'object') {
+            const nodeRecord = node as Record<string, unknown>;
+            if (typeof nodeRecord.id === 'string') return nodeRecord.id;
+        }
+    }
+    return undefined;
 }

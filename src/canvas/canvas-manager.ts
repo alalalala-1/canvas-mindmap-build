@@ -96,6 +96,13 @@ export class CanvasManager implements ICanvasManager {
         await this.layoutManager.arrangeCanvas(source);
     }
 
+    /**
+     * [OpenFix] Canvas 打开后触发轻量自愈（仅视觉层，不写布局坐标）
+     */
+    public scheduleOpenStabilization(source: string = 'canvas-open'): void {
+        this.layoutManager.scheduleOpenStabilization(source);
+    }
+
     public async addNodeToCanvas(content: string, sourceFile: TFile | null) {
         await this.nodeManager.addNodeToCanvas(content, sourceFile);
     }

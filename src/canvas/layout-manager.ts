@@ -20,7 +20,7 @@ import {
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
 import { CollapseToggleService } from './services/collapse-toggle-service';
-import { EdgeGeometryService } from './services/edge-geometry-service';
+import { EdgeGeometryService, EdgeScreenGapSummary, OffsetAnomalyStats, OffsetCleanupOptions } from './services/edge-geometry-service';
 
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
@@ -41,6 +41,15 @@ export class LayoutManager {
     // [E1] 互斥锁 - 防止多次 arrange 交叠
     private isArranging: boolean = false;
     private pendingArrange: boolean = false;
+
+    // [OpenFix] Canvas 打开后的轻量自愈流程（不改布局文件，仅修复视觉层错位）
+    private openStabilizeTimeoutId: number | null = null;
+    private isOpenStabilizing: boolean = false;
+    private pendingOpenStabilizeSource: string = '';
+    private readonly openStabilizePulseDelays: number[] = [0, 160, 380];
+    private readonly openStabilizeStableMaxGapPx: number = 4;
+    private readonly openStabilizeResumeMax: number = 2;
+    private openStabilizeResumeCountByBaseSource: Map<string, number> = new Map();
 
     constructor(
         plugin: Plugin,
@@ -107,6 +116,342 @@ export class LayoutManager {
         }, CONSTANTS.TIMING.ARRANGE_DEBOUNCE);
     }
 
+    /**
+     * [OpenFix] Canvas 打开后执行轻量自愈：
+     * cleanup(1) -> edge refresh -> cleanup(2) -> requestUpdate
+     *
+     * 目标：避免用户“重开 canvas 又错位”的复发问题。
+     * 该流程不改动节点 x/y，也不写文件，只收敛视觉层偏移与边端点。
+     */
+    scheduleOpenStabilization(source: string = 'canvas-open'): void {
+        if (this.openStabilizeTimeoutId !== null) {
+            window.clearTimeout(this.openStabilizeTimeoutId);
+        }
+
+        this.openStabilizeTimeoutId = window.setTimeout(() => {
+            this.openStabilizeTimeoutId = null;
+            void this.performOpenStabilization(source);
+        }, 140);
+    }
+
+    private isOpenStabilizeResumeSource(source: string): boolean {
+        return source.includes('-resume');
+    }
+
+    private getOpenStabilizeBaseSource(source: string): string {
+        return source.replace(/-resume/g, '');
+    }
+
+    private shouldForceHeavyOnFirstPulse(source: string): boolean {
+        const baseSource = this.getOpenStabilizeBaseSource(source);
+        return !baseSource.startsWith('node-mounted');
+    }
+
+    private getOffsetCleanupOptionsForSource(source: string, phase: string): OffsetCleanupOptions {
+        const baseSource = this.getOpenStabilizeBaseSource(source);
+        const isNodeMountedSource = baseSource.startsWith('node-mounted');
+        return {
+            releaseFixClass: !isNodeMountedSource,
+            sourceTag: `${phase}:${isNodeMountedSource ? 'node-mounted-hold' : 'default-release'}`
+        };
+    }
+
+    private canScheduleOpenStabilizeResume(nextSource: string): boolean {
+        const baseSource = this.getOpenStabilizeBaseSource(nextSource);
+        const currentCount = this.openStabilizeResumeCountByBaseSource.get(baseSource) ?? 0;
+        if (currentCount >= this.openStabilizeResumeMax) {
+            log(
+                `[Layout] OpenStabilizeResumeCapHit: source=${nextSource}, base=${baseSource}, ` +
+                `resumeCount=${currentCount}, cap=${this.openStabilizeResumeMax}`
+            );
+            return false;
+        }
+
+        const nextCount = currentCount + 1;
+        this.openStabilizeResumeCountByBaseSource.set(baseSource, nextCount);
+        log(`[Layout] OpenStabilizeResumeAccepted: source=${nextSource}, base=${baseSource}, resumeCount=${nextCount}/${this.openStabilizeResumeMax}`);
+        return true;
+    }
+
+    private async performOpenStabilization(source: string): Promise<void> {
+        const baseSource = this.getOpenStabilizeBaseSource(source);
+        const isResumeSource = this.isOpenStabilizeResumeSource(source);
+        if (!isResumeSource) {
+            this.openStabilizeResumeCountByBaseSource.set(baseSource, 0);
+        }
+
+        if (this.isArranging) {
+            log(`[Layout] OpenStabilizeSkip: arrange busy, source=${source}`);
+            this.scheduleOpenStabilization(`${source}-arrange-busy`);
+            return;
+        }
+
+        if (this.isOpenStabilizing) {
+            this.pendingOpenStabilizeSource = source;
+            log(`[Layout] OpenStabilizePending: source=${source}`);
+            return;
+        }
+
+        this.isOpenStabilizing = true;
+        const stabilizeId = `openfix-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+        try {
+            const initialView = getCanvasView(this.app);
+            if (!initialView || initialView.getViewType() !== 'canvas') {
+                log(`[Layout] OpenStabilizeSkip: no active canvas, source=${source}, ctx=${stabilizeId}`);
+                return;
+            }
+
+            const initialCanvas = this.getCanvasFromView(initialView);
+            if (!initialCanvas) {
+                log(`[Layout] OpenStabilizeSkip: canvas not ready, source=${source}, ctx=${stabilizeId}`);
+                return;
+            }
+
+            await this.waitForNextFrame(120);
+
+            let pulseCanvas = initialCanvas;
+            let pulseNodes = this.getCanvasNodes(pulseCanvas);
+            if (pulseNodes.size === 0) {
+                log(`[Layout] OpenStabilizeSkip: nodes=0, source=${source}, ctx=${stabilizeId}`);
+                return;
+            }
+
+            log(`[Layout] OpenStabilizeStart: source=${source}, pulses=${this.openStabilizePulseDelays.length}, nodes=${pulseNodes.size}, ctx=${stabilizeId}`);
+            this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-pre-style-truth', stabilizeId);
+
+            let prevVisibleNodeCount = 0;
+            let stableStreak = 0;
+
+            for (let i = 0; i < this.openStabilizePulseDelays.length; i++) {
+                const pulseNo = i + 1;
+                const pulseDelay = this.openStabilizePulseDelays[i] ?? 0;
+
+                if (pulseDelay > 0) {
+                    await this.waitForNextFrame(pulseDelay);
+                }
+
+                const refreshedView = getCanvasView(this.app);
+                const refreshedCanvas = refreshedView
+                    ? (this.getCanvasFromView(refreshedView) ?? pulseCanvas)
+                    : pulseCanvas;
+                const refreshedNodes = this.getCanvasNodes(refreshedCanvas);
+
+                if (refreshedNodes.size === 0) {
+                    log(`[Layout] OpenStabilizePulse#${pulseNo}Skip: nodes=0, source=${source}, ctx=${stabilizeId}`);
+                    continue;
+                }
+
+                pulseCanvas = refreshedCanvas;
+                pulseNodes = refreshedNodes;
+
+                const visibleNodeCount = this.getVisibleNodeCount(pulseNodes);
+                const lateVisibleNodes = Math.max(0, visibleNodeCount - prevVisibleNodeCount);
+                prevVisibleNodeCount = Math.max(prevVisibleNodeCount, visibleNodeCount);
+
+                const anomalyBeforeStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
+                const gapBefore = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
+                const forceHeavyFirstPulse = this.shouldForceHeavyOnFirstPulse(source);
+                const actionableAnomaly = anomalyBeforeStats.anomalous > 0
+                    && (gapBefore.residualBadEdges > 0 || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx);
+                const heavyEscalated = lateVisibleNodes > 0
+                    || gapBefore.residualBadEdges > 0
+                    || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx
+                    || actionableAnomaly;
+                const shouldRunHeavy = (pulseNo === 1 && forceHeavyFirstPulse) || heavyEscalated;
+                const cleanupOptions = this.getOffsetCleanupOptionsForSource(source, `open-p${pulseNo}`);
+
+                const persistentAnomaly = anomalyBeforeStats.anomalous > 0
+                    && lateVisibleNodes === 0
+                    && gapBefore.residualBadEdges === 0
+                    && gapBefore.maxResidualGap <= this.openStabilizeStableMaxGapPx
+                    && pulseNo >= 2;
+                const shouldRunLightPersistentGuard = persistentAnomaly && !shouldRunHeavy;
+
+                if (pulseNo === 1 && !forceHeavyFirstPulse) {
+                    if (heavyEscalated) {
+                        log(
+                            `[Layout] OpenStabilizeEscalateHeavy: source=${source}, lateVisible=${lateVisibleNodes}, ` +
+                            `anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, anomalyActionable=${actionableAnomaly}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
+                            `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, topBad=${gapBefore.topResidualBadSample || gapBefore.topBadSample}, ctx=${stabilizeId}`
+                        );
+                    } else {
+                        log(`[Layout] OpenStabilizeSkipHeavyBySource: source=${source}, pulse=${pulseNo}, ctx=${stabilizeId}`);
+                    }
+                }
+
+                if (shouldRunLightPersistentGuard) {
+                    log(
+                        `[Layout] OpenStabilizePersistentAnomalyGuard: source=${source}, pulse=${pulseNo}, ` +
+                        `anomaly=${anomalyBeforeStats.anomalous}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
+                        `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, ctx=${stabilizeId}`
+                    );
+                }
+
+                log(
+                    `[Layout] OpenStabilizePulse#${pulseNo}: source=${source}, delay=${pulseDelay}, visible=${visibleNodeCount}, ` +
+                    `late-visible-nodes=${lateVisibleNodes}, anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, ` +
+                    `pulse-gap-summary=${this.formatGapSummary(gapBefore)}, ` +
+                    `runHeavy=${shouldRunHeavy}, sourceAware=${forceHeavyFirstPulse ? 'force-first-pulse' : 'node-mounted-light-first'}, ` +
+                    `anomalyActionable=${actionableAnomaly}, persistentGuard=${shouldRunLightPersistentGuard}, cleanupRelease=${cleanupOptions.releaseFixClass ? 'allow' : 'hold'}, ctx=${stabilizeId}`
+                );
+
+                let cleanedPass1 = 0;
+                let cleanedPass2 = 0;
+                let edgePass1 = 0;
+                let edgePass2 = 0;
+
+                if (shouldRunHeavy) {
+                    cleanedPass1 = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                        pulseCanvas,
+                        pulseNodes,
+                        `${stabilizeId}-p${pulseNo}`,
+                        cleanupOptions
+                    );
+                    if (cleanedPass1 > 0) {
+                        await this.waitForNextFrame();
+                    }
+
+                    const refreshResult = await this.edgeGeometryService.refreshEdgeGeometry(pulseCanvas, `${stabilizeId}-p${pulseNo}`);
+                    edgePass1 = refreshResult.pass1;
+                    edgePass2 = refreshResult.pass2;
+
+                    cleanedPass2 = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                        pulseCanvas,
+                        pulseNodes,
+                        `${stabilizeId}-p${pulseNo}`,
+                        cleanupOptions
+                    );
+                    if (cleanedPass2 > 0) {
+                        await this.waitForNextFrame();
+                    }
+                } else if (shouldRunLightPersistentGuard) {
+                    cleanedPass1 = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                        pulseCanvas,
+                        pulseNodes,
+                        `${stabilizeId}-p${pulseNo}-guard`,
+                        { ...cleanupOptions, releaseFixClass: true, sourceTag: `${cleanupOptions.sourceTag || 'open'}:persistent-guard` }
+                    );
+                    const refreshResult = await this.edgeGeometryService.refreshEdgeGeometry(pulseCanvas, `${stabilizeId}-p${pulseNo}-guard`);
+                    edgePass1 = refreshResult.pass1;
+                    edgePass2 = refreshResult.pass2;
+                }
+
+                if (typeof (pulseCanvas as any).requestUpdate === 'function') {
+                    (pulseCanvas as any).requestUpdate();
+                }
+
+                const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
+                const gapAfter = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
+                const pulseBlockers = this.getOpenStabilizeBlockers(anomalyAfterStats, gapAfter, lateVisibleNodes);
+                const pulseStable = pulseBlockers.length === 0;
+                stableStreak = pulseStable ? (stableStreak + 1) : 0;
+
+                log(
+                    `[Layout] OpenStabilizePulse#${pulseNo}Done: source=${source}, cleaned=${cleanedPass1}/${cleanedPass2}, ` +
+                    `edgePass=${edgePass1}/${edgePass2}, anomalies={${this.formatAnomalyStats(anomalyAfterStats)}}, ` +
+                    `late-visible-nodes=${lateVisibleNodes}, pulse-gap-summary=${this.formatGapSummary(gapAfter)}, ` +
+                    `stable=${pulseStable}, blockers=${pulseBlockers.join('|') || 'none'}, stableStreak=${stableStreak}, ctx=${stabilizeId}`
+                );
+
+                if (pulseNo === 1 || pulseNo === this.openStabilizePulseDelays.length || shouldRunHeavy) {
+                    this.edgeGeometryService.logNodeStyleTruth(pulseNodes, `open-pulse-${pulseNo}-style-truth`, stabilizeId);
+                }
+
+                if (stableStreak >= 2 && pulseNo >= 2) {
+                    log(`[Layout] OpenStabilizeConverged: source=${source}, pulse=${pulseNo}, ctx=${stabilizeId}`);
+                    break;
+                }
+            }
+
+            this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-final-style-truth', stabilizeId);
+
+            window.setTimeout(() => {
+                const finalView = getCanvasView(this.app);
+                const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? pulseCanvas) : pulseCanvas;
+                const finalNodes = this.getCanvasNodes(finalCanvas);
+                this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'open-final', stabilizeId);
+            }, 260);
+
+            log(`[Layout] OpenStabilizeDone: source=${source}, pulses=${this.openStabilizePulseDelays.length}, ctx=${stabilizeId}`);
+        } catch (err) {
+            handleError(err, { context: 'OpenStabilize', message: '画布打开后自愈失败', showNotice: false });
+        } finally {
+            this.isOpenStabilizing = false;
+            if (this.pendingOpenStabilizeSource) {
+                const pending = this.pendingOpenStabilizeSource;
+                this.pendingOpenStabilizeSource = '';
+                const resumeSource = `${pending}-resume`;
+                if (this.canScheduleOpenStabilizeResume(resumeSource)) {
+                    this.scheduleOpenStabilization(resumeSource);
+                }
+            }
+        }
+    }
+
+    private async waitForNextFrame(delayMs: number = 0): Promise<void> {
+        await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+                if (delayMs > 0) {
+                    window.setTimeout(() => resolve(), delayMs);
+                    return;
+                }
+                resolve();
+            });
+        });
+    }
+
+    private getVisibleNodeCount(allNodes: Map<string, CanvasNodeLike>): number {
+        let visible = 0;
+        for (const [, node] of allNodes) {
+            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            if (nodeEl && nodeEl.offsetHeight > 0) {
+                visible++;
+            }
+        }
+        return visible;
+    }
+
+    private formatGapSummary(summary: EdgeScreenGapSummary): string {
+        return `all=${summary.allEdges},bothVis=${summary.bothVisibleEdges},oneVis=${summary.oneSideVisibleEdges},virt=${summary.bothVirtualizedEdges},` +
+            `sampled=${summary.sampledEdges},bad=${summary.badEdges},resBad=${summary.residualBadEdges}(>${summary.badGapThresholdPx.toFixed(1)}px),` +
+            `avg=${summary.avgGap.toFixed(1)}/${summary.avgResidualGap.toFixed(1)}(raw/res),` +
+            `max=${summary.maxGap.toFixed(1)}/${summary.maxResidualGap.toFixed(1)}(raw/res),stub=${summary.stubCompensationPx.toFixed(1)},scale=${summary.canvasScale.toFixed(3)},` +
+            `topBad=${summary.topBadSample || 'none'},topResBad=${summary.topResidualBadSample || 'none'},decompose=${summary.topBadDecompose || 'none'},` +
+            `driftNodes=${summary.topDriftNodes || 'none'},posBuckets=${summary.positionBuckets || 'none'},` +
+            `sample=${summary.sample || 'none'}`;
+    }
+
+    private formatAnomalyStats(stats: OffsetAnomalyStats): string {
+        return `visible=${stats.visible},anomalous=${stats.anomalous},topOnly=${stats.topOnly},leftOnly=${stats.leftOnly},` +
+            `topAndLeft=${stats.topAndLeft},insetTopLeft=${stats.insetTopLeft},softInsetOnly=${stats.softInsetOnly}`;
+    }
+
+    private getOpenStabilizeBlockers(
+        anomalyStats: OffsetAnomalyStats,
+        gapSummary: EdgeScreenGapSummary,
+        lateVisibleNodes: number
+    ): string[] {
+        const blockers: string[] = [];
+
+        const actionableAnomaly = anomalyStats.anomalous > 0
+            && (gapSummary.residualBadEdges > 0 || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx);
+        if (actionableAnomaly) {
+            blockers.push(`anomaly:${anomalyStats.anomalous}`);
+        }
+        if (gapSummary.residualBadEdges > 0) {
+            blockers.push(`resBadEdges:${gapSummary.residualBadEdges}`);
+        }
+        if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
+            blockers.push(`maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`);
+        }
+        if (lateVisibleNodes > 0) {
+            blockers.push(`lateVisible:${lateVisibleNodes}`);
+        }
+
+        return blockers;
+    }
+
     private getLayoutSettings(): CanvasArrangerSettings {
         return {
             horizontalSpacing: this.settings.horizontalSpacing,
@@ -145,6 +490,104 @@ export class LayoutManager {
     }
 
     /**
+     * [彻底修复-V3] 通过 leaf.openFile() 强制重载 Canvas，等效于手动"关闭再打开"。
+     *
+     * 之前用 canvas.setData()/importData() 的方案失败原因：
+     * setData 执行后 Canvas 引擎内部触发自动保存（requestSave），
+     * 把内存中的不一致状态写回文件，导致下次打开也是错的。
+     *
+     * leaf.openFile() 走 Obsidian 的标准 canvas 加载路径，
+     * 和用户手动关闭再打开效果完全一样，已知可行。
+     */
+    private async reloadCanvasViaLeaf(
+        canvas: CanvasLike,
+        canvasFilePath: string,
+        allNodes: Map<string, CanvasNodeLike>,
+        view: unknown,
+        contextId?: string,
+        layoutResult?: Map<string, { x: number; y: number; width?: number; height?: number }>
+    ): Promise<boolean> {
+        const c = canvas as any;
+        const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
+        if (!(canvasFile instanceof TFile)) {
+            log(`[Layout] LeafReload: canvasFile not found, ctx=${contextId || 'none'}`);
+            return false;
+        }
+
+        // 探测可用的 reload API（仅用于日志，不调用 setData/importData）
+        const reloadApis = ['setData', 'importData', 'loadData', 'deserialize'];
+        const available = reloadApis.filter(m => typeof c[m] === 'function');
+        log(`[Layout] CanvasReloadAPIs(detected,unused): available=[${available.join(',')}], ctx=${contextId || 'none'}`);
+
+        // 通过 leaf.openFile() 重新加载 canvas（与手动关闭再打开等效）
+        try {
+            const leaf = (view as any)?.leaf;
+            if (leaf && typeof leaf.openFile === 'function') {
+                log(`[Layout] LeafReload: calling leaf.openFile, ctx=${contextId || 'none'}`);
+                await leaf.openFile(canvasFile, { active: false });
+                log(`[Layout] LeafReload: done, ctx=${contextId || 'none'}`);
+                // 等一帧让 Canvas 完成 DOM 初始化
+                await new Promise<void>(r => requestAnimationFrame(() => r()));
+                // 获取重载后的新 canvas 引用（不再强制 zoomToBbox，保持用户当前视图）
+                const newView = getCanvasView(this.app);
+                const newCanvas = newView ? this.getCanvasFromView(newView) : null;
+                const targetCanvas = newCanvas ?? canvas;
+                if (targetCanvas !== canvas) {
+                    log(`[Layout] LeafReload: switched to fresh canvas ref, ctx=${contextId || 'none'}`);
+                }
+                return true;
+            }
+        } catch (e) {
+            log(`[Layout] LeafReload error: ${e}, ctx=${contextId || 'none'}`);
+        }
+
+        // 降级：仅记录，不再强制修改视图缩放
+        log(`[Layout] LeafReload: fallback(no-zoom), ctx=${contextId || 'none'}`);
+        return false;
+    }
+
+    /**
+     * zoomToBbox 辅助：计算所有节点的包围盒并调用 Canvas 引擎的 zoomToBbox
+     */
+    private zoomToAllNodes(
+        canvas: CanvasLike,
+        allNodes: Map<string, CanvasNodeLike>,
+        contextId?: string,
+        layoutResult?: Map<string, { x: number; y: number; width?: number; height?: number }>
+    ): void {
+        const c = canvas as any;
+        if (typeof c.zoomToBbox !== 'function') {
+            log(`[Layout] ZoomToBbox: API not available, ctx=${contextId || 'none'}`);
+            return;
+        }
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let count = 0;
+        for (const [nodeId, node] of allNodes.entries()) {
+            const target = layoutResult?.get(nodeId);
+            const x = typeof target?.x === 'number' ? target.x : (typeof node.x === 'number' ? node.x : 0);
+            const y = typeof target?.y === 'number' ? target.y : (typeof node.y === 'number' ? node.y : 0);
+            const w = typeof target?.width === 'number' && target.width > 0
+                ? target.width
+                : (typeof node.width === 'number' ? node.width : 0);
+            const h = typeof target?.height === 'number' && target.height > 0
+                ? target.height
+                : (typeof node.height === 'number' ? node.height : 0);
+            if (x - 1 < minX) minX = x - 1;
+            if (y - 1 < minY) minY = y - 1;
+            if (x + w + 1 > maxX) maxX = x + w + 1;
+            if (y + h + 1 > maxY) maxY = y + h + 1;
+            count++;
+        }
+        if (count === 0 || minX === Infinity) return;
+        try {
+            c.zoomToBbox({ minX, minY, maxX, maxY });
+            log(`[Layout] ZoomToBbox: bbox=${minX.toFixed(0)},${minY.toFixed(0)}->${maxX.toFixed(0)},${maxY.toFixed(0)}, nodes=${count}, ctx=${contextId || 'none'}`);
+        } catch (e) {
+            log(`[Layout] ZoomToBbox error: ${e}, ctx=${contextId || 'none'}`);
+        }
+    }
+
+    /**
      * 更新节点位置到Canvas
      * [修复] 同时同步 height 到内存节点，确保边连接点基于正确高度计算
      * @param result 布局结果映射（包含 x, y, width, height）
@@ -163,6 +606,8 @@ export class LayoutManager {
         let missingCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
+        let virtualizedCount = 0;
+        let visibleCount = 0;
         
         // [C2] 尺寸来源统计日志
         let zeroFromData = 0;
@@ -210,40 +655,36 @@ export class LayoutManager {
                     defaulted++;
                 }
 
-                // 使用 Canvas 引擎原生的 moveAndResize 方法
-                // 注意：虽然叫 moveAndResize，但我们保持原有的 width/height 不变
-                if (typeof (originalNode as any).moveAndResize === 'function') {
-                    (originalNode as any).moveAndResize({
-                        x: newPosition.x,
-                        y: newPosition.y,
-                        width: currentWidth,
-                        height: currentHeight
-                    });
-                } else {
-                    // Fallback: 如果没有 moveAndResize，则手动更新
-                    const newData: Record<string, unknown> = {
-                        ...currentData,
-                        x: newPosition.x,
-                        y: newPosition.y
-                    };
-                    originalNode.setData(newData);
+                // [彻底修复] 对所有节点（含可见节点）只做纯数据层更新，完全不调用 moveAndResize。
+                //
+                // 根因分析：moveAndResize 内部触发 markMoved → requestFrame，
+                // requestFrame 是全局操作，会遍历 Canvas 所有节点（含虚拟化节点）。
+                // 虚拟化节点的 isAttached 属性为 undefined → Uncaught TypeError。
+                // 该 TypeError 破坏 Canvas 引擎内部渲染状态，导致后续所有渲染（边路径、
+                // rerenderViewport、zoomToBbox）均在损坏状态下运行 → 边永远错连。
+                //
+                // 方案：只用 setData + bbox 更新内存数据，不触发任何 Canvas 引擎内部渲染链。
+                // 数据层正确后，由后续的 canvas.setData(fileData) 重加载触发完整干净渲染。
+                const nodeEl = (originalNode as any).nodeEl as HTMLElement | undefined;
+                const isVirtualized = !nodeEl || nodeEl.offsetHeight === 0;
+                if (isVirtualized) { virtualizedCount++; } else { visibleCount++; }
 
-                    if ((originalNode as any).bbox) {
-                        (originalNode as any).bbox = {
-                            minX: newPosition.x,
-                            minY: newPosition.y,
-                            maxX: newPosition.x + currentWidth,
-                            maxY: newPosition.y + currentHeight
-                        };
-                    }
+                const newData: Record<string, unknown> = {
+                    ...currentData,
+                    x: newPosition.x,
+                    y: newPosition.y,
+                    width: currentWidth,
+                    height: currentHeight,
+                };
+                originalNode.setData(newData);
 
-                    if (typeof (originalNode as any).update === 'function') {
-                        (originalNode as any).update();
-                    }
-                    if (typeof (originalNode as any).render === 'function') {
-                        (originalNode as any).render();
-                    }
-                }
+                // 同步 bbox — 边的锚点计算依赖 bbox（setData 不一定自动更新 bbox）
+                (originalNode as any).bbox = {
+                    minX: newPosition.x,
+                    minY: newPosition.y,
+                    maxX: newPosition.x + currentWidth,
+                    maxY: newPosition.y + currentHeight
+                };
 
                 updatedCount++;
             } else {
@@ -252,15 +693,16 @@ export class LayoutManager {
         }
 
         const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
-        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
+        log(`[Layout] NodePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, visible=${visibleCount}, virtualized=${virtualizedCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, ctx=${contextId || 'none'}`);
         
         // [C2] 尺寸来源日志
         if (fromNode > 0 || fromLayout > 0 || defaulted > 0) {
             log(`[Layout] NodeSizeFallback: zeroFromData=${zeroFromData}, fromNode=${fromNode}, fromLayout=${fromLayout}, defaulted=${defaulted}, ctx=${contextId || 'none'}`);
         }
 
-        if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
-        if (typeof canvas.requestSave === 'function') canvas.requestSave();
+        // [移除] requestUpdate/requestSave — 会触发 Canvas 引擎把当前内存状态自动保存到文件，
+        // 可能在 modifyCanvasDataAtomic 写入正确位置之前/之后覆盖文件，导致数据污染。
+        // 文件写入由 modifyCanvasDataAtomic 统一管理（SSOT原则）。
         return updatedCount;
     }
 
@@ -347,8 +789,9 @@ export class LayoutManager {
 
             const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
 
-            // [诊断] 布局前边几何诊断
-            this.edgeGeometryService.logEdgeGeometryDiagnostics(canvas, allNodes, 'before', arrangeId);
+            // 诊断日志：arrange前的节点/边几何与视觉层快照
+            this.edgeGeometryService.logFullDiagSnapshot(canvas, allNodes, 'pre-arrange', arrangeId);
+            this.edgeGeometryService.logComprehensiveDiag(canvas, allNodes, 'pre-arrange', arrangeId);
 
             log(`[Layout] ArrangeStart: id=${arrangeId}, visible=${visibleNodes.size}, all=${allNodes.size}, edges=${edges.length}, originalEdges=${originalEdges.length}, file=${canvasFilePath || 'unknown'}`);
             log(`[Layout] ArrangeData: id=${arrangeId}, canvasNodes=${canvasData?.nodes?.length || 0}, canvasEdges=${canvasData?.edges?.length || 0}`);
@@ -365,44 +808,79 @@ export class LayoutManager {
                 log(`[Layout] ArrangeEdges(before): ${edgeSamples.join(' | ')}`);
             }
 
-            const result = originalArrangeLayout(
+            let result = originalArrangeLayout(
                 visibleNodes,
                 edges,
                 this.getLayoutSettings(),
                 originalEdges,
                 allNodes,
-                canvasData || undefined
+                canvasData || undefined,
+                {
+                    forceResetCoordinates: false,
+                    forceReason: 'normal'
+                }
             );
+
+            let predictedChangedCount = this.countSignificantPositionChanges(
+                canvasData?.nodes ?? [],
+                result,
+                CONSTANTS.LAYOUT.POSITION_WRITE_EPSILON
+            );
+
+            let forceResetApplied = false;
+            if (predictedChangedCount === 0 && visibleNodes.size > 0) {
+                log(`[Layout] ArrangeForceReset: base predictedChanged=0, 尝试结构重排(忽略输入坐标), ctx=${arrangeId}`);
+                const forceResult = originalArrangeLayout(
+                    visibleNodes,
+                    edges,
+                    this.getLayoutSettings(),
+                    originalEdges,
+                    allNodes,
+                    canvasData || undefined,
+                    {
+                        forceResetCoordinates: true,
+                        forceReason: 'predictedChanged=0'
+                    }
+                );
+                const forcePredictedChanged = this.countSignificantPositionChanges(
+                    canvasData?.nodes ?? [],
+                    forceResult,
+                    CONSTANTS.LAYOUT.POSITION_WRITE_EPSILON
+                );
+                log(`[Layout] ArrangeForceReset: base=0, force=${forcePredictedChanged}, ctx=${arrangeId}`);
+                if (forcePredictedChanged > 0) {
+                    result = forceResult;
+                    predictedChangedCount = forcePredictedChanged;
+                    forceResetApplied = true;
+                    log(`[Layout] ArrangeForceReset: 使用强制重排结果, predictedChanged=${predictedChangedCount}, ctx=${arrangeId}`);
+                } else {
+                    log(`[Layout] ArrangeForceReset: 强制重排仍为0，保留原结果（可能结构已稳定/问题不在节点坐标）, ctx=${arrangeId}`);
+                }
+            }
 
             let missingInResult = 0;
             for (const nodeId of visibleNodes.keys()) {
                 if (!result.has(nodeId)) missingInResult++;
             }
             const extraInResult = Math.max(0, result.size - (visibleNodes.size - missingInResult));
-            log(`[Layout] ArrangeResult: id=${arrangeId}, layoutNodes=${result.size}, missing=${missingInResult}, extra=${extraInResult}`);
+            log(`[Layout] ArrangeResult: id=${arrangeId}, layoutNodes=${result.size}, missing=${missingInResult}, extra=${extraInResult}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}`);
 
             if (!canvasFilePath) throw new Error('找不到路径');
 
             const memoryEdges = this.getCanvasEdges(canvas);
             log(`[Layout] ArrangeMemoryEdges: id=${arrangeId}, count=${memoryEdges.length}`);
 
+            // [强制写入] 移除低可见性跳过逻辑。
+            // 原因：之前 shouldSkipFileWrite 导致文件不更新，
+            // 后续 canvas reload 读回旧文件数据 → 显示旧布局。
+            // arrange 结果总是正确的，数据应无条件写入文件。
             const domVisibleRate = layoutData.visibilityStats?.domVisibleRate ?? 1;
             const domVisibleCount = layoutData.visibilityStats?.domVisibleCount ?? 0;
             const inViewportRate = layoutData.visibilityStats?.inViewportRate ?? 1;
             const inViewportCount = layoutData.visibilityStats?.inViewportCount ?? 0;
-            const predictedChangedCount = this.countSignificantPositionChanges(canvasData?.nodes ?? [], result, CONSTANTS.LAYOUT.POSITION_WRITE_EPSILON);
-            const lowVisibility =
-                (domVisibleRate < CONSTANTS.LAYOUT.LOW_VISIBILITY_DOM_RATE && domVisibleCount < CONSTANTS.LAYOUT.LOW_VISIBILITY_MIN_DOM_VISIBLE)
-                || inViewportCount <= 0;
-            const allowWriteByMovement = predictedChangedCount >= CONSTANTS.LAYOUT.LOW_VISIBILITY_ALLOW_WRITE_MIN_CHANGED;
-            const shouldSkipFileWrite = lowVisibility && !allowWriteByMovement;
-            if (shouldSkipFileWrite) {
-                log(`[Layout] FileWriteSkippedLowVisibility: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportRate=${(inViewportRate * 100).toFixed(1)}%, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, threshold=${(CONSTANTS.LAYOUT.LOW_VISIBILITY_DOM_RATE * 100).toFixed(1)}%, minDomVisible=${CONSTANTS.LAYOUT.LOW_VISIBILITY_MIN_DOM_VISIBLE}, minChanged=${CONSTANTS.LAYOUT.LOW_VISIBILITY_ALLOW_WRITE_MIN_CHANGED}, ctx=${arrangeId}`);
-            } else if (lowVisibility && allowWriteByMovement) {
-                log(`[Layout] FileWriteOverrideLowVisibility: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportRate=${(inViewportRate * 100).toFixed(1)}%, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, minChanged=${CONSTANTS.LAYOUT.LOW_VISIBILITY_ALLOW_WRITE_MIN_CHANGED}, ctx=${arrangeId}`);
-            }
+            log(`[Layout] FileWriteAlways: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}, ctx=${arrangeId}`);
 
-            const success = shouldSkipFileWrite ? false : await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
+            const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 const canvasData = data;
                 if (!Array.isArray(canvasData.nodes) || !Array.isArray(canvasData.edges)) return false;
                 let changed = false;
@@ -418,47 +896,174 @@ export class LayoutManager {
                 return changed;
             });
 
-            let updatedCount = 0;
-            if (success) {
-                updatedCount = await this.updateNodePositions(result, allNodes, canvas, arrangeId);
+            // [No-Op 快路径] 当 arrange 预测无节点位移且文件层也无任何实际改动时，
+            // 直接跳过 leaf.openFile 重载与后续重型链路，避免无意义视觉跳动。
+            // 仍触发一次 open stabilization，处理晚到节点/样式层抖动，但不触发重开。
+            if (predictedChangedCount === 0 && !success) {
+                const noOpGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
+                const severeVisualRisk = this.edgeGeometryService.hasSevereVisualGapRisk(noOpGapSummary);
 
-                // [修复] 当本轮主要是尺寸变化（宽高）时，Canvas 引擎可能尚未完成节点几何到边锚点的传播
-                // 先让 requestUpdate/requestSave 的异步渲染周期跑一帧，避免 edge.render() 读到旧锚点导致“临时断连”
-                await new Promise<void>((resolve) => {
-                    requestAnimationFrame(() => {
-                        window.setTimeout(() => resolve(), 50);
-                    });
-                });
+                if (!severeVisualRisk) {
+                    log(
+                        `[Layout] ArrangeNoOpFastPath: predictedChanged=0, fileChanged=false, ` +
+                        `skipLeafReload=true, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                    );
+                    this.scheduleOpenStabilization('arrange-no-op');
+                    new Notice('布局完成！无节点变化');
+                    log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=no-op-fast-path, ctx=${arrangeId}`);
+                    return;
+                }
 
-                setTimeout(() => {
-                    const memoryEdgesAfter = this.getCanvasEdges(canvas);
-                    const edgeSamplesAfter = memoryEdgesAfter.slice(0, 3).map(e => {
-                        const fromId = this.toStringId(e.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.from)) || 'unknown';
-                        const toId = this.toStringId(e.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(e.to)) || 'unknown';
-                        return `${e.id || 'edge'}:${fromId}->${toId}`;
-                    });
-                    log(`[Layout] ArrangeEdges(after): ${edgeSamplesAfter.join(' | ')}`);
-
-                    const nodeSamplesAfter = Array.from(allNodes.values()).slice(0, 3).map(n => {
-                        const bbox = (n as any).bbox;
-                        const bboxStr = bbox ? `bbox(${bbox.minX?.toFixed(1)},${bbox.minY?.toFixed(1)}->${bbox.maxX?.toFixed(1)},${bbox.maxY?.toFixed(1)})` : 'bbox=none';
-                        return `${n.id}:x=${n.x},y=${n.y},w=${n.width},h=${n.height},${bboxStr}`;
-                    });
-                    log(`[Layout] ArrangeSample(after): ${nodeSamplesAfter.join(' | ')}`);
-                }, 300);
+                log(
+                    `[Layout] ArrangeNoOpFastPathBlocked: predictedChanged=0, fileChanged=false, ` +
+                    `reason=severe-visual-gap-risk, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                );
             }
 
-            await this.cleanupStaleFloatingNodes(canvas, allNodes);
-            await this.reapplyFloatingNodeStyles(canvas);
+            // 通过 leaf.openFile() 重加载 Canvas 引擎，等效于"关闭再打开"
+            // 注意：不再手动 setData/bbox/edge.render，避免与 Canvas 引擎自动渲染冲突
+            await this.reloadCanvasViaLeaf(canvas, canvasFilePath, allNodes, activeView, arrangeId, result);
 
-            // [C1] 双阶段刷新边几何
-            await this.edgeGeometryService.refreshEdgeGeometry(canvas, arrangeId);
+            // 等待 Canvas 引擎完成初始化渲染
+            await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => {
+                    window.setTimeout(() => resolve(), 120);
+                });
+            });
 
-            // [诊断] 布局后边几何诊断（pass2后）
-            this.edgeGeometryService.logEdgeGeometryDiagnostics(canvas, allNodes, 'after-pass2', arrangeId);
+            // 获取 leaf.openFile 后的 fresh canvas + fresh nodes 引用
+            const freshView2 = getCanvasView(this.app);
+            const freshCanvas = freshView2 ? (this.getCanvasFromView(freshView2) ?? canvas) : canvas;
+            const freshNodes = this.getCanvasNodes(freshCanvas);
+            log(`[Layout] FreshRef: same=${freshCanvas === canvas}, nodes=${freshNodes.size}, ctx=${arrangeId}`);
 
-            new Notice(`布局完成！更新了 ${updatedCount} 个节点`);
-            log(`[Layout] 完成: 更新 ${updatedCount}`);
+            // 诊断日志：reload后的节点/边几何与视觉层快照
+            this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
+            this.edgeGeometryService.logComprehensiveDiag(freshCanvas, freshNodes, 'post-reload', arrangeId);
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-reload-style-truth', arrangeId);
+
+            // [时序修复] 提前执行第一轮 cleanup，尽快消除用户可见的错位窗口。
+            // 之前 cleanup 在 post-reload-watch 之后，可能留下 200~400ms 的可见错位。
+            // [振荡修复] arrange 流程中禁止释放 fix class，避免"治好→停药→复发"循环
+            const earlyCleanedCount = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                freshCanvas,
+                freshNodes,
+                arrangeId,
+                { sourceTag: 'arrange-early', releaseFixClass: false }
+            );
+            if (earlyCleanedCount > 0) {
+                log(`[Layout] EarlyCleanup: cleaned=${earlyCleanedCount}, wait-dom-settle, ctx=${arrangeId}`);
+                await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => {
+                        window.setTimeout(() => resolve(), 150);
+                    });
+                });
+            }
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-early-cleanup-style-truth', arrangeId);
+
+            // [样式时间线] leaf.openFile 后短窗口观察，捕获引擎初始化阶段对节点 style/class 的写入
+            await this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                freshNodes,
+                'post-reload-watch',
+                arrangeId,
+                120
+            );
+
+            // 高度诊断：对比文件层高度与DOM高度，确认是否存在系统性放大
+            await this.logHeightDriftSnapshot(freshCanvas, freshNodes, canvasFilePath, arrangeId);
+
+            await this.cleanupStaleFloatingNodes(freshCanvas, freshNodes);
+            await this.reapplyFloatingNodeStyles(freshCanvas);
+
+            // cleanup 前样式真值快照
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'pre-cleanup-style-truth', arrangeId);
+
+            // [样式时间线] 观测 cleanup 过程中的 style/class 改动（含本插件与引擎联动写入）
+            const cleanupWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                freshNodes,
+                'cleanup-watch',
+                arrangeId,
+                260
+            );
+
+            // [修复A] 清理外部CSS导致的节点top/left偏移（主题/插件污染）
+            // 根因：某些节点computed top≠0（如87px），导致visual位置与transform不一致
+            // [振荡修复] arrange 流程中禁止释放 fix class，避免"治好→停药→复发"循环
+            const cleanedCount = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                freshCanvas,
+                freshNodes,
+                arrangeId,
+                { sourceTag: 'arrange-main', releaseFixClass: false }
+            );
+            if (cleanedCount > 0) {
+                log(`[Layout] 清理完成，等待DOM稳定后刷新边, cleaned=${cleanedCount}, ctx=${arrangeId}`);
+                // 等一帧让浏览器应用清理后的样式
+                await new Promise<void>(r => requestAnimationFrame(() => r()));
+            }
+
+            await cleanupWatchPromise;
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-cleanup-style-truth', arrangeId);
+
+            // [修复B] 双pass引擎级边几何刷新：解决leaf.openFile后部分虚拟化节点边端点未及时更新的问题
+            // pass1: edge.render() + requestUpdate() 触发bezier计算
+            // pass2: 等Canvas引擎完成虚拟化节点渲染后再刷一次，确保所有边端点收敛
+            const edgeRefreshWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                freshNodes,
+                'edge-refresh-watch',
+                arrangeId,
+                360
+            );
+
+            log(`[Layout] 开始双pass边刷新（引擎驱动）, ctx=${arrangeId}`);
+            const refreshResult = await this.edgeGeometryService.refreshEdgeGeometry(freshCanvas, arrangeId);
+            log(`[Layout] 双pass边刷新完成: pass1=${refreshResult.pass1}, pass2=${refreshResult.pass2}, bezierChanged=${refreshResult.bezierChangedPass1}/${refreshResult.bezierChangedPass2}, pathDChanged=${refreshResult.pathDChangedPass1}/${refreshResult.pathDChangedPass2}, ctx=${arrangeId}`);
+            await edgeRefreshWatchPromise;
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-style-truth', arrangeId);
+
+            // [时序修复] 第二轮轻量 cleanup：处理 edge-refresh 等待期间才注入到 DOM 的节点。
+            // [振荡修复] arrange 流程中禁止释放 fix class，避免"治好→停药→复发"循环
+            const postRefreshCleanedCount = this.edgeGeometryService.cleanupAnomalousNodePositioning(
+                freshCanvas,
+                freshNodes,
+                arrangeId,
+                { sourceTag: 'arrange-post-refresh', releaseFixClass: false }
+            );
+            if (postRefreshCleanedCount > 0) {
+                log(`[Layout] PostEdgeRefreshCleanup: cleaned=${postRefreshCleanedCount}, ctx=${arrangeId}`);
+                await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => resolve());
+                });
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-cleanup-style-truth', arrangeId);
+            }
+
+            // 最终 requestUpdate 让Canvas引擎同步所有变更到DOM（不手工写path）
+            const finalRequestUpdateWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                freshNodes,
+                'final-request-update-watch',
+                arrangeId,
+                260
+            );
+
+            if (typeof (freshCanvas as any).requestUpdate === 'function') {
+                (freshCanvas as any).requestUpdate();
+            }
+
+            await finalRequestUpdateWatchPromise;
+            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-final-request-update-style-truth', arrangeId);
+
+            // 最终诊断：给一次延迟采样，便于观察 requestUpdate 后的稳定状态
+            window.setTimeout(() => {
+                const finalView = getCanvasView(this.app);
+                const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? freshCanvas) : freshCanvas;
+                const finalNodes = this.getCanvasNodes(finalCanvas);
+                this.edgeGeometryService.logFullDiagSnapshot(finalCanvas, finalNodes, 'final', arrangeId);
+                this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'final', arrangeId);
+                this.edgeGeometryService.logNodeStyleTruth(finalNodes, 'final-style-truth', arrangeId);
+            }, 350);
+
+            new Notice(`布局完成！已写入 ${predictedChangedCount} 个节点位置`);
+            log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=engine-driven, ctx=${arrangeId}`);
+
 
         } catch (err) {
             handleError(err, { context: 'Layout', message: '布局失败，请重试' });
@@ -718,5 +1323,128 @@ export class LayoutManager {
             }
         }
         return count;
+    }
+
+    /**
+     * 高度漂移诊断：采样 fileH/memH/domH 及比例，定位“节点高度被系统性放大”问题。
+     */
+    private async logHeightDriftSnapshot(
+        canvas: CanvasLike,
+        freshNodes: Map<string, CanvasNodeLike>,
+        canvasFilePath: string,
+        contextId?: string
+    ): Promise<void> {
+        try {
+            const data = await this.canvasFileService.readCanvasData(canvasFilePath);
+            if (!data?.nodes || data.nodes.length === 0) {
+                log(`[Layout] HeightDrift: fileData empty, ctx=${contextId || 'none'}`);
+                return;
+            }
+
+            const fileMap = new Map<string, number>();
+            for (const n of data.nodes) {
+                if (typeof n.id === 'string' && typeof n.height === 'number') {
+                    fileMap.set(n.id, n.height);
+                }
+            }
+
+            let sampled = 0;
+            let driftCount = 0;
+            const lines: string[] = [];
+            for (const [nodeId, node] of freshNodes) {
+                const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+                const domH = nodeEl ? nodeEl.offsetHeight : 0;
+                if (domH <= 0) continue;
+
+                const fileH = fileMap.get(nodeId);
+                const memH = typeof (node as any).height === 'number' ? (node as any).height as number : -1;
+                if (typeof fileH !== 'number' || memH < 0) continue;
+
+                sampled++;
+                const ratio = fileH > 0 ? domH / fileH : 0;
+                const drift = Math.abs(domH - fileH);
+                if (drift > 5) driftCount++;
+
+                if (lines.length < 12 && drift > 5) {
+                    lines.push(`${nodeId.slice(0, 8)}: fileH=${fileH}, memH=${memH}, domH=${domH}, ratio=${ratio.toFixed(2)}`);
+                }
+            }
+
+            log(`[Layout] HeightDrift: sampled=${sampled}, drift(>5px)=${driftCount}, ctx=${contextId || 'none'}`);
+            if (lines.length > 0) {
+                log(`[Layout] HeightDriftSamples:\n${lines.join('\n')}`);
+            }
+        } catch (err) {
+            log(`[Layout] HeightDrift error: ${err}, ctx=${contextId || 'none'}`);
+        }
+    }
+
+    /**
+     * [高度校准] DOM 高度校准：leaf.openFile 后，对所有 DOM 已渲染（offsetHeight > 0）的节点，
+     * 如果其 offsetHeight 与内存中的 node.height 差值 > 5px，则修正内存数据并同步写入文件。
+     *
+     * 目的：修正因 T13C 墨水屏渲染差异导致的节点高度不一致（如文件记录 151px，T13C 渲染 215px），
+     * 确保 edge.render() 用于计算锚点的 bbox 与实际 DOM 渲染高度一致，消除"边悬空"问题。
+     */
+    private async calibrateNodeHeightsFromDOM(
+        canvas: CanvasLike,
+        freshNodes: Map<string, CanvasNodeLike>,
+        canvasFilePath: string,
+        contextId?: string
+    ): Promise<number> {
+        let calibrated = 0, skipped = 0, virt = 0;
+        const corrections: Array<{ id: string; oldH: number; newH: number }> = [];
+
+        for (const [nodeId, node] of freshNodes) {
+            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            if (!nodeEl || nodeEl.offsetHeight === 0) {
+                virt++;
+                continue;
+            }
+            const domH = nodeEl.offsetHeight;
+            const memH = typeof (node as any).height === 'number' ? (node as any).height as number : -1;
+            if (memH < 0 || Math.abs(domH - memH) <= 5) {
+                skipped++;
+                continue;
+            }
+            if (!this.canSetData(node)) {
+                skipped++;
+                continue;
+            }
+            try {
+                const getDataFn = node.getData;
+                const currentData: Record<string, unknown> = getDataFn ? getDataFn.call(node) : {};
+                node.setData({ ...currentData, height: domH });
+                const x = typeof (node as any).x === 'number' ? (node as any).x as number : 0;
+                const y = typeof (node as any).y === 'number' ? (node as any).y as number : 0;
+                const w = typeof (node as any).width === 'number' ? (node as any).width as number : 0;
+                (node as any).bbox = { minX: x, minY: y, maxX: x + w, maxY: y + domH };
+                corrections.push({ id: nodeId, oldH: memH, newH: domH });
+                calibrated++;
+            } catch {
+                // 忽略单个节点校准失败
+            }
+        }
+
+        const sampleStr = corrections.slice(0, 5).map(c => `${c.id.slice(0, 8)}:${c.oldH}→${c.newH}`).join('|');
+        log(`[Layout] CalibrateDOMH: calibrated=${calibrated}, skipped=${skipped}, virt=${virt}, corrections=${sampleStr || 'none'}, ctx=${contextId || 'none'}`);
+
+        if (calibrated > 0) {
+            const corrMap = new Map(corrections.map(c => [c.id, c.newH]));
+            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
+                if (!Array.isArray(data.nodes)) return false;
+                let changed = false;
+                for (const n of data.nodes) {
+                    if (typeof n.id === 'string' && corrMap.has(n.id)) {
+                        n.height = corrMap.get(n.id)!;
+                        changed = true;
+                    }
+                }
+                return changed;
+            });
+            log(`[Layout] CalibrateDOMH: file updated with ${calibrated} height corrections, ctx=${contextId || 'none'}`);
+        }
+
+        return calibrated;
     }
 }
