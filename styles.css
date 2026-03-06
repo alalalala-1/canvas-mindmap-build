@@ -195,18 +195,20 @@
     /* 节点边框样式 - 深蓝色2px + 15px倒角 */
     border: 2px solid #1e3a8a !important;
     border-radius: 15px !important;
-    /* 裁剪内部内容，强制倒角生效 */
-    overflow: hidden !important;
+    /* 不使用overflow:hidden，否则会裁剪外部定位的折叠按钮 */
+    overflow: visible !important;
 }
 
-/* 节点内容区域倒角 - 与外框协调 */
+/* 节点内容区域倒角 - 与外框协调，并裁剪内部白底 */
 .canvas-node .canvas-node-content {
     border-radius: 13px !important;
+    overflow: hidden !important;
 }
 
 /* 节点容器层倒角 - 确保多层结构都有倒角 */
 .canvas-node > div {
     border-radius: 13px !important;
+    overflow: hidden !important;
 }
 
 /* ============================================================================
