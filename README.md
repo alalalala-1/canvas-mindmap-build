@@ -1,107 +1,111 @@
 # Canvas Mindmap Build
 
-> **为 Obsidian Canvas 打造的思维导图插件**
-> 从 Markdown 笔记选取内容生成节点，支持折叠、布局整理与浮动节点管理。
+> **中文**：为 Obsidian Canvas 打造的思维导图插件，从 Markdown 选区快速生成结构化画布。  
+> **English**: An Obsidian Canvas mindmap plugin that turns Markdown selections into structured canvas nodes.
 
 ---
 
-## ✨ 功能亮点
+## ✨ Features / 功能亮点
 
-- 📝 **从 Markdown 添加节点** — 选中文字、图片或公式，一键添加到 Canvas 思维导图
-- 🔗 **跳转回源文件** — 点击节点可跳转到对应 Markdown 选区
-- 📐 **节点折叠/展开** — 折叠子树，保持画布整洁；折叠状态自动保存
-- 🎨 **自动布局** — 树形布局，自动整理节点位置
-- 🎯 **浮动节点管理** — 删除连线后节点变为浮动状态（红框标识），重新连线后自动恢复
-- 📏 **高度自适应** — 文本节点高度根据内容长度自动调整
-
----
-
-## 🚀 快速上手
-
-### 1. 配置目标 Canvas
-
-打开 **设置 → Canvas Mindmap** → 填写目标 Canvas 文件路径（相对于 Vault 根目录）。
-
-### 2. 添加节点
-
-1. 在任意 Markdown 文件中选中内容
-2. 打开命令面板（`Ctrl/Cmd + P`）
-3. 执行 **Add to Canvas Mindmap**
-
-### 3. 整理布局
-
-执行命令 **Arrange Canvas Mindmap Layout**，自动整理画布节点位置。
-
-### 4. 折叠节点
-
-有子节点的父节点右侧会显示折叠按钮，点击即可折叠/展开子树。
+- 📝 **Add nodes from Markdown / 从 Markdown 添加节点**  
+  Convert selected text, images, or formulas into Canvas nodes in one command.
+- 🔗 **Jump back to source / 跳转回源文件**  
+  Click a node to navigate back to the source note/selection.
+- 📐 **Collapse & expand subtrees / 子树折叠展开**  
+  Keep large maps readable and preserve collapse state.
+- 🎨 **Auto layout / 自动布局**  
+  Organize nodes into a clean tree layout.
+- 🎯 **Floating node handling / 浮动节点管理**  
+  Nodes can enter/leave floating state after edge changes.
+- 📏 **Adaptive text node height / 文本节点高度自适应**  
+  Height is adjusted based on rendered content.
 
 ---
 
-## ⚙️ 主要设置
+## 🚀 Quick Start / 快速上手
 
-| 设置项 | 说明 | 默认值 |
-|--------|------|--------|
-| Target Canvas File | 目标 Canvas 文件路径 | — |
-| Enable Text Auto Size | 文本节点高度自适应 | ✅ |
-| Text Node Width | 文本节点宽度 | 400 |
-| Horizontal Spacing | 父子节点水平间距 | 200 |
-| Vertical Spacing | 兄弟节点垂直间距 | 40 |
-| Collapse Button Color | 折叠按钮颜色 | #e74c3c |
-| Enable Formula Detection | 自动识别公式节点 | ✅ |
-| Enable Debug Logging | 调试日志 | ❌ |
+### 1) Set target Canvas / 配置目标 Canvas
+- **CN**：打开 *Settings → Canvas Mindmap Build*，填写目标 Canvas 文件路径（相对 Vault 根目录）。
+- **EN**: Open *Settings → Canvas Mindmap Build* and set the target Canvas file path (relative to your vault root).
 
----
+### 2) Add nodes / 添加节点
+1. Select content in a Markdown note.
+2. Open Command Palette (`Ctrl/Cmd + P`).
+3. Run **Add to canvas mindmap**.
 
-## 📋 命令列表
+### 3) Arrange layout / 整理布局
+- Run **Arrange canvas mindmap layout** to automatically organize node positions.
 
-| 命令 | 说明 |
-|------|------|
-| Add to canvas mindmap | 将选中的文字/图片/公式添加为 Canvas 节点 |
-| Arrange canvas mindmap layout | 自动整理画布节点布局 |
-| Repair node fromLinks | 修复节点与源文件的跳转链接 |
+### 4) Collapse nodes / 折叠节点
+- Parent nodes with children show a collapse button on the right side.
 
 ---
 
-## 📦 安装
+## ⚙️ Main Settings / 主要设置
 
-### 手动安装
-将 `main.js`、`manifest.json`、`styles.css` 复制到：
-```
+| Setting | Description | Default |
+|---|---|---|
+| Target Canvas File | Target canvas file path | — |
+| Enable Text Auto Size | Adaptive text node height | ✅ |
+| Text Node Width | Text node width | 400 |
+| Horizontal Spacing | Parent-child horizontal spacing | 200 |
+| Vertical Spacing | Sibling vertical spacing | 40 |
+| Collapse Button Color | Collapse button color | `#e74c3c` |
+| Enable Formula Detection | Formula node detection | ✅ |
+| Enable Debug Logging | Debug logs | ❌ |
+
+---
+
+## 📋 Commands / 命令列表
+
+| Command | Description |
+|---|---|
+| Add to canvas mindmap | Add selected text/image/formula as canvas node |
+| Arrange canvas mindmap layout | Auto arrange canvas node layout |
+| Repair node fromLinks | Repair source link references for nodes |
+
+---
+
+## 📦 Installation / 安装
+
+### Manual install / 手动安装
+Copy `main.js`, `manifest.json`, and `styles.css` to:
+
+```text
 <Vault>/.obsidian/plugins/canvas-mindmap-build/
 ```
-在 Obsidian **设置 → 社区插件** 中启用。
 
-### 平台兼容性
+Then enable it in **Settings → Community plugins**.
 
-| 平台 | 状态 |
-|------|------|
-| macOS | ✅ 已测试 |
-| Android | ✅ 已测试 |
-| iOS | ⚠️ 未经测试 |
-| Windows | ⚠️ 未经测试 |
-| Linux | ⚠️ 未经测试 |
+### Compatibility / 平台兼容性
 
-- Obsidian v0.15.0+
-- `isDesktopOnly: false`（移动端可用）
+| Platform | Status |
+|---|---|
+| macOS | ✅ Tested |
+| Android | ✅ Tested |
+| iOS | ⚠️ Not tested yet |
+| Windows | ⚠️ Not tested yet |
+| Linux | ⚠️ Not tested yet |
+
+- Requires Obsidian `v0.15.0+`
+- `isDesktopOnly: false` (mobile supported)
 
 ---
 
-## 📝 更新日志
+## 📝 Changelog / 更新日志
+
+### v2.0.0
+- 底层 bug 修复完成：滚动条、布局、链接、框高、分屏、横屏、竖屏等核心场景修复。
+- Core bugfix release: improved scrolling, layout, links, node height, split-screen, landscape, and portrait behavior.
 
 ### v1.3.0
-- 重构架构：拆分 CollapseToggleService、EdgeGeometryService，layout-manager 精简 51%
-- 删除冗余工具文件，代码结构更清晰
+- Refactored architecture: split services and simplified layout pipeline.
 
 ### v1.2.0
-- 新增浮动节点管理（红框标识、状态持久化、自动恢复）
-- 新增边/节点删除确认对话框
-- 优化布局算法，修复多个边几何问题
+- Added floating node state management and edge/node deletion confirmations.
 
 ### v1.1.0
-- 新增节点删除确认（支持仅删除/级联删除）
-- 新增文本节点高度自适应
-- 优化折叠/展开后的自动布局
+- Added adaptive text node height and improved post-collapse layout behavior.
 
 ### v1.0.0
-- 初始版本：添加节点、折叠展开、跳转源文件
+- Initial release.
