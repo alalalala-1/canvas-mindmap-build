@@ -3,6 +3,11 @@ import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, Lay
 import { CONSTANTS } from '../constants';
 import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint, getArrangedTextWidthDecision } from '../utils/canvas-utils';
 
+export interface ArrangeLayoutOptions {
+    forceResetCoordinates?: boolean;
+    forceReason?: string;
+}
+
 /**
  * 过滤有效的浮动节点，只保留当前节点集合中存在的浮动节点
  * @param nodes 当前所有节点的映射
@@ -77,26 +82,8 @@ function applyVerticalOffset(
     return maxBottom;
 }
 
-export const DEFAULT_ARRANGER_SETTINGS: CanvasArrangerSettings = {
-    horizontalSpacing: CONSTANTS.LAYOUT.HORIZONTAL_SPACING,
-    verticalSpacing: CONSTANTS.LAYOUT.VERTICAL_SPACING,
-    textNodeWidth: CONSTANTS.LAYOUT.TEXT_NODE_WIDTH,
-    textNodeMaxHeight: CONSTANTS.LAYOUT.TEXT_NODE_MAX_HEIGHT,
-    imageNodeWidth: CONSTANTS.LAYOUT.IMAGE_NODE_WIDTH,
-    imageNodeHeight: CONSTANTS.LAYOUT.IMAGE_NODE_HEIGHT,
-    formulaNodeWidth: CONSTANTS.LAYOUT.FORMULA_NODE_WIDTH,
-    formulaNodeHeight: CONSTANTS.LAYOUT.FORMULA_NODE_HEIGHT,
-};
-
-export interface ArrangeLayoutOptions {
-    forceResetCoordinates?: boolean;
-    forceReason?: string;
-}
-
 /**
- * 从边的端点获取节点ID
- * @param endpoint 边的端点，可能是字符串或对象
- * @returns 节点ID，如果无法解析则返回null
+ * 从Canvas数据中获取浮动节点信息
  */
 function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
     floatingNodes: Set<string>,
@@ -129,6 +116,147 @@ function getFloatingNodesInfo(canvasData: CanvasDataLike | null | undefined): {
     }
 
     return { floatingNodes, originalParents };
+}
+
+/**
+ * [Canonical Order] 构建节点顺序索引
+ * 
+ * 基于 canvasData.nodes 的出现顺序，这是确定性的输入数据，
+ * 不依赖当前布局坐标。
+ * 
+ * @param canvasData Canvas 数据对象
+ * @returns nodeId -> 顺序索引 的映射
+ */
+function buildNodeOrderIndex(canvasData?: CanvasDataLike): Map<string, number> {
+    const nodeOrder = new Map<string, number>();
+    if (!canvasData?.nodes) return nodeOrder;
+    
+    for (let i = 0; i < canvasData.nodes.length; i++) {
+        const node = canvasData.nodes[i];
+        if (node?.id) {
+            nodeOrder.set(node.id, i);
+        }
+    }
+    return nodeOrder;
+}
+
+/**
+ * [Canonical Order] 构建子节点顺序索引
+ * 
+ * 基于 edge.id 排序，确保确定性排序，不依赖边的数组遍历顺序。
+ * edge.id 是持久化的，不随边的数组位置变化。
+ * 
+ * @param edges 边列表（优先使用 originalEdges）
+ * @returns parentId -> (childId -> 顺序索引) 的映射
+ */
+function buildChildOrderIndex(edges?: CanvasEdgeLike[]): Map<string, Map<string, number>> {
+    const childOrder = new Map<string, Map<string, number>>();
+    if (!edges) return childOrder;
+    
+    // 先收集所有边，按 parent 分组
+    const parentEdges = new Map<string, Array<{childId: string, edgeId: string}>>();
+    for (const edge of edges) {
+        const fromId = getNodeIdFromEdgeEndpoint(edge.from) || edge.fromNode || null;
+        const toId = getNodeIdFromEdgeEndpoint(edge.to) || edge.toNode || null;
+        if (!fromId || !toId) continue;
+        
+        if (!parentEdges.has(fromId)) {
+            parentEdges.set(fromId, []);
+        }
+        parentEdges.get(fromId)!.push({ childId: toId, edgeId: edge.id || '' });
+    }
+    
+    // 对每个 parent，按 edge.id 排序后分配索引（确保不依赖遍历顺序）
+    for (const [parentId, children] of parentEdges) {
+        // 去重：只保留每个 childId 的第一个 edge（按 edgeId 排序后）
+        const sortedByEdgeId = [...children].sort((a, b) => a.edgeId.localeCompare(b.edgeId));
+        const seen = new Set<string>();
+        const uniqueChildren: Array<{childId: string, edgeId: string}> = [];
+        for (const c of sortedByEdgeId) {
+            if (!seen.has(c.childId)) {
+                seen.add(c.childId);
+                uniqueChildren.push(c);
+            }
+        }
+        
+        const orderMap = new Map<string, number>();
+        uniqueChildren.forEach((c, idx) => orderMap.set(c.childId, idx));
+        childOrder.set(parentId, orderMap);
+    }
+    
+    return childOrder;
+}
+
+/**
+ * [Canonical Order] 对每个父节点的 children 进行规范化排序
+ * 
+ * 根因：之前的排序依赖当前 y/x 坐标，导致布局函数变成"状态依赖型"，
+ * 产生 A/B 双稳态翻转。
+ * 
+ * 排序依据（坐标无关，纯结构）：
+ * 1. originalEdges 中的边顺序（记录节点间关系的原始顺序）
+ * 2. canvasData.nodes 中的节点出现顺序（作为 fallback）
+ * 3. node id（最终兜底）
+ * 
+ * 这样确保：同一棵树、同一组高度，多次 manual arrange 输出唯一结果。
+ * 
+ * @param layoutNodes 布局节点映射
+ * @param childOrderIndex 子节点顺序索引（基于 originalEdges）
+ * @param nodeOrderIndex 节点顺序索引（基于 canvasData.nodes）
+ */
+function sortChildrenCanonically(
+    layoutNodes: Map<string, LayoutNode>,
+    childOrderIndex: Map<string, Map<string, number>>,
+    nodeOrderIndex: Map<string, number>
+): void {
+    const samples: string[] = [];
+    let sortedCount = 0;
+    
+    for (const [parentId, parent] of layoutNodes) {
+        // 只处理有多个子节点的父节点
+        if (parent.children.length <= 1) continue;
+        
+        // 去重（防御同一 child 被重复 push 的异常情况）
+        const uniqueChildren = Array.from(new Set(parent.children));
+        if (uniqueChildren.length !== parent.children.length) {
+            parent.children = uniqueChildren;
+        }
+        
+        // 如果只有一个子节点，跳过排序
+        if (uniqueChildren.length <= 1) continue;
+        
+        const parentChildOrder = childOrderIndex.get(parentId);
+        
+        // 排序：edge order -> node order -> id
+        uniqueChildren.sort((a, b) => {
+            // 1. 边顺序（originalEdges 中的出现顺序）
+            const aEdgeOrder = parentChildOrder?.get(a) ?? Number.MAX_SAFE_INTEGER;
+            const bEdgeOrder = parentChildOrder?.get(b) ?? Number.MAX_SAFE_INTEGER;
+            if (aEdgeOrder !== bEdgeOrder) return aEdgeOrder - bEdgeOrder;
+            
+            // 2. 节点顺序（canvasData.nodes 中的出现顺序）
+            const aNodeOrder = nodeOrderIndex.get(a) ?? Number.MAX_SAFE_INTEGER;
+            const bNodeOrder = nodeOrderIndex.get(b) ?? Number.MAX_SAFE_INTEGER;
+            if (aNodeOrder !== bNodeOrder) return aNodeOrder - bNodeOrder;
+            
+            // 3. id 作为最终兜底（确保稳定）
+            return a.localeCompare(b);
+        });
+        
+        parent.children = uniqueChildren;
+        sortedCount++;
+        
+        // 采样日志：记录有多个子节点的父节点的子节点顺序
+        if (samples.length < 8 && parent.children.length > 1) {
+            samples.push(`${parentId}: ${parent.children.join('|')}`);
+        }
+    }
+    
+    if (samples.length > 0) {
+        log(`[Layout] ChildOrderSample: sortedParents=${sortedCount}, samples=${samples.join(' | ')}`);
+    } else {
+        log(`[Layout] ChildOrderSample: sortedParents=${sortedCount}, no-multi-child-parents`);
+    }
 }
 
 /**
@@ -387,6 +515,28 @@ function connectFloatingSubtrees(
     });
 }
 
+/**
+ * [Canonical Order] 对根节点进行规范化排序
+ * 
+ * 排序依据（坐标无关，纯结构）：
+ * 1. canvasData.nodes 中的节点出现顺序
+ * 2. node id（最终兜底）
+ * 
+ * @param rootNodes 根节点ID列表
+ * @param nodeOrderIndex 节点顺序索引（基于 canvasData.nodes）
+ */
+function sortRootNodesCanonically(
+    rootNodes: string[],
+    nodeOrderIndex: Map<string, number>
+): void {
+    rootNodes.sort((a, b) => {
+        const aOrder = nodeOrderIndex.get(a) ?? Number.MAX_SAFE_INTEGER;
+        const bOrder = nodeOrderIndex.get(b) ?? Number.MAX_SAFE_INTEGER;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return a.localeCompare(b);
+    });
+}
+
 function findRootNodes(
     layoutNodes: Map<string, LayoutNode>,
     layoutParentMap: Map<string, string>
@@ -396,13 +546,6 @@ function findRootNodes(
         if (!layoutParentMap.has(id)) {
             rootNodes.push(id);
         }
-    });
-
-    rootNodes.sort((a, b) => {
-        const nodeA = layoutNodes.get(a);
-        const nodeB = layoutNodes.get(b);
-        if (!nodeA || !nodeB) return 0;
-        return nodeA.y - nodeB.y || nodeA.x - nodeB.x;
     });
     
     return rootNodes;
@@ -658,7 +801,39 @@ export function arrangeLayout(
 
     connectFloatingSubtrees(floatingSubtreeRoots, floatingSubtreeOriginalParents, layoutNodes, layoutParentMap, completeChildrenMap);
 
+    // [Canonical Order] 构建确定性排序索引（基于原始数据，不依赖当前坐标）
+    const nodeOrderIndex = buildNodeOrderIndex(canvasData);
+    const childOrderIndex = buildChildOrderIndex(originalEdges || edges);
+    
+    // [Canonical Order] 使用规范化排序（坐标无关）
+    sortChildrenCanonically(layoutNodes, childOrderIndex, nodeOrderIndex);
+    
+    // [诊断] 输出全量高度签名，便于对比两次 arrange 的输入是否一致
+    const heightEntries: string[] = [];
+    for (const [id, node] of layoutNodes) {
+        heightEntries.push(`${id}:${node.height.toFixed(1)}`);
+    }
+    heightEntries.sort();
+    const heightSig = heightEntries.join('|');
+    // 如果签名太长，输出摘要信息
+    if (heightSig.length > 200) {
+        // 简单 hash：计算字符码总和
+        let hash = 0;
+        for (let i = 0; i < heightSig.length; i++) {
+            hash = ((hash << 5) - hash) + heightSig.charCodeAt(i);
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        const sample = heightEntries.slice(0, 5).join('|');
+        log(`[Layout] HeightInputSignature: len=${heightEntries.length}, hash=${hash}, sample=${sample}`);
+    } else {
+        log(`[Layout] HeightInputSignature: ${heightSig}`);
+    }
+
+    // 找到根节点
     const rootNodes = findRootNodes(layoutNodes, layoutParentMap);
+    
+    // [Canonical Order] 对根节点也使用规范化排序（坐标无关）
+    sortRootNodesCanonically(rootNodes, nodeOrderIndex);
 
     if (rootNodes.length > 0) {
         log(`[Layout] 根: ${rootNodes.length}${floatingSubtreeRoots.size > 0 ? ' (浮动: ' + floatingSubtreeRoots.size + ')' : ''}`);
@@ -710,7 +885,7 @@ export function arrangeLayout(
         }
     });
 
-    // 输出输入/输出坐标对比，便于判断“布局是否真的产生移动”
+    // 输出输入/输出坐标对比，便于判断"布局是否真的产生移动"
     let moved = 0;
     let maxDelta = 0;
     const diffSamples: string[] = [];

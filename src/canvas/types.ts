@@ -18,6 +18,8 @@ export interface ICanvasManager {
     handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     validateAndRepairNodeHeights(file: TFile): Promise<void>;
     refreshTrustedHeightsForVisibleTextNodes(limit?: number): Promise<number>;
+    refreshTrustedHeightsForViewportTextNodes(limit?: number, batchSize?: number): Promise<number>;
+    syncScrollableStateForMountedNodes(): number;
     // 删除操作标志控制（防止删边后被误判为新边）
     startDeletingOperation(): void;
     endDeletingOperation(canvas: CanvasLike | null): void;
@@ -40,6 +42,12 @@ export type HeightMeta = {
     trustedTimestamp?: number;      // 可信测量时间戳
     trustedSignature?: string;      // 可信测量时的内容指纹（内容+宽度）
     trustedEpoch?: number;          // 可信测量的版本号（用于批量淘汰旧缓存）
+    trustedWidth?: number;          // 可信测量时的节点宽度
+    trustedEnvHash?: string;        // 可信测量时的渲染环境指纹
+    trustedSource?: 'dom-stable' | 'rendered' | 'estimate'; // 可信高度来源
+    trustState?: 'valid' | 'suspect' | 'stale'; // 可信状态：可复用/可疑/失效
+    suspectReason?: string;         // 可疑原因（用于日志与自愈）
+    suspectCount?: number;          // 连续可疑计数
 };
 
 export type FloatingNodeMetadata = {
@@ -170,8 +178,11 @@ export type PluginWithLastClicked = {
 };
 
 export type CanvasManagerLike = {
-    adjustAllTextNodeHeights: () => Promise<number>;
+    adjustAllTextNodeHeights: (options?: { skipMountedTextNodes?: boolean }) => Promise<number>;
     refreshTrustedHeightsForVisibleTextNodes?: (limit?: number) => Promise<number>;
+    refreshTrustedHeightsForViewportTextNodes?: (limit?: number, batchSize?: number) => Promise<number>;
+    syncScrollableStateForMountedNodes?: () => number;
+    markProgrammaticCanvasReload?: (filePath: string, holdMs?: number) => void;
 };
 
 export type CanvasEventMap = {
@@ -250,6 +261,7 @@ export interface LayoutPosition {
 export interface LayoutData {
     visibleNodes: Map<string, CanvasNodeLike>;
     allNodes: Map<string, CanvasNodeLike>;
+    mergedAllNodes: Map<string, CanvasNodeLike>; // 新增：全量合并后的节点真值（用于隐藏子树修复）
     edges: CanvasEdgeLike[];
     originalEdges: CanvasEdgeLike[];
     canvasData: CanvasDataLike | null;

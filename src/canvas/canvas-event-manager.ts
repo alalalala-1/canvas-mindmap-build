@@ -61,6 +61,8 @@ export class CanvasEventManager {
     private lastFromLinkNavKey: string = '';
     private lastOpenStabilizeKickAt: number = 0;
     private lastOpenStabilizeKickKey: string = '';
+    private programmaticReloadSuppressUntilByFilePath: Map<string, number> = new Map();
+    private readonly programmaticReloadDefaultHoldMs: number = 1800;
     private nodeMountedBatchTimeoutId: number | null = null;
     private nodeMountedPendingCount: number = 0;
     private nodeMountedPendingFilePath: string | null = null;
@@ -181,6 +183,9 @@ export class CanvasEventManager {
                         const canvasFilePath = this.getCanvasFromView(canvasView)?.file?.path
                             || (canvasView as CanvasViewLike).file?.path
                             || null;
+                        if (this.shouldSuppressOpenStabilization('active-leaf-change', canvasFilePath)) {
+                            return;
+                        }
                         this.markOpenProtectionWindow('active-leaf-change');
                         this.scheduleOpenStabilizationWithDedup('active-leaf-change', canvasFilePath);
 
@@ -248,6 +253,9 @@ export class CanvasEventManager {
 
                     this.setupMutationObserver();
                     void this.setupCanvasEventListeners(canvasView);
+                    if (this.shouldSuppressOpenStabilization('file-open', filePath)) {
+                        return;
+                    }
                     this.markOpenProtectionWindow('file-open');
                     this.scheduleOpenStabilizationWithDedup('file-open', filePath);
                 }, 120);
@@ -385,6 +393,15 @@ export class CanvasEventManager {
             `[Event] OpenStabilizeNodeMountedBatch: source=node-mounted-idle-batch, batchSize=${batchSize}, ` +
             `delayedByInteraction=${delayedByInteraction}, delayedByCooldown=${delayedByCooldown}, reason=${reason}, file=${filePath || 'unknown'}`
         );
+
+        if (this.shouldSuppressOpenStabilization('node-mounted-idle-batch', filePath || null)) {
+            log(
+                `[Event] OpenStabilizeNodeMountedBatchSuppressed: source=node-mounted-idle-batch, batchSize=${batchSize}, ` +
+                `reason=${reason}, file=${filePath || 'unknown'}, by=programmatic-reload-window`
+            );
+            return;
+        }
+
         this.scheduleOpenStabilizationWithDedup('node-mounted-idle-batch', filePath || null);
     }
 
@@ -410,7 +427,10 @@ export class CanvasEventManager {
     }
 
     private scheduleOpenStabilizationWithDedup(source: string, filePath: string | null): void {
-        const key = `${source}:${filePath || 'unknown'}`;
+        const dedupScope = (source === 'active-leaf-change' || source === 'file-open')
+            ? 'open-entry'
+            : source;
+        const key = `${dedupScope}:${filePath || 'unknown'}`;
         const now = Date.now();
         if (this.lastOpenStabilizeKickKey === key && now - this.lastOpenStabilizeKickAt < 600) {
             log(`[Event] OpenStabilizeDedup: skip duplicate trigger, source=${source}, file=${filePath || 'unknown'}`);
@@ -420,6 +440,30 @@ export class CanvasEventManager {
         this.lastOpenStabilizeKickKey = key;
         this.lastOpenStabilizeKickAt = now;
         this.canvasManager.scheduleOpenStabilization(source);
+    }
+
+    public markProgrammaticCanvasReload(filePath: string, holdMs: number = this.programmaticReloadDefaultHoldMs): void {
+        if (!filePath) return;
+        const until = Date.now() + Math.max(0, holdMs);
+        this.programmaticReloadSuppressUntilByFilePath.set(filePath, until);
+        log(`[Event] MarkProgrammaticReload: file=${filePath}, holdMs=${holdMs}`);
+    }
+
+    private shouldSuppressOpenStabilization(source: string, filePath: string | null): boolean {
+        if (!filePath) return false;
+
+        const now = Date.now();
+        const until = this.programmaticReloadSuppressUntilByFilePath.get(filePath) || 0;
+        if (until > now) {
+            log(`[Event] OpenStabilizeSuppressed: source=${source}, file=${filePath}, remaining=${until - now}ms`);
+            return true;
+        }
+
+        if (until > 0) {
+            this.programmaticReloadSuppressUntilByFilePath.delete(filePath);
+        }
+
+        return false;
     }
 
     private async handleDeleteButtonClick(canvasView: ItemView): Promise<void> {
@@ -552,7 +596,7 @@ export class CanvasEventManager {
             }
 
             let mdLeaf = this.app.workspace.getLeavesOfType('markdown').find(
-                leaf => (leaf.view as MarkdownViewLike).file?.path === fromLink!.file
+                leaf => (leaf.view as MarkdownViewLike).file?.path === sourceFile.path
             );
             if (!mdLeaf) {
                 mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
@@ -823,6 +867,13 @@ export class CanvasEventManager {
 
             if (shouldCheckButtons) {
                 void this.canvasManager.checkAndAddCollapseButtons();
+                const scrollSyncDelay = Platform.isMobile ? 120 : 60;
+                window.setTimeout(() => {
+                    const updated = this.canvasManager.syncScrollableStateForMountedNodes();
+                    if (updated > 0) {
+                        log(`[Event] NodeMountedScrollSync: updated=${updated}, mountedNodeCount=${mountedNodeCount}`);
+                    }
+                }, scrollSyncDelay);
             }
 
             // [OpenFix-3] 节点晚到挂载兜底：虚拟化节点在 reopen 后分批进入 DOM，
@@ -1312,6 +1363,8 @@ export class CanvasEventManager {
                     pass,
                     stopReason: 'stable'
                 });
+                // [Fix D] 边收敛后刷新可见节点高度，适配 T13C 的新 DPI/字体环境
+                this.scheduleHeightRefreshAfterViewportChange(traceId, token, reason);
                 return;
             }
         }
@@ -1322,6 +1375,31 @@ export class CanvasEventManager {
             stopReason: 'max-pass-reached',
             maxPass
         });
+        // 收敛后仍触发一次高度刷新（max-pass 未完全收敛时的兜底）
+        this.scheduleHeightRefreshAfterViewportChange(traceId, token, reason);
+    }
+
+    /**
+     * [Fix D] Viewport 变化后，延迟刷新可见节点高度
+     * 场景：T13C 墨水屏旋转/分屏后，DPI 或字体环境可能变化，
+     * 导致 trusted-env-mismatch 失效，需要重新测量 DOM 高度。
+     * 延迟执行是为了等待 Canvas 引擎完成节点布局稳定。
+     */
+    private scheduleHeightRefreshAfterViewportChange(traceId: string, token: number, reason: string): void {
+        const delay = Platform.isMobile ? 600 : 300;
+        window.setTimeout(() => {
+            // token 未被覆盖时才执行
+            if (token !== this.activeViewportToken) return;
+            void this.canvasManager.refreshTrustedHeightsForViewportTextNodes(24, 6)
+                .then(count => {
+                    if (count > 0) {
+                        log(`[ViewportFix] HeightRefreshAfterViewportChange: traceId=${traceId}, reason=${reason}, refreshed=${count}`);
+                    }
+                })
+                .catch(err => {
+                    log(`[ViewportFix] HeightRefreshAfterViewportChange error: ${err}`);
+                });
+        }, delay);
     }
 
     /**

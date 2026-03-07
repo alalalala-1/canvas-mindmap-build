@@ -122,7 +122,11 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
 
     // 上下padding: 16px
     const actualPadding = 16;
-    const calculatedHeight = Math.ceil(totalHeight + actualPadding);
+    // [修复v4] 添加 15% 安全余量
+    // 原因：估算函数对包含 <mark>、LaTeX 公式、列表等复杂 Markdown 的节点系统性低估
+    // 安全余量确保估算值不会导致内容截断（宁可稍大，不截断）
+    const SAFETY_MARGIN = 1.15;
+    const calculatedHeight = Math.ceil((totalHeight + actualPadding) * SAFETY_MARGIN);
     const result = Math.max(60, Math.min(calculatedHeight, maxHeight));
     
     if (heightCache.size >= HEIGHT_CACHE_MAX_SIZE) {

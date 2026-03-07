@@ -119,12 +119,24 @@ export class CanvasManager implements ICanvasManager {
         await this.nodeManager.validateAndRepairNodeHeights(file);
     }
 
-    public async adjustAllTextNodeHeights(): Promise<number> {
-        return await this.nodeManager.adjustAllTextNodeHeights();
+    public async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean }): Promise<number> {
+        return await this.nodeManager.adjustAllTextNodeHeights(options);
+    }
+
+    public markProgrammaticCanvasReload(filePath: string, holdMs: number = 1800): void {
+        this.eventManager.markProgrammaticCanvasReload(filePath, holdMs);
     }
 
     public async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8): Promise<number> {
         return await this.nodeManager.refreshTrustedHeightsForVisibleTextNodes(limit);
+    }
+
+    public async refreshTrustedHeightsForViewportTextNodes(limit: number = 24, batchSize: number = 6): Promise<number> {
+        return await this.nodeManager.refreshTrustedHeightsForViewportTextNodes(limit, batchSize);
+    }
+
+    public syncScrollableStateForMountedNodes(): number {
+        return this.nodeManager.syncScrollableStateForMountedNodes();
     }
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {

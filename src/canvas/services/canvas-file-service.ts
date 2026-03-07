@@ -153,11 +153,13 @@ export class CanvasFileService {
             const isImage = isImageContent(nodeText);
 
             if (isFormula) {
-                if (node.width !== formulaNodeWidth) {
+                // [修复] 只在宽度/高度缺失或无效时才用默认值兜底
+                // 不强制覆盖已有的有效值，因为 arrange 写入的高度是真正的 DOM 测量值
+                if (!node.width || node.width <= 0) {
                     node.width = formulaNodeWidth;
                     nodeChanged = true;
                 }
-                if (node.height !== formulaNodeHeight) {
+                if (!node.height || node.height <= 0) {
                     node.height = formulaNodeHeight;
                     nodeChanged = true;
                 }

@@ -1,0 +1,4 @@
+
+> canvas-mindmap-build@1.0.0 build
+> tsc -noEmit -skipLibCheck && node esbuild.config.mjs production
+

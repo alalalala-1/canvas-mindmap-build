@@ -14,12 +14,15 @@ export class VisibilityService {
     }
 
     /**
-     * 获取所有可见节点的 ID 集合
-     * @param nodes Canvas 中的所有节点
-     * @param edges Canvas 中的所有边
-     * @returns 可见节点 ID 的 Set
+     * 使用指定的 collapsed 集合来计算可见节点。
+     * 这是一个纯计算函数，不依赖当前 collapseStateManager 的真实状态。
+     * 用于模拟"假设某些节点折叠/展开"时的可见性。
      */
-    getVisibleNodeIds(nodes: Map<string, CanvasNodeLike> | CanvasNodeLike[], edges: CanvasEdgeLike[]): Set<string> {
+    getVisibleNodeIdsForCollapsedSet(
+        nodes: Map<string, CanvasNodeLike> | CanvasNodeLike[],
+        edges: CanvasEdgeLike[],
+        collapsedNodes: Set<string>
+    ): Set<string> {
         const visibleNodeIds = new Set<string>();
         const allNodeIds = new Set<string>();
 
@@ -32,7 +35,6 @@ export class VisibilityService {
             });
         }
 
-        const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
         const allHiddenNodeIds = new Set<string>();
 
         collapsedNodes.forEach(nodeId => {
@@ -46,9 +48,30 @@ export class VisibilityService {
             }
         });
 
-        if (allHiddenNodeIds.size > 0) {
-            log(`[Visibility] 可见: ${visibleNodeIds.size}/${allNodeIds.size} (隐藏: ${allHiddenNodeIds.size})`);
+        return visibleNodeIds;
+    }
+
+    /**
+     * 获取所有可见节点的 ID 集合
+     * @param nodes Canvas 中的所有节点
+     * @param edges Canvas 中的所有边
+     * @returns 可见节点 ID 的 Set
+     */
+    getVisibleNodeIds(nodes: Map<string, CanvasNodeLike> | CanvasNodeLike[], edges: CanvasEdgeLike[]): Set<string> {
+        const collapsedNodes = this.collapseStateManager.getAllCollapsedNodes();
+        const visibleNodeIds = this.getVisibleNodeIdsForCollapsedSet(nodes, edges, collapsedNodes);
+
+        const allNodeCount = nodes instanceof Map
+            ? nodes.size
+            : Array.isArray(nodes)
+                ? nodes.length
+                : 0;
+
+        const hiddenCount = Math.max(0, allNodeCount - visibleNodeIds.size);
+        if (hiddenCount > 0) {
+            log(`[Visibility] 可见: ${visibleNodeIds.size}/${allNodeCount} (隐藏: ${hiddenCount})`);
         }
+
         return visibleNodeIds;
     }
 

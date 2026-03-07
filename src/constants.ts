@@ -14,7 +14,8 @@ export const CONSTANTS = {
         FONT_SIZE: 14,
         LINE_HEIGHT: 26,
         SAFETY_PADDING: 44,
-        MIN_NODE_HEIGHT: 60,
+        MIN_NODE_HEIGHT: 60 as number,
+        MIN_HEADING_NODE_HEIGHT: 76 as number,  // 标题节点最低高度（标题渲染有更大的行高和字号，需要更多呼吸空间）
         DEFAULT_LINE_HEIGHT: 24,
         PADDING_EXTRA: 24,
         SCROLL_THRESHOLD: 20,
@@ -62,7 +63,7 @@ export const CONSTANTS = {
         RETRY_DELAY_LONG: 1000,
         FROM_LINK_NAV_DEBOUNCE: 2000,
         /** 移动端 fromLink 跳转后的初始等待时间（墨水屏等慢速设备需要更长时间） */
-        MOBILE_SELECTION_DELAY: 400,
+        MOBILE_SELECTION_DELAY: 600,
         /** 移动端 fromLink 选区的重试延迟（防止视图动画完成后选区被重置） */
         MOBILE_SELECTION_RETRY_DELAY: 300,
         /** arrange 完成后的延迟边刷新时间（等待虚拟化节点 DOM 渲染完毕） */
@@ -71,12 +72,12 @@ export const CONSTANTS = {
         EDGE_REFRESH_DEFERRED_DELAY_MOBILE: 1500,
         /** viewport 变化后的边刷新防抖时间（设备旋转/分屏切换时触发） */
         VIEWPORT_CHANGE_DEBOUNCE: 400,
-        /** 移动端 viewport 变化后额外等待时间（等待系统完成旋转动画） */
-        VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE: 600,
+        /** 移动端 viewport 变化后额外等待时间（等待系统完成旋转动画，墨水屏需要更长） */
+        VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE: 1000,
         /** 边几何 pass2 之间的等待时间（低置信度场景使用更长时间） */
         EDGE_REFRESH_PASS_INTERVAL: 50,
-        /** 低置信度场景下 edge refresh 额外 pass 的等待间隔 */
-        EDGE_REFRESH_EXTRA_PASS_INTERVAL: 300,
+        /** 低置信度场景下 edge refresh 额外 pass 的等待间隔（墨水屏刷新慢需要更长） */
+        EDGE_REFRESH_EXTRA_PASS_INTERVAL: 500,
     },
 
 

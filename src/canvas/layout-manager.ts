@@ -42,6 +42,14 @@ export class LayoutManager {
     private isArranging: boolean = false;
     private pendingArrange: boolean = false;
 
+    // [2-Cycle 振荡保护] 记录最近几次 arrange 的输入/输出签名，检测 A→B→A→B 循环
+    private arrangeInputSignatures: string[] = [];
+    private arrangeOutputSignatures: string[] = [];
+    private readonly oscillationHistorySize: number = 4;
+    private oscillationDetected: boolean = false;
+    private lastOscillationTime: number = 0;
+    private readonly oscillationCooldownMs: number = 5000; // 5秒内不再重复检测
+
     // [OpenFix] Canvas 打开后的轻量自愈流程（不改布局文件，仅修复视觉层错位）
     private openStabilizeTimeoutId: number | null = null;
     private isOpenStabilizing: boolean = false;
@@ -466,6 +474,111 @@ export class LayoutManager {
     }
 
     /**
+     * [2-Cycle 振荡保护] 生成输入签名：基于节点位置和高度
+     * 用于检测 arrange 输入是否相同
+     */
+    private computeInputSignature(
+        canvasData: CanvasDataLike | undefined,
+        allNodes: Map<string, CanvasNodeLike>
+    ): string {
+        if (!canvasData?.nodes) return 'no-data';
+        
+        // 采样前 5 个节点的位置和高度
+        const samples = canvasData.nodes.slice(0, 5).map(n => {
+            const node = allNodes.get(n.id ?? '');
+            const domH = (node as any)?.nodeEl?.offsetHeight ?? 0;
+            return `${n.id?.slice(0, 6)}:${n.x?.toFixed(0)},${n.y?.toFixed(0)},${n.height?.toFixed(0)},domH=${domH}`;
+        });
+        return `in:${samples.join('|')}`;
+    }
+
+    /**
+     * [2-Cycle 振荡保护] 生成输出签名：基于布局结果
+     * 用于检测 arrange 输出是否在 A/B 之间摇摆
+     */
+    private computeOutputSignature(
+        result: Map<string, { x: number; y: number; width?: number; height?: number }>
+    ): string {
+        // 采样前 5 个节点的输出位置
+        const samples: string[] = [];
+        let i = 0;
+        for (const [nodeId, pos] of result) {
+            if (i >= 5) break;
+            samples.push(`${nodeId.slice(0, 6)}:${pos.x.toFixed(0)},${pos.y.toFixed(0)},${(pos.height ?? 0).toFixed(0)}`);
+            i++;
+        }
+        return `out:${samples.join('|')}`;
+    }
+
+    /**
+     * [2-Cycle 振荡保护] 检测 A→B→A→B 振荡模式
+     * [方案4] 降级为二级保险丝：只对 auto source 生效，manual 不拦
+     * 返回 true 表示检测到振荡，应跳过后续 arrange
+     */
+    private detectOscillation(inputSig: string, outputSig: string, source: string): boolean {
+        // [方案4] manual arrange 不触发振荡检测，让用户操作总是生效
+        if (source === 'manual') {
+            return false;
+        }
+
+        const now = Date.now();
+        
+        // 冷却期内不重复检测
+        if (this.oscillationDetected && (now - this.lastOscillationTime) < this.oscillationCooldownMs) {
+            return true;
+        }
+
+        // 记录历史签名
+        this.arrangeInputSignatures.push(inputSig);
+        this.arrangeOutputSignatures.push(outputSig);
+        
+        // 保持历史大小
+        while (this.arrangeInputSignatures.length > this.oscillationHistorySize) {
+            this.arrangeInputSignatures.shift();
+            this.arrangeOutputSignatures.shift();
+        }
+
+        // 检测 2-cycle: A→B→A→B 模式
+        // 条件：输入相同，输出在两个值之间摇摆
+        if (this.arrangeInputSignatures.length >= 4) {
+            const inputs = this.arrangeInputSignatures;
+            const outputs = this.arrangeOutputSignatures;
+            
+            // 检查输入是否相同（或非常相似）
+            const inputStable = inputs.every(s => s === inputs[0] || s.startsWith('in:'));
+            
+            // 检查输出是否呈现 A→B→A→B 模式
+            // outputs[0] === outputs[2] && outputs[1] === outputs[3]
+            if (inputStable && 
+                outputs[0] === outputs[2] && 
+                outputs[1] === outputs[3] &&
+                outputs[0] !== outputs[1]) {
+                this.oscillationDetected = true;
+                this.lastOscillationTime = now;
+                log(
+                    `[Layout] OscillationDetected: source=${source}, ` +
+                    `pattern=A→B→A→B, inputSig=${inputSig.slice(0, 50)}..., ` +
+                    `outA=${outputs[0]?.slice(0, 30)}..., outB=${outputs[1]?.slice(0, 30)}...`
+                );
+                return true;
+            }
+        }
+
+        this.oscillationDetected = false;
+        return false;
+    }
+
+    /**
+     * [2-Cycle 振荡保护] 重置振荡检测状态
+     * 在手动 arrange 或其他用户操作时调用
+     */
+    private resetOscillationState(): void {
+        this.arrangeInputSignatures = [];
+        this.arrangeOutputSignatures = [];
+        this.oscillationDetected = false;
+    }
+
+    /**
      * [C2] 获取节点的安全尺寸（带 fallback 防止 0 宽高）
      */
     private getSafeNodeSize(originalNode: CanvasNodeLike, currentData: Record<string, unknown>): { width: number; height: number } {
@@ -768,9 +881,13 @@ export class LayoutManager {
             const arrangeId = `arrange-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
             await this.triggerHeightAdjustment(skipAdjust, arrangeId);
 
-            if (!skipAdjust && this.canvasManager?.refreshTrustedHeightsForVisibleTextNodes) {
-                const refreshedTrusted = await this.canvasManager.refreshTrustedHeightsForVisibleTextNodes(8);
-                log(`[Layout] ProactiveTrustedRefresh: refreshed=${refreshedTrusted}, ctx=${arrangeId}`);
+            // [方案2] manual arrange 前刷新更多 viewport trusted heights
+            // 优先使用 viewport 方法（覆盖视口区域），fallback 到 visible 方法
+            if (!skipAdjust) {
+                const refreshedTrusted = await this.canvasManager?.refreshTrustedHeightsForViewportTextNodes?.(36, 6)
+                    ?? await this.canvasManager?.refreshTrustedHeightsForVisibleTextNodes?.(8)
+                    ?? 0;
+                log(`[Layout] PreflightTrustedRefresh: refreshed=${refreshedTrusted}, method=${this.canvasManager?.refreshTrustedHeightsForViewportTextNodes ? 'viewport(36,6)' : 'visible(8)'}, ctx=${arrangeId}`);
             }
 
             const normalizeFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
@@ -788,6 +905,31 @@ export class LayoutManager {
             }
 
             const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
+
+            // [方案3] 低 DOM 可见率时，auto arrange 降级，不做整树重排
+            // 原因：在 domVisibleRate 很低时（如 16.3%），大量节点高度不可信，
+            //       此时做整树布局风险很高，容易产生不稳定结果。
+            // 策略：
+            // - auto source（file-change/debounce/pending-resume）：跳过，只做 open stabilization
+            // - manual source：继续执行，但已有 preflight trusted refresh 保证
+            const domVisibleRate = layoutData.visibilityStats?.domVisibleRate ?? 1;
+            const domVisibleCount = layoutData.visibilityStats?.domVisibleCount ?? 0;
+            const AUTO_ARRANGE_MIN_DOM_VISIBLE_RATE = 0.25; // 25%
+
+            if (source !== 'manual' && domVisibleRate < AUTO_ARRANGE_MIN_DOM_VISIBLE_RATE) {
+                log(
+                    `[Layout] AutoArrangeSkipLowDomVisibility: source=${source}, domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, ` +
+                    `domVisibleCount=${domVisibleCount}, threshold=${(AUTO_ARRANGE_MIN_DOM_VISIBLE_RATE * 100).toFixed(0)}%, ` +
+                    `ctx=${arrangeId}`
+                );
+                // 仅做 open stabilization，不做整树布局
+                this.scheduleOpenStabilization(`auto-skip-low-visibility:${source}`);
+                new Notice(`跳过自动整理：DOM 可见率过低 (${(domVisibleRate * 100).toFixed(0)}%)。请手动触发整理。`);
+                return;
+            }
+
+            // [2-Cycle 振荡保护] 生成输入签名
+            const inputSig = this.computeInputSignature(canvasData ?? undefined, allNodes);
 
             // 诊断日志：arrange前的节点/边几何与视觉层快照
             this.edgeGeometryService.logFullDiagSnapshot(canvas, allNodes, 'pre-arrange', arrangeId);
@@ -808,6 +950,11 @@ export class LayoutManager {
                 log(`[Layout] ArrangeEdges(before): ${edgeSamples.join(' | ')}`);
             }
 
+            // [Canonical Layout] manual arrange 使用 forceResetCoordinates=true
+            // 根因：manual arrange 应该是"结构重排"，不应依赖旧坐标作为输入
+            // 这样确保同一棵树、同一组高度，多次 manual arrange 输出唯一结果
+            const manualCanonical = source === 'manual';
+
             let result = originalArrangeLayout(
                 visibleNodes,
                 edges,
@@ -816,8 +963,8 @@ export class LayoutManager {
                 allNodes,
                 canvasData || undefined,
                 {
-                    forceResetCoordinates: false,
-                    forceReason: 'normal'
+                    forceResetCoordinates: manualCanonical,
+                    forceReason: manualCanonical ? 'manual-canonical' : 'normal'
                 }
             );
 
@@ -865,6 +1012,16 @@ export class LayoutManager {
             const extraInResult = Math.max(0, result.size - (visibleNodes.size - missingInResult));
             log(`[Layout] ArrangeResult: id=${arrangeId}, layoutNodes=${result.size}, missing=${missingInResult}, extra=${extraInResult}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}`);
 
+            // [2-Cycle 振荡保护] 生成输出签名并检测振荡
+            const outputSig = this.computeOutputSignature(result);
+            log(`[Layout] ArrangeSignature: inputSig=${inputSig.slice(0, 50)}..., outputSig=${outputSig.slice(0, 50)}..., ctx=${arrangeId}`);
+            
+            if (this.detectOscillation(inputSig, outputSig, source)) {
+                log(`[Layout] ArrangeOscillationBlocked: 检测到 A→B→A→B 振荡模式，跳过本次 arrange, ctx=${arrangeId}`);
+                new Notice('检测到布局振荡，已暂停自动整理。请手动触发整理或检查节点高度问题。');
+                return;
+            }
+
             if (!canvasFilePath) throw new Error('找不到路径');
 
             const memoryEdges = this.getCanvasEdges(canvas);
@@ -874,8 +1031,6 @@ export class LayoutManager {
             // 原因：之前 shouldSkipFileWrite 导致文件不更新，
             // 后续 canvas reload 读回旧文件数据 → 显示旧布局。
             // arrange 结果总是正确的，数据应无条件写入文件。
-            const domVisibleRate = layoutData.visibilityStats?.domVisibleRate ?? 1;
-            const domVisibleCount = layoutData.visibilityStats?.domVisibleCount ?? 0;
             const inViewportRate = layoutData.visibilityStats?.inViewportRate ?? 1;
             const inViewportCount = layoutData.visibilityStats?.inViewportCount ?? 0;
             log(`[Layout] FileWriteAlways: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}, ctx=${arrangeId}`);
