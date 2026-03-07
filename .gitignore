@@ -39,3 +39,11 @@ test-canvas*.json
 
 # Developer notes (not for release)
 TECHNICAL_NOTES.md
+
+# temp build logs
+.tmp-build-verify.log
+.tmp-build.exit
+.tmp-build.log
+
+# backup files
+*.backup
