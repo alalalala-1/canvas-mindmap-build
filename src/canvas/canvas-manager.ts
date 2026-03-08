@@ -9,6 +9,7 @@ import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasFileService } from './services/canvas-file-service';
 import { EdgeDeletionService } from './services/edge-deletion-service';
 import { FromLinkRepairService } from './services/fromlink-repair-service';
+import { NodeOrderService } from './services/node-order-service';
 import { log } from '../utils/logger';
 import {
     getCanvasView
@@ -33,6 +34,7 @@ export class CanvasManager implements ICanvasManager {
     private floatingNodeService: FloatingNodeService;
     private edgeDeletionService: EdgeDeletionService;
     private fromLinkRepairService: FromLinkRepairService;
+    private nodeOrderService: NodeOrderService;
     private buttonCheckTimeoutId: number | null = null;
 
     constructor(
@@ -70,6 +72,7 @@ export class CanvasManager implements ICanvasManager {
         this.edgeDeletionService = new EdgeDeletionService(app, plugin, settings, this.canvasFileService, this.floatingNodeService);
         this.edgeDeletionService.setCanvasManager(this);
         this.fromLinkRepairService = new FromLinkRepairService(app, this.canvasFileService);
+        this.nodeOrderService = new NodeOrderService(app, this.canvasFileService);
 
         // 设置 LayoutManager 的 FloatingNodeService（使用同一个实例）
         this.layoutManager.setFloatingNodeService(this.floatingNodeService);
@@ -149,6 +152,37 @@ export class CanvasManager implements ICanvasManager {
 
     async repairNodeFromLinks(): Promise<void> {
         await this.fromLinkRepairService.repairFromLinksForCurrentCanvas();
+    }
+
+    public async sortSiblingsByMarkdownOrderAndArrange(): Promise<void> {
+        const changed = await this.nodeOrderService.sortSiblingsByMarkdownOrder();
+        if (!changed) return;
+        await this.refreshActiveCanvasFromFile('sort-markdown-order');
+        await this.arrangeCanvas('manual');
+    }
+
+    public async moveSelectedNodeUpAndArrange(): Promise<void> {
+        const changed = await this.nodeOrderService.moveSelectedNode('up');
+        if (!changed) return;
+        await this.arrangeCanvas('manual');
+    }
+
+    public async moveSelectedNodeDownAndArrange(): Promise<void> {
+        const changed = await this.nodeOrderService.moveSelectedNode('down');
+        if (!changed) return;
+        await this.arrangeCanvas('manual');
+    }
+
+    public async indentSelectedNodeAndArrange(): Promise<void> {
+        const changed = await this.nodeOrderService.indentSelectedNode();
+        if (!changed) return;
+        await this.arrangeCanvas('manual');
+    }
+
+    public async outdentSelectedNodeAndArrange(): Promise<void> {
+        const changed = await this.nodeOrderService.outdentSelectedNode();
+        if (!changed) return;
+        await this.arrangeCanvas('manual');
     }
 
     // =========================================================================
@@ -246,5 +280,31 @@ export class CanvasManager implements ICanvasManager {
     // =========================================================================
     private getCanvasView(): ItemView | null {
         return getCanvasView(this.app);
+    }
+
+    private async refreshActiveCanvasFromFile(reason: string): Promise<void> {
+        const canvasView = this.getCanvasView();
+        if (!canvasView || canvasView.getViewType() !== 'canvas') return;
+
+        const viewWithCanvas = canvasView as ItemView & {
+            canvas?: CanvasLike & { file?: TFile };
+            file?: TFile;
+            leaf?: { openFile?: (file: TFile, openState?: { active?: boolean }) => Promise<void> };
+        };
+
+        const file = viewWithCanvas.canvas?.file instanceof TFile
+            ? viewWithCanvas.canvas.file
+            : viewWithCanvas.file instanceof TFile
+                ? viewWithCanvas.file
+                : null;
+        if (!(file instanceof TFile)) return;
+
+        const leaf = viewWithCanvas.leaf;
+        if (!leaf || typeof leaf.openFile !== 'function') return;
+
+        this.markProgrammaticCanvasReload(file.path, 1800);
+        log(`[CanvasManager] RefreshActiveCanvasFromFile: reason=${reason}, file=${file.path}`);
+        await leaf.openFile(file, { active: false });
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
     }
 }

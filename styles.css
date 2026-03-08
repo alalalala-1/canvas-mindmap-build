@@ -177,6 +177,22 @@
     box-shadow: 0 0 0 2px var(--color-accent) !important;
 }
 
+/* 触控/手写笔：选中态优先保证可拖拽，不抢手势 */
+.canvas-node.is-selected:not(.is-editing),
+.canvas-node.is-focused:not(.is-editing) {
+    touch-action: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}
+
+/* 编辑态恢复文本交互 */
+.canvas-node.is-editing,
+.canvas-node.is-editing .canvas-node-content {
+    touch-action: auto !important;
+    user-select: text !important;
+    -webkit-user-select: text !important;
+}
+
 /* ============================================================================
    Canvas节点定位修复（永久生效，防止inset污染导致的错连）
    目标：强制Canvas节点只使用transform定位，禁止inset的top/left分量影响位置

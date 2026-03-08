@@ -54,6 +54,36 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             callback: () => this.canvasManager.repairNodeFromLinks(),
         });
 
+        this.addCommand({
+            id: 'sort-siblings-by-markdown-order',
+            name: 'Sort sibling nodes by Markdown order (按 Markdown 顺序重排同级)',
+            callback: () => this.canvasManager.sortSiblingsByMarkdownOrderAndArrange(),
+        });
+
+        this.addCommand({
+            id: 'move-selected-node-up',
+            name: 'Move selected node up (同级上移)',
+            callback: () => this.canvasManager.moveSelectedNodeUpAndArrange(),
+        });
+
+        this.addCommand({
+            id: 'move-selected-node-down',
+            name: 'Move selected node down (同级下移)',
+            callback: () => this.canvasManager.moveSelectedNodeDownAndArrange(),
+        });
+
+        this.addCommand({
+            id: 'indent-selected-node',
+            name: '右移一级：成为前一同级的子节点',
+            callback: () => this.canvasManager.indentSelectedNodeAndArrange(),
+        });
+
+        this.addCommand({
+            id: 'outdent-selected-node',
+            name: '左移一级：成为父级的后继同级',
+            callback: () => this.canvasManager.outdentSelectedNodeAndArrange(),
+        });
+
         this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
     }
 

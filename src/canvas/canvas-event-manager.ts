@@ -37,6 +37,17 @@ type FromLinkInfo = {
     to: { line: number; ch: number };
 };
 
+type PointerGestureSnapshot = {
+    pointerId: number;
+    pointerType: string;
+    nodeId: string | null;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    wasSelectedBeforeDown: boolean;
+    at: number;
+};
+
 export class CanvasEventManager {
     private plugin: Plugin;
     private app: App;
@@ -76,6 +87,11 @@ export class CanvasEventManager {
     private readonly nodeMountedCooldownMs: number = 900;
     private readonly nodeMountedInteractionIdleMs: number = 280;
     private readonly nodeMountedOpenProtectionMs: number = 1000;
+    private hasPointerGestureGuardSetup: boolean = false;
+    private activePointerGesture: PointerGestureSnapshot | null = null;
+    private lastCompletedPointerGesture: PointerGestureSnapshot | null = null;
+    private suppressFromLinkClickUntil: number = 0;
+    private suppressFromLinkNodeId: string | null = null;
     
     // [A2] 监听器防重日志
     private workspaceEventsRegistered: boolean = false;
@@ -124,6 +140,7 @@ export class CanvasEventManager {
     async initialize() {
         log(`[Event] CanvasEventManager.initialize() 被调用`);
         this.registerEventListeners();
+        this.setupPointerGestureGuard();
         this.setupInteractionTracker();
         // [ViewportFix] 注册 viewport 变化监听（屏幕旋转/分屏切换）
         this.setupViewportChangeListener();
@@ -307,6 +324,9 @@ export class CanvasEventManager {
             }
 
             // 处理 fromLink 点击
+            if (this.shouldSuppressFromLinkClick(targetEl)) {
+                return;
+            }
             await this.handleFromLinkClick(targetEl, canvasView);
         };
 
@@ -333,6 +353,110 @@ export class CanvasEventManager {
         this.plugin.registerDomEvent(document, 'wheel', () => markActive('wheel'), { capture: true, passive: true });
         this.plugin.registerDomEvent(document, 'touchmove', () => markActive('touchmove'), { capture: true, passive: true });
         this.plugin.registerDomEvent(window, 'scroll', () => markActive('scroll'), { capture: true, passive: true });
+    }
+
+    private setupPointerGestureGuard(): void {
+        if (this.hasPointerGestureGuardSetup) return;
+        this.hasPointerGestureGuardSetup = true;
+
+        const resolveNodeId = (eventTarget: EventTarget | null): string | null => {
+            if (!(eventTarget instanceof HTMLElement)) return null;
+            const nodeEl = findCanvasNodeElementFromTarget(eventTarget);
+            if (!nodeEl) return null;
+            return this.extractNodeIdFromElement(nodeEl);
+        };
+
+        const isNodeSelected = (eventTarget: EventTarget | null): boolean => {
+            if (!(eventTarget instanceof HTMLElement)) return false;
+            const nodeEl = findCanvasNodeElementFromTarget(eventTarget);
+            if (!nodeEl) return false;
+            return nodeEl.classList.contains('is-selected') || nodeEl.classList.contains('is-focused');
+        };
+
+        this.plugin.registerDomEvent(document, 'pointerdown', (event: PointerEvent) => {
+            const nodeId = resolveNodeId(event.target);
+            this.activePointerGesture = {
+                pointerId: event.pointerId,
+                pointerType: event.pointerType || 'mouse',
+                nodeId,
+                startX: event.clientX,
+                startY: event.clientY,
+                moved: false,
+                wasSelectedBeforeDown: isNodeSelected(event.target),
+                at: Date.now()
+            };
+        }, { capture: true, passive: true });
+
+        this.plugin.registerDomEvent(document, 'pointermove', (event: PointerEvent) => {
+            const gesture = this.activePointerGesture;
+            if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+            if (gesture.moved) return;
+            const dx = Math.abs(event.clientX - gesture.startX);
+            const dy = Math.abs(event.clientY - gesture.startY);
+            if (Math.max(dx, dy) >= CONSTANTS.TOUCH.MOVE_THRESHOLD) {
+                gesture.moved = true;
+                this.suppressFromLinkClickUntil = Date.now() + 800;
+                this.suppressFromLinkNodeId = gesture.nodeId;
+            }
+        }, { capture: true, passive: true });
+
+        const finalizePointer = (event: PointerEvent) => {
+            const gesture = this.activePointerGesture;
+            if (!gesture || gesture.pointerId !== event.pointerId) return;
+
+            this.lastCompletedPointerGesture = {
+                ...gesture,
+                at: Date.now()
+            };
+
+            if (gesture.moved) {
+                this.suppressFromLinkClickUntil = Date.now() + 800;
+                this.suppressFromLinkNodeId = gesture.nodeId;
+            }
+
+            this.activePointerGesture = null;
+        };
+
+        this.plugin.registerDomEvent(document, 'pointerup', finalizePointer, { capture: true, passive: true });
+        this.plugin.registerDomEvent(document, 'pointercancel', finalizePointer, { capture: true, passive: true });
+    }
+
+    private shouldSuppressFromLinkClick(targetEl: HTMLElement): boolean {
+        const nodeEl = findCanvasNodeElementFromTarget(targetEl);
+        if (!nodeEl) return false;
+
+        const nodeId = this.extractNodeIdFromElement(nodeEl);
+        const now = Date.now();
+        if (
+            now < this.suppressFromLinkClickUntil
+            && this.suppressFromLinkNodeId
+            && this.suppressFromLinkNodeId === nodeId
+        ) {
+            log(`[Event] fromLink click suppressed: reason=recent-drag, node=${nodeId || 'unknown'}`);
+            return true;
+        }
+
+        const lastGesture = this.lastCompletedPointerGesture;
+        if (!lastGesture) return false;
+        if (now - lastGesture.at > 1200) return false;
+        if (lastGesture.nodeId !== nodeId) return false;
+
+        const pointerType = lastGesture.pointerType;
+        const isTouchLike = pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE || pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE;
+        if (!isTouchLike) return false;
+
+        if (lastGesture.moved) {
+            log(`[Event] fromLink click suppressed: reason=touch-pen-moved, node=${nodeId || 'unknown'}`);
+            return true;
+        }
+
+        if (!lastGesture.wasSelectedBeforeDown) {
+            log(`[Event] fromLink click suppressed: reason=touch-pen-first-tap-select, node=${nodeId || 'unknown'}`);
+            return true;
+        }
+
+        return false;
     }
 
     private markOpenProtectionWindow(reason: string): void {
@@ -821,6 +945,8 @@ export class CanvasEventManager {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
                 this.nodeMountedInteractionActiveUntil = Date.now() + this.nodeMountedInteractionIdleMs;
+                this.suppressFromLinkClickUntil = Date.now() + 900;
+                this.suppressFromLinkNodeId = node?.id || null;
                 void this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );

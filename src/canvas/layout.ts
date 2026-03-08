@@ -143,8 +143,11 @@ function buildNodeOrderIndex(canvasData?: CanvasDataLike): Map<string, number> {
 /**
  * [Canonical Order] 构建子节点顺序索引
  * 
- * 基于 edge.id 排序，确保确定性排序，不依赖边的数组遍历顺序。
- * edge.id 是持久化的，不随边的数组位置变化。
+ * 基于 edges 数组中的持久化顺序（文件层顺序）构建。
+ * 这保证：
+ * 1) 普通 arrange 会尊重文件里已经确定的同级顺序；
+ * 2) 不会再被随机 edge.id 影响；
+ * 3) 命令层重排后（改 edges 顺序）可被 arrange 稳定复现。
  * 
  * @param edges 边列表（优先使用 originalEdges）
  * @returns parentId -> (childId -> 顺序索引) 的映射
@@ -152,36 +155,22 @@ function buildNodeOrderIndex(canvasData?: CanvasDataLike): Map<string, number> {
 function buildChildOrderIndex(edges?: CanvasEdgeLike[]): Map<string, Map<string, number>> {
     const childOrder = new Map<string, Map<string, number>>();
     if (!edges) return childOrder;
-    
-    // 先收集所有边，按 parent 分组
-    const parentEdges = new Map<string, Array<{childId: string, edgeId: string}>>();
+
+    // 直接按 edges 数组顺序写入 child 顺序；同 child 只认首次出现（去重）
     for (const edge of edges) {
         const fromId = getNodeIdFromEdgeEndpoint(edge.from) || edge.fromNode || null;
         const toId = getNodeIdFromEdgeEndpoint(edge.to) || edge.toNode || null;
         if (!fromId || !toId) continue;
-        
-        if (!parentEdges.has(fromId)) {
-            parentEdges.set(fromId, []);
+
+        let orderMap = childOrder.get(fromId);
+        if (!orderMap) {
+            orderMap = new Map<string, number>();
+            childOrder.set(fromId, orderMap);
         }
-        parentEdges.get(fromId)!.push({ childId: toId, edgeId: edge.id || '' });
-    }
-    
-    // 对每个 parent，按 edge.id 排序后分配索引（确保不依赖遍历顺序）
-    for (const [parentId, children] of parentEdges) {
-        // 去重：只保留每个 childId 的第一个 edge（按 edgeId 排序后）
-        const sortedByEdgeId = [...children].sort((a, b) => a.edgeId.localeCompare(b.edgeId));
-        const seen = new Set<string>();
-        const uniqueChildren: Array<{childId: string, edgeId: string}> = [];
-        for (const c of sortedByEdgeId) {
-            if (!seen.has(c.childId)) {
-                seen.add(c.childId);
-                uniqueChildren.push(c);
-            }
+
+        if (!orderMap.has(toId)) {
+            orderMap.set(toId, orderMap.size);
         }
-        
-        const orderMap = new Map<string, number>();
-        uniqueChildren.forEach((c, idx) => orderMap.set(c.childId, idx));
-        childOrder.set(parentId, orderMap);
     }
     
     return childOrder;
