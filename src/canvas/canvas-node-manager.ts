@@ -313,7 +313,7 @@ export class CanvasNodeManager {
         }
     }
 
-    async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean }): Promise<number> {
+    async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean; suppressRequestSave?: boolean }): Promise<number> {
         try {
             // ===== 改动2：使用 Obsidian 原生 API 而非直接文件写入 =====
             // 获取 Canvas 内存节点进行操作
@@ -435,7 +435,7 @@ export class CanvasNodeManager {
             }
 
             // 统一请求保存（由 Obsidian 决定何时写入）
-            if (changed && typeof canvas.requestSave === 'function') {
+            if (!options?.suppressRequestSave && changed && typeof canvas.requestSave === 'function') {
                 canvas.requestSave();
             }
 
@@ -444,7 +444,7 @@ export class CanvasNodeManager {
                 log(`[Node] ScrollabilitySync: updated=${scrollabilityUpdated}`);
             }
 
-            this.refreshCanvasAfterHeightAdjust();
+            this.refreshCanvasAfterHeightAdjust(!!options?.suppressRequestSave);
             this.logHeightAdjustStats(stats);
             if (nonDomShrinkBlockedCount > 0) {
                 const sourceSummary = Array.from(nonDomShrinkBlockedBySource.entries())
@@ -741,7 +741,7 @@ export class CanvasNodeManager {
      */
     async measureAndPersistTrustedHeight(
         nodeId: string,
-        options?: { suppressSuccessLogs?: boolean; collector?: TrustedMeasureCollector }
+        options?: { suppressSuccessLogs?: boolean; collector?: TrustedMeasureCollector; suppressRequestSave?: boolean }
     ): Promise<void> {
         const suppressSuccessLogs = !!options?.suppressSuccessLogs;
         const collector = options?.collector;
@@ -856,7 +856,7 @@ export class CanvasNodeManager {
             }
             
             // 请求 Canvas 保存（由 Obsidian 决定何时写入文件）
-            if (canvas && typeof canvas.requestSave === 'function') {
+            if (!options?.suppressRequestSave && canvas && typeof canvas.requestSave === 'function') {
                 canvas.requestSave();
             }
             
@@ -898,7 +898,7 @@ export class CanvasNodeManager {
     }
 
     private shouldLogVerboseNodeDiagnostics(): boolean {
-        return !!this.settings.enableDebugLogging;
+        return !!this.settings.enableDebugLogging && !!this.settings.enableVerboseCanvasDiagnostics;
     }
 
     private pushCollectorSample(collector: TrustedMeasureCollector, sample: string): void {
@@ -1081,7 +1081,7 @@ export class CanvasNodeManager {
      * 主动刷新当前可见文本节点的 trustedHeight（小批量）
      * 用于降低长期依赖估算高度且失焦测量触发不足的问题
      */
-    async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8): Promise<number> {
+    async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8, options?: { suppressRequestSave?: boolean }): Promise<number> {
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
         if (!canvas?.nodes || !(canvas.nodes instanceof Map)) {
@@ -1132,7 +1132,8 @@ export class CanvasNodeManager {
         for (const nodeId of candidateIds) {
             await this.measureAndPersistTrustedHeight(nodeId, {
                 suppressSuccessLogs: true,
-                collector
+                collector,
+                suppressRequestSave: options?.suppressRequestSave
             });
             refreshed++;
         }
@@ -1151,7 +1152,7 @@ export class CanvasNodeManager {
     /**
      * 手动 arrange 专用：优先刷新当前 viewport 内已挂载文本节点（分批）
      */
-    async refreshTrustedHeightsForViewportTextNodes(limit: number = 24, batchSize: number = 6): Promise<number> {
+    async refreshTrustedHeightsForViewportTextNodes(limit: number = 24, batchSize: number = 6, options?: { suppressRequestSave?: boolean }): Promise<number> {
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
         if (!canvas?.nodes || !(canvas.nodes instanceof Map)) {
@@ -1201,7 +1202,8 @@ export class CanvasNodeManager {
             if (!candidateId) continue;
             await this.measureAndPersistTrustedHeight(candidateId, {
                 suppressSuccessLogs: true,
-                collector
+                collector,
+                suppressRequestSave: options?.suppressRequestSave
             });
             refreshed++;
 
@@ -1226,7 +1228,7 @@ export class CanvasNodeManager {
     }
 
     /** 刷新 Canvas 边和视图 */
-    private refreshCanvasAfterHeightAdjust(): void {
+    private refreshCanvasAfterHeightAdjust(suppressRequestSave: boolean = false): void {
         const canvasView = getCanvasView(this.app);
         if (!canvasView) return;
         const canvas = (canvasView as CanvasViewLike).canvas;
@@ -1243,7 +1245,7 @@ export class CanvasNodeManager {
                 }
             }
         }
-        if (typeof canvas.requestSave === 'function') canvas.requestSave();
+        if (!suppressRequestSave && typeof canvas.requestSave === 'function') canvas.requestSave();
         if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
     }
 

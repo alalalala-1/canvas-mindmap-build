@@ -60,4 +60,44 @@ describe('arrangeLayout child order', () => {
 
         expect(orderedByY).toEqual(['c2', 'c1', 'c3']);
     });
+
+    it('should prefer stable originalEdges snapshot when runtime edge order is polluted', () => {
+        const nodes = new Map<string, CanvasNodeLike>([
+            ['p', createNode('p')],
+            ['c1', createNode('c1')],
+            ['c2', createNode('c2')],
+            ['c3', createNode('c3')],
+        ]);
+
+        const stableOriginalEdges: CanvasEdgeLike[] = [
+            { id: 'stable-1', fromNode: 'p', toNode: 'c2', fromSide: 'right', toSide: 'left' },
+            { id: 'stable-2', fromNode: 'p', toNode: 'c1', fromSide: 'right', toSide: 'left' },
+            { id: 'stable-3', fromNode: 'p', toNode: 'c3', fromSide: 'right', toSide: 'left' },
+        ];
+
+        const pollutedRuntimeEdges: CanvasEdgeLike[] = [
+            { id: 'stable-2', fromNode: 'p', toNode: 'c1', fromSide: 'right', toSide: 'left' },
+            { id: 'stable-3', fromNode: 'p', toNode: 'c3', fromSide: 'right', toSide: 'left' },
+            { id: 'stable-1', fromNode: 'p', toNode: 'c2', fromSide: 'right', toSide: 'left' },
+        ];
+
+        const stableCanvasData: CanvasDataLike = {
+            nodes: [
+                { id: 'p' },
+                { id: 'c1' },
+                { id: 'c2' },
+                { id: 'c3' },
+            ],
+            edges: stableOriginalEdges,
+        };
+
+        const result = arrangeLayout(nodes, pollutedRuntimeEdges, SETTINGS, stableOriginalEdges, nodes, stableCanvasData);
+
+        const orderedByY = ['c1', 'c2', 'c3']
+            .map((id) => ({ id, y: result.get(id)?.y ?? Number.MAX_SAFE_INTEGER }))
+            .sort((a, b) => a.y - b.y)
+            .map((entry) => entry.id);
+
+        expect(orderedByY).toEqual(['c2', 'c1', 'c3']);
+    });
 });

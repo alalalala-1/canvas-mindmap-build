@@ -27,6 +27,7 @@ export interface CanvasMindmapBuildSettings {
 
     // Debug Settings
     enableDebugLogging: boolean;
+    enableVerboseCanvasDiagnostics: boolean;
 }
 
 export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
@@ -54,4 +55,5 @@ export const DEFAULT_SETTINGS: CanvasMindmapBuildSettings = {
 
     // Debug Settings
     enableDebugLogging: false,
+    enableVerboseCanvasDiagnostics: false,
 }

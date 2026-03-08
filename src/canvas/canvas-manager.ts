@@ -114,15 +114,15 @@ export class CanvasManager implements ICanvasManager {
         await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
     }
 
-    public async measureAndPersistTrustedHeight(nodeId: string) {
-        await this.nodeManager.measureAndPersistTrustedHeight(nodeId);
+    public async measureAndPersistTrustedHeight(nodeId: string, options?: { suppressRequestSave?: boolean }) {
+        await this.nodeManager.measureAndPersistTrustedHeight(nodeId, options);
     }
 
     public async validateAndRepairNodeHeights(file: TFile) {
         await this.nodeManager.validateAndRepairNodeHeights(file);
     }
 
-    public async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean }): Promise<number> {
+    public async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean; suppressRequestSave?: boolean }): Promise<number> {
         return await this.nodeManager.adjustAllTextNodeHeights(options);
     }
 
@@ -130,12 +130,12 @@ export class CanvasManager implements ICanvasManager {
         this.eventManager.markProgrammaticCanvasReload(filePath, holdMs);
     }
 
-    public async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8): Promise<number> {
-        return await this.nodeManager.refreshTrustedHeightsForVisibleTextNodes(limit);
+    public async refreshTrustedHeightsForVisibleTextNodes(limit: number = 8, options?: { suppressRequestSave?: boolean }): Promise<number> {
+        return await this.nodeManager.refreshTrustedHeightsForVisibleTextNodes(limit, options);
     }
 
-    public async refreshTrustedHeightsForViewportTextNodes(limit: number = 24, batchSize: number = 6): Promise<number> {
-        return await this.nodeManager.refreshTrustedHeightsForViewportTextNodes(limit, batchSize);
+    public async refreshTrustedHeightsForViewportTextNodes(limit: number = 24, batchSize: number = 6, options?: { suppressRequestSave?: boolean }): Promise<number> {
+        return await this.nodeManager.refreshTrustedHeightsForViewportTextNodes(limit, batchSize, options);
     }
 
     public syncScrollableStateForMountedNodes(): number {

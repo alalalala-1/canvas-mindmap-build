@@ -6,6 +6,7 @@
 import { CanvasMindmapBuildSettings } from '../settings/types';
 
 let isLoggingEnabled = false;
+let isVerboseCanvasDiagnosticsEnabled = false;
 let logSequence = 0;
 let logStartTime = Date.now();
 
@@ -16,10 +17,17 @@ export function updateLoggerConfig(settings: Partial<CanvasMindmapBuildSettings>
     if (settings.enableDebugLogging !== undefined) {
         isLoggingEnabled = settings.enableDebugLogging;
     }
+    if (settings.enableVerboseCanvasDiagnostics !== undefined) {
+        isVerboseCanvasDiagnosticsEnabled = settings.enableVerboseCanvasDiagnostics;
+    }
     if (settings.enableDebugLogging) {
         logSequence = 0;
         logStartTime = Date.now();
     }
+}
+
+export function isVerboseCanvasDiagnosticsLoggingEnabled(): boolean {
+    return isLoggingEnabled && isVerboseCanvasDiagnosticsEnabled;
 }
 
 /**
@@ -55,6 +63,16 @@ function formatMessages(messages: unknown[]): string {
  */
 export function log(...messages: unknown[]): void {
     if (!isLoggingEnabled) return;
+    const seq = ++logSequence;
+    const delta = Date.now() - logStartTime;
+    console.debug(`[${seq}|${delta}ms] ${formatMessages(messages)}`);
+}
+
+/**
+ * 超详细诊断日志 - 仅在普通 debug + verbose canvas diagnostics 双开启时输出
+ */
+export function logVerbose(...messages: unknown[]): void {
+    if (!isVerboseCanvasDiagnosticsLoggingEnabled()) return;
     const seq = ++logSequence;
     const delta = Date.now() - logStartTime;
     console.debug(`[${seq}|${delta}ms] ${formatMessages(messages)}`);

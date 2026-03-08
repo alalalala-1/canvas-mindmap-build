@@ -64,6 +64,9 @@ export function validateSettings(data: unknown): Partial<CanvasMindmapBuildSetti
     if (typeof dataObj.enableDebugLogging === 'boolean') {
         validated.enableDebugLogging = dataObj.enableDebugLogging;
     }
+    if (typeof dataObj.enableVerboseCanvasDiagnostics === 'boolean') {
+        validated.enableVerboseCanvasDiagnostics = dataObj.enableVerboseCanvasDiagnostics;
+    }
 
     return validated;
 }

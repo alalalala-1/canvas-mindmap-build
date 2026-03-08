@@ -155,5 +155,17 @@ export class CanvasMindmapBuildSettingTab extends PluginSettingTab {
                     updateLoggerConfig(this.plugin.settings);
                     log(`Debug logging ${value ? 'enabled' : 'disabled'}`);
                 }));
+
+        new Setting(containerEl)
+            .setName('Enable verbose canvas diagnostics')
+            .setDesc('Enable very noisy geometry/style diagnostics. Keep this off unless you are actively diagnosing layout or drag issues.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.enableVerboseCanvasDiagnostics)
+                .onChange(async (value) => {
+                    this.plugin.settings.enableVerboseCanvasDiagnostics = value;
+                    await this.plugin.saveSettings();
+                    updateLoggerConfig(this.plugin.settings);
+                    log(`Verbose canvas diagnostics ${value ? 'enabled' : 'disabled'}`);
+                }));
     }
 }

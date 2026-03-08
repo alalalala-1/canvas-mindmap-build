@@ -9,7 +9,7 @@ import type { CollapseStateManager } from '../state/collapse-state';
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): Promise<void>;
     adjustNodeHeightAfterRender(nodeId: string): Promise<void>;
-    measureAndPersistTrustedHeight(nodeId: string): Promise<void>;
+    measureAndPersistTrustedHeight(nodeId: string, options?: { suppressRequestSave?: boolean }): Promise<void>;
     toggleNodeCollapse(nodeId: string): Promise<void>;
     syncHiddenChildrenOnDrag(node: CanvasNodeLike): Promise<void>;
     calculateTextNodeHeight(content: string, nodeEl?: Element): number;
@@ -17,8 +17,8 @@ export interface ICanvasManager {
     handleSingleDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     handleCascadeDelete(node: CanvasNodeLike, canvas: CanvasLike): Promise<void>;
     validateAndRepairNodeHeights(file: TFile): Promise<void>;
-    refreshTrustedHeightsForVisibleTextNodes(limit?: number): Promise<number>;
-    refreshTrustedHeightsForViewportTextNodes(limit?: number, batchSize?: number): Promise<number>;
+    refreshTrustedHeightsForVisibleTextNodes(limit?: number, options?: { suppressRequestSave?: boolean }): Promise<number>;
+    refreshTrustedHeightsForViewportTextNodes(limit?: number, batchSize?: number, options?: { suppressRequestSave?: boolean }): Promise<number>;
     syncScrollableStateForMountedNodes(): number;
     // 删除操作标志控制（防止删边后被误判为新边）
     startDeletingOperation(): void;
@@ -178,9 +178,9 @@ export type PluginWithLastClicked = {
 };
 
 export type CanvasManagerLike = {
-    adjustAllTextNodeHeights: (options?: { skipMountedTextNodes?: boolean }) => Promise<number>;
-    refreshTrustedHeightsForVisibleTextNodes?: (limit?: number) => Promise<number>;
-    refreshTrustedHeightsForViewportTextNodes?: (limit?: number, batchSize?: number) => Promise<number>;
+    adjustAllTextNodeHeights: (options?: { skipMountedTextNodes?: boolean; suppressRequestSave?: boolean }) => Promise<number>;
+    refreshTrustedHeightsForVisibleTextNodes?: (limit?: number, options?: { suppressRequestSave?: boolean }) => Promise<number>;
+    refreshTrustedHeightsForViewportTextNodes?: (limit?: number, batchSize?: number, options?: { suppressRequestSave?: boolean }) => Promise<number>;
     syncScrollableStateForMountedNodes?: () => number;
     markProgrammaticCanvasReload?: (filePath: string, holdMs?: number) => void;
 };

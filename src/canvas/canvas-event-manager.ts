@@ -48,6 +48,24 @@ type PointerGestureSnapshot = {
     at: number;
 };
 
+type TouchDragScrollOwnerSnapshot = {
+    el: HTMLElement;
+    overflowY: string;
+    overflowYPriority: string;
+    webkitOverflowScrolling: string;
+    webkitOverflowScrollingPriority: string;
+    overscrollBehavior: string;
+    overscrollBehaviorPriority: string;
+};
+
+type PenLongPressSnapshot = {
+    pointerId: number;
+    nodeId: string | null;
+    startedAt: number;
+    timerId: number | null;
+    triggered: boolean;
+};
+
 export class CanvasEventManager {
     private plugin: Plugin;
     private app: App;
@@ -92,6 +110,18 @@ export class CanvasEventManager {
     private lastCompletedPointerGesture: PointerGestureSnapshot | null = null;
     private suppressFromLinkClickUntil: number = 0;
     private suppressFromLinkNodeId: string | null = null;
+    private suppressFromLinkClickReason: string | null = null;
+    private activeTouchDragSawCanvasNodeMove: boolean = false;
+    private activeTouchDragNodeEl: HTMLElement | null = null;
+    private activeTouchDragPointerId: number | null = null;
+    private activeTouchDragScrollOwnerSnapshots: TouchDragScrollOwnerSnapshot[] = [];
+    private activePenLongPress: PenLongPressSnapshot | null = null;
+    private readonly touchDragArmedClass = 'cmb-touch-drag-armed';
+    private readonly touchDragScrollOwnerSelectors: string[] = [
+        '.canvas-node-content',
+        '.canvas-node-content .markdown-preview-view',
+        '.canvas-node-content .markdown-preview-sizer'
+    ];
     
     // [A2] 监听器防重日志
     private workspaceEventsRegistered: boolean = false;
@@ -359,30 +389,59 @@ export class CanvasEventManager {
         if (this.hasPointerGestureGuardSetup) return;
         this.hasPointerGestureGuardSetup = true;
 
-        const resolveNodeId = (eventTarget: EventTarget | null): string | null => {
+        const resolveNodeElement = (eventTarget: EventTarget | null): HTMLElement | null => {
             if (!(eventTarget instanceof HTMLElement)) return null;
-            const nodeEl = findCanvasNodeElementFromTarget(eventTarget);
+            return findCanvasNodeElementFromTarget(eventTarget);
+        };
+
+        const resolveNodeId = (eventTarget: EventTarget | null): string | null => {
+            const nodeEl = resolveNodeElement(eventTarget);
             if (!nodeEl) return null;
             return this.extractNodeIdFromElement(nodeEl);
         };
 
         const isNodeSelected = (eventTarget: EventTarget | null): boolean => {
-            if (!(eventTarget instanceof HTMLElement)) return false;
-            const nodeEl = findCanvasNodeElementFromTarget(eventTarget);
+            const nodeEl = resolveNodeElement(eventTarget);
             if (!nodeEl) return false;
             return nodeEl.classList.contains('is-selected') || nodeEl.classList.contains('is-focused');
         };
 
         this.plugin.registerDomEvent(document, 'pointerdown', (event: PointerEvent) => {
+            const nodeEl = resolveNodeElement(event.target);
             const nodeId = resolveNodeId(event.target);
+            const pointerType = event.pointerType || 'mouse';
+            const wasSelectedBeforeDown = isNodeSelected(event.target);
+
+            if (this.isTouchPointer(pointerType) && nodeEl) {
+                this.armTouchDragNode(nodeEl, event.pointerId);
+                this.activeTouchDragSawCanvasNodeMove = false;
+            } else {
+                this.clearTouchDragNodeArm();
+            }
+
+            if (this.isPenPointer(pointerType)) {
+                this.armPenLongPress(event.pointerId, nodeId);
+            } else {
+                this.clearPenLongPress();
+            }
+
+            if (this.isTouchLikePointer(pointerType) && nodeEl) {
+                log(
+                    `[Event] DragPointerDown: node=${nodeId || 'unknown'}, pointer=${pointerType}, ` +
+                    `selected=${wasSelectedBeforeDown}, blocker=${this.isContentBlockerTarget(event.target)}, ` +
+                    `target=${this.describeEventTarget(event.target)}, ` +
+                    `chain=${this.describeEventTargetChain(event.target)}, owners=${this.getTouchDragScrollOwners(nodeEl).length}`
+                );
+            }
+
             this.activePointerGesture = {
                 pointerId: event.pointerId,
-                pointerType: event.pointerType || 'mouse',
+                pointerType,
                 nodeId,
                 startX: event.clientX,
                 startY: event.clientY,
                 moved: false,
-                wasSelectedBeforeDown: isNodeSelected(event.target),
+                wasSelectedBeforeDown,
                 at: Date.now()
             };
         }, { capture: true, passive: true });
@@ -394,28 +453,63 @@ export class CanvasEventManager {
             if (gesture.moved) return;
             const dx = Math.abs(event.clientX - gesture.startX);
             const dy = Math.abs(event.clientY - gesture.startY);
-            if (Math.max(dx, dy) >= CONSTANTS.TOUCH.MOVE_THRESHOLD) {
+            const moveThreshold = this.getMoveThresholdForPointer(gesture.pointerType);
+            if (Math.max(dx, dy) >= moveThreshold) {
                 gesture.moved = true;
-                this.suppressFromLinkClickUntil = Date.now() + 800;
-                this.suppressFromLinkNodeId = gesture.nodeId;
+                this.markSuppressFromLinkClick(
+                    gesture.nodeId,
+                    800,
+                    this.isPenPointer(gesture.pointerType) ? 'pen-moved' : 'recent-drag'
+                );
+                this.clearPenLongPress(event.pointerId);
+                if (this.isTouchLikePointer(gesture.pointerType)) {
+                    log(
+                        `[Event] DragPointerMove: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
+                        `dx=${dx.toFixed(1)}, dy=${dy.toFixed(1)}, threshold=${moveThreshold}`
+                    );
+                }
             }
         }, { capture: true, passive: true });
 
         const finalizePointer = (event: PointerEvent) => {
             const gesture = this.activePointerGesture;
-            if (!gesture || gesture.pointerId !== event.pointerId) return;
+            if (gesture && gesture.pointerId === event.pointerId) {
+                const finishedAt = Date.now();
+                this.lastCompletedPointerGesture = {
+                    ...gesture,
+                    at: finishedAt
+                };
 
-            this.lastCompletedPointerGesture = {
-                ...gesture,
-                at: Date.now()
-            };
+                if (gesture.moved) {
+                    this.markSuppressFromLinkClick(
+                        gesture.nodeId,
+                        800,
+                        this.isPenPointer(gesture.pointerType) ? 'pen-moved' : 'recent-drag'
+                    );
+                }
 
-            if (gesture.moved) {
-                this.suppressFromLinkClickUntil = Date.now() + 800;
-                this.suppressFromLinkNodeId = gesture.nodeId;
+                if (this.isTouchLikePointer(gesture.pointerType)) {
+                    const duration = finishedAt - gesture.at;
+                    log(
+                        `[Event] DragPointerEnd: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
+                        `moved=${gesture.moved}, duration=${duration}ms, nodeMoveSeen=${this.activeTouchDragSawCanvasNodeMove}`
+                    );
+                    if (gesture.moved && !this.activeTouchDragSawCanvasNodeMove) {
+                        log(
+                            `[Event] DragPointerNoCanvasMove: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
+                            `reason=no-canvas-node-move, blocker=${this.isContentBlockerTarget(event.target)}, ` +
+                            `target=${this.describeEventTarget(event.target)}, ` +
+                            `chain=${this.describeEventTargetChain(event.target)}`
+                        );
+                    }
+                }
+
+                this.activePointerGesture = null;
             }
 
-            this.activePointerGesture = null;
+            this.clearPenLongPress(event.pointerId);
+            this.clearTouchDragNodeArm(event.pointerId);
+            this.activeTouchDragSawCanvasNodeMove = false;
         };
 
         this.plugin.registerDomEvent(document, 'pointerup', finalizePointer, { capture: true, passive: true });
@@ -433,30 +527,236 @@ export class CanvasEventManager {
             && this.suppressFromLinkNodeId
             && this.suppressFromLinkNodeId === nodeId
         ) {
-            log(`[Event] fromLink click suppressed: reason=recent-drag, node=${nodeId || 'unknown'}`);
+            log(`[Event] fromLink click suppressed: reason=${this.suppressFromLinkClickReason || 'recent-gesture'}, node=${nodeId || 'unknown'}`);
             return true;
         }
 
         const lastGesture = this.lastCompletedPointerGesture;
         if (!lastGesture) return false;
-        if (now - lastGesture.at > 1200) return false;
+        if (now - lastGesture.at > CONSTANTS.TOUCH.FROM_LINK_SUPPRESS_MS_TOUCH_PEN) return false;
         if (lastGesture.nodeId !== nodeId) return false;
 
         const pointerType = lastGesture.pointerType;
-        const isTouchLike = pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE || pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE;
-        if (!isTouchLike) return false;
+        if (pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE) {
+            if (lastGesture.moved) {
+                log(`[Event] fromLink click suppressed: reason=touch-moved, node=${nodeId || 'unknown'}`);
+                return true;
+            }
 
-        if (lastGesture.moved) {
-            log(`[Event] fromLink click suppressed: reason=touch-pen-moved, node=${nodeId || 'unknown'}`);
+            if (!lastGesture.wasSelectedBeforeDown) {
+                log(`[Event] fromLink click suppressed: reason=touch-first-tap-select, node=${nodeId || 'unknown'}`);
+                return true;
+            }
+
+            log(`[Event] fromLink click suppressed: reason=touch-tap-reserved-for-drag, node=${nodeId || 'unknown'}`);
             return true;
         }
 
-        if (!lastGesture.wasSelectedBeforeDown) {
-            log(`[Event] fromLink click suppressed: reason=touch-pen-first-tap-select, node=${nodeId || 'unknown'}`);
+        if (pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE) {
+            if (lastGesture.moved) {
+                log(`[Event] fromLink click suppressed: reason=pen-moved, node=${nodeId || 'unknown'}`);
+                return true;
+            }
+
+            log(`[Event] fromLink click suppressed: reason=pen-short-tap-select-only, node=${nodeId || 'unknown'}`);
             return true;
         }
 
         return false;
+    }
+
+    private isTouchPointer(pointerType: string | null | undefined): boolean {
+        return pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE;
+    }
+
+    private isPenPointer(pointerType: string | null | undefined): boolean {
+        return pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE;
+    }
+
+    private isTouchLikePointer(pointerType: string | null | undefined): boolean {
+        return this.isTouchPointer(pointerType) || this.isPenPointer(pointerType);
+    }
+
+    private isContentBlockerTarget(target: EventTarget | null): boolean {
+        return target instanceof HTMLElement && target.classList.contains('canvas-node-content-blocker');
+    }
+
+    private describeEventTarget(target: EventTarget | null): string {
+        if (!(target instanceof HTMLElement)) return 'non-element';
+        const className = typeof target.className === 'string' ? target.className.trim().replace(/\s+/g, '.') : '';
+        return `${target.tagName.toLowerCase()}${className ? '.' + className : ''}`;
+    }
+
+    private describeEventTargetChain(target: EventTarget | null, maxDepth = 5): string {
+        if (!(target instanceof HTMLElement)) return 'non-element';
+
+        const parts: string[] = [];
+        let current: HTMLElement | null = target;
+        let depth = 0;
+
+        while (current && depth < maxDepth) {
+            parts.push(this.describeEventTarget(current));
+            current = current.parentElement;
+            depth++;
+        }
+
+        return parts.join(' <- ');
+    }
+
+    private getMoveThresholdForPointer(pointerType: string | null | undefined): number {
+        if (this.isPenPointer(pointerType)) {
+            return CONSTANTS.TOUCH.MOVE_THRESHOLD_PEN;
+        }
+        if (this.isTouchPointer(pointerType)) {
+            return CONSTANTS.TOUCH.MOVE_THRESHOLD_TOUCH;
+        }
+        return CONSTANTS.TOUCH.MOVE_THRESHOLD;
+    }
+
+    private markSuppressFromLinkClick(nodeId: string | null, holdMs: number, reason: string): void {
+        this.suppressFromLinkClickUntil = Date.now() + Math.max(0, holdMs);
+        this.suppressFromLinkNodeId = nodeId;
+        this.suppressFromLinkClickReason = reason;
+    }
+
+    private armPenLongPress(pointerId: number, nodeId: string | null): void {
+        this.clearPenLongPress();
+        if (!nodeId) return;
+
+        const startedAt = Date.now();
+        const timerId = window.setTimeout(() => {
+            void this.triggerPenLongPressNavigation(pointerId, nodeId, startedAt);
+        }, CONSTANTS.TOUCH.PEN_LONG_PRESS_MS);
+
+        this.activePenLongPress = {
+            pointerId,
+            nodeId,
+            startedAt,
+            timerId,
+            triggered: false
+        };
+    }
+
+    private clearPenLongPress(pointerId?: number): void {
+        if (
+            typeof pointerId === 'number'
+            && this.activePenLongPress
+            && this.activePenLongPress.pointerId !== pointerId
+        ) {
+            return;
+        }
+
+        const activePenLongPress = this.activePenLongPress;
+        if (activePenLongPress?.timerId !== null && activePenLongPress?.timerId !== undefined) {
+            window.clearTimeout(activePenLongPress.timerId);
+        }
+
+        this.activePenLongPress = null;
+    }
+
+    private async triggerPenLongPressNavigation(pointerId: number, nodeId: string | null, startedAt: number): Promise<void> {
+        const activePenLongPress = this.activePenLongPress;
+        const activeGesture = this.activePointerGesture;
+        if (!activePenLongPress || activePenLongPress.pointerId !== pointerId || activePenLongPress.nodeId !== nodeId) {
+            return;
+        }
+        if (!activeGesture || activeGesture.pointerId !== pointerId || activeGesture.nodeId !== nodeId || activeGesture.moved) {
+            return;
+        }
+
+        activePenLongPress.triggered = true;
+        activePenLongPress.timerId = null;
+        this.markSuppressFromLinkClick(nodeId, CONSTANTS.TOUCH.PEN_LONG_PRESS_CLICK_SUPPRESS_MS, 'pen-long-press');
+        log(`[Event] PenLongPressNavigate: node=${nodeId || 'unknown'}, duration=${Date.now() - startedAt}ms`);
+        await this.handleFromLinkNavigationByNodeId(nodeId);
+    }
+
+    private armTouchDragNode(nodeEl: HTMLElement, pointerId: number): void {
+        if (this.activeTouchDragNodeEl === nodeEl && this.activeTouchDragPointerId === pointerId) {
+            return;
+        }
+
+        this.clearTouchDragNodeArm();
+
+        this.activeTouchDragNodeEl = nodeEl;
+        this.activeTouchDragPointerId = pointerId;
+        nodeEl.classList.add(this.touchDragArmedClass);
+
+        const owners = this.getTouchDragScrollOwners(nodeEl);
+        this.activeTouchDragScrollOwnerSnapshots = owners.map((el) => ({
+            el,
+            overflowY: el.style.getPropertyValue('overflow-y'),
+            overflowYPriority: el.style.getPropertyPriority('overflow-y'),
+            webkitOverflowScrolling: el.style.getPropertyValue('-webkit-overflow-scrolling'),
+            webkitOverflowScrollingPriority: el.style.getPropertyPriority('-webkit-overflow-scrolling'),
+            overscrollBehavior: el.style.getPropertyValue('overscroll-behavior'),
+            overscrollBehaviorPriority: el.style.getPropertyPriority('overscroll-behavior')
+        }));
+
+        for (const el of owners) {
+            el.style.setProperty('overflow-y', 'hidden', 'important');
+            el.style.setProperty('-webkit-overflow-scrolling', 'auto', 'important');
+            el.style.setProperty('overscroll-behavior', 'none', 'important');
+        }
+    }
+
+    private clearTouchDragNodeArm(pointerId?: number): void {
+        if (
+            typeof pointerId === 'number'
+            && this.activeTouchDragPointerId !== null
+            && pointerId !== this.activeTouchDragPointerId
+        ) {
+            return;
+        }
+
+        if (this.activeTouchDragNodeEl) {
+            this.activeTouchDragNodeEl.classList.remove(this.touchDragArmedClass);
+        }
+
+        for (const snapshot of this.activeTouchDragScrollOwnerSnapshots) {
+            this.restoreInlineStyle(snapshot.el, 'overflow-y', snapshot.overflowY, snapshot.overflowYPriority);
+            this.restoreInlineStyle(
+                snapshot.el,
+                '-webkit-overflow-scrolling',
+                snapshot.webkitOverflowScrolling,
+                snapshot.webkitOverflowScrollingPriority
+            );
+            this.restoreInlineStyle(
+                snapshot.el,
+                'overscroll-behavior',
+                snapshot.overscrollBehavior,
+                snapshot.overscrollBehaviorPriority
+            );
+        }
+
+        this.activeTouchDragNodeEl = null;
+        this.activeTouchDragPointerId = null;
+        this.activeTouchDragScrollOwnerSnapshots = [];
+    }
+
+    private restoreInlineStyle(el: HTMLElement, property: string, value: string, priority: string): void {
+        if (value) {
+            el.style.setProperty(property, value, priority || '');
+            return;
+        }
+        el.style.removeProperty(property);
+    }
+
+    private getTouchDragScrollOwners(nodeEl: HTMLElement): HTMLElement[] {
+        const owners: HTMLElement[] = [];
+        const seen = new Set<HTMLElement>();
+
+        for (const selector of this.touchDragScrollOwnerSelectors) {
+            const elements = nodeEl.querySelectorAll(selector);
+            for (const el of Array.from(elements)) {
+                if (!(el instanceof HTMLElement)) continue;
+                if (seen.has(el)) continue;
+                seen.add(el);
+                owners.push(el);
+            }
+        }
+
+        return owners;
     }
 
     private markOpenProtectionWindow(reason: string): void {
@@ -674,6 +974,31 @@ export class CanvasEventManager {
 
         const clickedNode = getCanvasNodeByElement(canvas, nodeEl);
         if (!clickedNode) return;
+
+        await this.navigateToFromLink(clickedNode);
+    }
+
+    private async handleFromLinkNavigationByNodeId(nodeId: string | null): Promise<void> {
+        if (!nodeId) return;
+
+        const canvasView = getCanvasView(this.app);
+        if (!canvasView) return;
+
+        const canvas = this.getCanvasFromView(canvasView);
+        if (!canvas?.nodes) return;
+
+        const clickedNode = getNodesFromCanvas(canvas).find(node => node.id === nodeId) || null;
+        if (!clickedNode) {
+            log(`[Event] fromLink 跳转失败: 找不到节点 ${nodeId}`);
+            return;
+        }
+
+        await this.navigateToFromLink(clickedNode);
+    }
+
+    private async navigateToFromLink(clickedNode: CanvasNodeLike): Promise<void> {
+        const canvasView = getCanvasView(this.app);
+        if (!canvasView) return;
 
         const fromLink = parseFromLink(clickedNode.text, clickedNode.color) as FromLinkInfo | null;
         if (!fromLink) {
@@ -945,8 +1270,14 @@ export class CanvasEventManager {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:node-move', (node: CanvasNodeLike) => {
                 this.nodeMountedInteractionActiveUntil = Date.now() + this.nodeMountedInteractionIdleMs;
-                this.suppressFromLinkClickUntil = Date.now() + 900;
-                this.suppressFromLinkNodeId = node?.id || null;
+                this.markSuppressFromLinkClick(node?.id || null, 900, 'canvas-node-move');
+                const activeGesture = this.activePointerGesture;
+                if (activeGesture && node?.id && activeGesture.nodeId === node.id) {
+                    this.activeTouchDragSawCanvasNodeMove = true;
+                    if (this.isTouchLikePointer(activeGesture.pointerType)) {
+                        log(`[Event] DragCanvasNodeMove: node=${node.id}, pointer=${activeGesture.pointerType}, matchedActiveGesture=true`);
+                    }
+                }
                 void this.canvasManager.syncHiddenChildrenOnDrag(node);
             })
         );
@@ -1554,6 +1885,8 @@ export class CanvasEventManager {
     // 卸载
     // =========================================================================
     unload() {
+        this.clearPenLongPress();
+        this.clearTouchDragNodeArm();
         if (this.mutationObserver) {
             this.mutationObserver.disconnect();
             this.mutationObserver = null;

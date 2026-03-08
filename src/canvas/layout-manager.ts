@@ -2,7 +2,7 @@ import { App, Notice, Plugin, TFile } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { CanvasFileService } from './services/canvas-file-service';
-import { log } from '../utils/logger';
+import { log, logVerbose } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import { handleError } from '../utils/error-handler';
 import { arrangeLayout as originalArrangeLayout } from './layout';
@@ -226,7 +226,9 @@ export class LayoutManager {
             }
 
             log(`[Layout] OpenStabilizeStart: source=${source}, pulses=${this.openStabilizePulseDelays.length}, nodes=${pulseNodes.size}, ctx=${stabilizeId}`);
-            this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-pre-style-truth', stabilizeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-pre-style-truth', stabilizeId);
+            }
 
             let prevVisibleNodeCount = 0;
             let stableStreak = 0;
@@ -278,25 +280,25 @@ export class LayoutManager {
 
                 if (pulseNo === 1 && !forceHeavyFirstPulse) {
                     if (heavyEscalated) {
-                        log(
+                    logVerbose(
                             `[Layout] OpenStabilizeEscalateHeavy: source=${source}, lateVisible=${lateVisibleNodes}, ` +
                             `anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, anomalyActionable=${actionableAnomaly}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
                             `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, topBad=${gapBefore.topResidualBadSample || gapBefore.topBadSample}, ctx=${stabilizeId}`
                         );
                     } else {
-                        log(`[Layout] OpenStabilizeSkipHeavyBySource: source=${source}, pulse=${pulseNo}, ctx=${stabilizeId}`);
+                        logVerbose(`[Layout] OpenStabilizeSkipHeavyBySource: source=${source}, pulse=${pulseNo}, ctx=${stabilizeId}`);
                     }
                 }
 
                 if (shouldRunLightPersistentGuard) {
-                    log(
+                    logVerbose(
                         `[Layout] OpenStabilizePersistentAnomalyGuard: source=${source}, pulse=${pulseNo}, ` +
                         `anomaly=${anomalyBeforeStats.anomalous}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
                         `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, ctx=${stabilizeId}`
                     );
                 }
 
-                log(
+                logVerbose(
                     `[Layout] OpenStabilizePulse#${pulseNo}: source=${source}, delay=${pulseDelay}, visible=${visibleNodeCount}, ` +
                     `late-visible-nodes=${lateVisibleNodes}, anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, ` +
                     `pulse-gap-summary=${this.formatGapSummary(gapBefore)}, ` +
@@ -355,14 +357,14 @@ export class LayoutManager {
                 const pulseStable = pulseBlockers.length === 0;
                 stableStreak = pulseStable ? (stableStreak + 1) : 0;
 
-                log(
+                logVerbose(
                     `[Layout] OpenStabilizePulse#${pulseNo}Done: source=${source}, cleaned=${cleanedPass1}/${cleanedPass2}, ` +
                     `edgePass=${edgePass1}/${edgePass2}, anomalies={${this.formatAnomalyStats(anomalyAfterStats)}}, ` +
                     `late-visible-nodes=${lateVisibleNodes}, pulse-gap-summary=${this.formatGapSummary(gapAfter)}, ` +
                     `stable=${pulseStable}, blockers=${pulseBlockers.join('|') || 'none'}, stableStreak=${stableStreak}, ctx=${stabilizeId}`
                 );
 
-                if (pulseNo === 1 || pulseNo === this.openStabilizePulseDelays.length || shouldRunHeavy) {
+                if (this.shouldLogVerboseCanvasDiagnostics() && (pulseNo === 1 || pulseNo === this.openStabilizePulseDelays.length || shouldRunHeavy)) {
                     this.edgeGeometryService.logNodeStyleTruth(pulseNodes, `open-pulse-${pulseNo}-style-truth`, stabilizeId);
                 }
 
@@ -372,13 +374,17 @@ export class LayoutManager {
                 }
             }
 
-            this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-final-style-truth', stabilizeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-final-style-truth', stabilizeId);
+            }
 
             window.setTimeout(() => {
                 const finalView = getCanvasView(this.app);
                 const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? pulseCanvas) : pulseCanvas;
                 const finalNodes = this.getCanvasNodes(finalCanvas);
-                this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'open-final', stabilizeId);
+                if (this.shouldLogVerboseCanvasDiagnostics()) {
+                    this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'open-final', stabilizeId);
+                }
             }, 260);
 
             log(`[Layout] OpenStabilizeDone: source=${source}, pulses=${this.openStabilizePulseDelays.length}, ctx=${stabilizeId}`);
@@ -471,6 +477,51 @@ export class LayoutManager {
             formulaNodeWidth: this.settings.formulaNodeWidth,
             formulaNodeHeight: this.settings.formulaNodeHeight,
         };
+    }
+
+    private shouldLogVerboseCanvasDiagnostics(): boolean {
+        return !!this.settings.enableDebugLogging && !!this.settings.enableVerboseCanvasDiagnostics;
+    }
+
+    private reorderEdgesToMatchStableSnapshot(
+        canvasData: CanvasDataLike,
+        stableOriginalEdges: CanvasEdgeLike[],
+        contextId?: string
+    ): boolean {
+        if (!Array.isArray(canvasData.edges) || canvasData.edges.length <= 1 || stableOriginalEdges.length <= 1) {
+            return false;
+        }
+
+        const stableOrder = new Map<string, number>();
+        for (let i = 0; i < stableOriginalEdges.length; i++) {
+            const edgeId = stableOriginalEdges[i]?.id;
+            if (typeof edgeId === 'string' && !stableOrder.has(edgeId)) {
+                stableOrder.set(edgeId, i);
+            }
+        }
+
+        if (stableOrder.size === 0) return false;
+
+        const beforeIds = canvasData.edges.map((edge) => edge.id || '').join('|');
+        const originalIndexes = new Map<CanvasEdgeLike, number>();
+        canvasData.edges.forEach((edge, index) => originalIndexes.set(edge, index));
+
+        canvasData.edges.sort((a, b) => {
+            const aStable = typeof a.id === 'string' ? stableOrder.get(a.id) : undefined;
+            const bStable = typeof b.id === 'string' ? stableOrder.get(b.id) : undefined;
+
+            if (aStable !== undefined && bStable !== undefined) return aStable - bStable;
+            if (aStable !== undefined) return -1;
+            if (bStable !== undefined) return 1;
+            return (originalIndexes.get(a) ?? 0) - (originalIndexes.get(b) ?? 0);
+        });
+
+        const afterIds = canvasData.edges.map((edge) => edge.id || '').join('|');
+        const changed = beforeIds !== afterIds;
+        if (changed) {
+            log(`[Layout] StableEdgeOrderApplied: edges=${canvasData.edges.length}, ctx=${contextId || 'none'}`);
+        }
+        return changed;
     }
 
     /**
@@ -833,7 +884,7 @@ export class LayoutManager {
         await new Promise<void>((resolve) => {
             requestAnimationFrame(() => resolve());
         });
-        const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights();
+        const adjustedCount = await this.canvasManager.adjustAllTextNodeHeights({ suppressRequestSave: true });
         log(`[Layout] PreAdjustWait: id=${contextId || 'none'}, adjusted=${adjustedCount}`);
         await new Promise<void>((resolve) => {
             requestAnimationFrame(() => {
@@ -879,13 +930,24 @@ export class LayoutManager {
 
         try {
             const arrangeId = `arrange-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+            const preflightCanvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);
+            const stableOrderSnapshot = preflightCanvasFilePath
+                ? await this.canvasFileService.readCanvasData(preflightCanvasFilePath)
+                : null;
+            const stableOriginalEdges = Array.isArray(stableOrderSnapshot?.edges) ? stableOrderSnapshot.edges : [];
+            if (stableOrderSnapshot) {
+                log(`[Layout] ArrangeOrderSnapshot: source=preflight-file, nodes=${stableOrderSnapshot.nodes?.length || 0}, edges=${stableOriginalEdges.length}, ctx=${arrangeId}`);
+            } else {
+                log(`[Layout] ArrangeOrderSnapshot: source=runtime-fallback, ctx=${arrangeId}`);
+            }
+
             await this.triggerHeightAdjustment(skipAdjust, arrangeId);
 
             // [方案2] manual arrange 前刷新更多 viewport trusted heights
             // 优先使用 viewport 方法（覆盖视口区域），fallback 到 visible 方法
             if (!skipAdjust) {
-                const refreshedTrusted = await this.canvasManager?.refreshTrustedHeightsForViewportTextNodes?.(36, 6)
-                    ?? await this.canvasManager?.refreshTrustedHeightsForVisibleTextNodes?.(8)
+                const refreshedTrusted = await this.canvasManager?.refreshTrustedHeightsForViewportTextNodes?.(36, 6, { suppressRequestSave: true })
+                    ?? await this.canvasManager?.refreshTrustedHeightsForVisibleTextNodes?.(8, { suppressRequestSave: true })
                     ?? 0;
                 log(`[Layout] PreflightTrustedRefresh: refreshed=${refreshedTrusted}, method=${this.canvasManager?.refreshTrustedHeightsForViewportTextNodes ? 'viewport(36,6)' : 'visible(8)'}, ctx=${arrangeId}`);
             }
@@ -905,6 +967,8 @@ export class LayoutManager {
             }
 
             const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
+            const canonicalOrderCanvasData = stableOrderSnapshot || canvasData || undefined;
+            const canonicalOriginalEdges = stableOriginalEdges.length > 0 ? stableOriginalEdges : originalEdges;
 
             // [方案3] 低 DOM 可见率时，auto arrange 降级，不做整树重排
             // 原因：在 domVisibleRate 很低时（如 16.3%），大量节点高度不可信，
@@ -932,8 +996,10 @@ export class LayoutManager {
             const inputSig = this.computeInputSignature(canvasData ?? undefined, allNodes);
 
             // 诊断日志：arrange前的节点/边几何与视觉层快照
-            this.edgeGeometryService.logFullDiagSnapshot(canvas, allNodes, 'pre-arrange', arrangeId);
-            this.edgeGeometryService.logComprehensiveDiag(canvas, allNodes, 'pre-arrange', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logFullDiagSnapshot(canvas, allNodes, 'pre-arrange', arrangeId);
+                this.edgeGeometryService.logComprehensiveDiag(canvas, allNodes, 'pre-arrange', arrangeId);
+            }
 
             log(`[Layout] ArrangeStart: id=${arrangeId}, visible=${visibleNodes.size}, all=${allNodes.size}, edges=${edges.length}, originalEdges=${originalEdges.length}, file=${canvasFilePath || 'unknown'}`);
             log(`[Layout] ArrangeData: id=${arrangeId}, canvasNodes=${canvasData?.nodes?.length || 0}, canvasEdges=${canvasData?.edges?.length || 0}`);
@@ -959,9 +1025,9 @@ export class LayoutManager {
                 visibleNodes,
                 edges,
                 this.getLayoutSettings(),
-                originalEdges,
+                canonicalOriginalEdges,
                 allNodes,
-                canvasData || undefined,
+                canonicalOrderCanvasData,
                 {
                     forceResetCoordinates: manualCanonical,
                     forceReason: manualCanonical ? 'manual-canonical' : 'normal'
@@ -981,9 +1047,9 @@ export class LayoutManager {
                     visibleNodes,
                     edges,
                     this.getLayoutSettings(),
-                    originalEdges,
+                    canonicalOriginalEdges,
                     allNodes,
-                    canvasData || undefined,
+                    canonicalOrderCanvasData,
                     {
                         forceResetCoordinates: true,
                         forceReason: 'predictedChanged=0'
@@ -1048,6 +1114,10 @@ export class LayoutManager {
                     changed = true;
                 }
 
+                if (stableOriginalEdges.length > 0 && this.reorderEdgesToMatchStableSnapshot(canvasData, stableOriginalEdges, arrangeId)) {
+                    changed = true;
+                }
+
                 return changed;
             });
 
@@ -1093,9 +1163,11 @@ export class LayoutManager {
             log(`[Layout] FreshRef: same=${freshCanvas === canvas}, nodes=${freshNodes.size}, ctx=${arrangeId}`);
 
             // 诊断日志：reload后的节点/边几何与视觉层快照
-            this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
-            this.edgeGeometryService.logComprehensiveDiag(freshCanvas, freshNodes, 'post-reload', arrangeId);
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-reload-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
+                this.edgeGeometryService.logComprehensiveDiag(freshCanvas, freshNodes, 'post-reload', arrangeId);
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-reload-style-truth', arrangeId);
+            }
 
             // [时序修复] 提前执行第一轮 cleanup，尽快消除用户可见的错位窗口。
             // 之前 cleanup 在 post-reload-watch 之后，可能留下 200~400ms 的可见错位。
@@ -1114,15 +1186,19 @@ export class LayoutManager {
                     });
                 });
             }
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-early-cleanup-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-early-cleanup-style-truth', arrangeId);
+            }
 
             // [样式时间线] leaf.openFile 后短窗口观察，捕获引擎初始化阶段对节点 style/class 的写入
-            await this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
-                freshNodes,
-                'post-reload-watch',
-                arrangeId,
-                120
-            );
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                await this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                    freshNodes,
+                    'post-reload-watch',
+                    arrangeId,
+                    120
+                );
+            }
 
             // 高度诊断：对比文件层高度与DOM高度，确认是否存在系统性放大
             await this.logHeightDriftSnapshot(freshCanvas, freshNodes, canvasFilePath, arrangeId);
@@ -1131,15 +1207,19 @@ export class LayoutManager {
             await this.reapplyFloatingNodeStyles(freshCanvas);
 
             // cleanup 前样式真值快照
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'pre-cleanup-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'pre-cleanup-style-truth', arrangeId);
+            }
 
             // [样式时间线] 观测 cleanup 过程中的 style/class 改动（含本插件与引擎联动写入）
-            const cleanupWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
-                freshNodes,
-                'cleanup-watch',
-                arrangeId,
-                260
-            );
+            const cleanupWatchPromise = this.shouldLogVerboseCanvasDiagnostics()
+                ? this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                    freshNodes,
+                    'cleanup-watch',
+                    arrangeId,
+                    260
+                )
+                : Promise.resolve();
 
             // [修复A] 清理外部CSS导致的节点top/left偏移（主题/插件污染）
             // 根因：某些节点computed top≠0（如87px），导致visual位置与transform不一致
@@ -1157,23 +1237,29 @@ export class LayoutManager {
             }
 
             await cleanupWatchPromise;
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-cleanup-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-cleanup-style-truth', arrangeId);
+            }
 
             // [修复B] 双pass引擎级边几何刷新：解决leaf.openFile后部分虚拟化节点边端点未及时更新的问题
             // pass1: edge.render() + requestUpdate() 触发bezier计算
             // pass2: 等Canvas引擎完成虚拟化节点渲染后再刷一次，确保所有边端点收敛
-            const edgeRefreshWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
-                freshNodes,
-                'edge-refresh-watch',
-                arrangeId,
-                360
-            );
+            const edgeRefreshWatchPromise = this.shouldLogVerboseCanvasDiagnostics()
+                ? this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                    freshNodes,
+                    'edge-refresh-watch',
+                    arrangeId,
+                    360
+                )
+                : Promise.resolve();
 
             log(`[Layout] 开始双pass边刷新（引擎驱动）, ctx=${arrangeId}`);
             const refreshResult = await this.edgeGeometryService.refreshEdgeGeometry(freshCanvas, arrangeId);
             log(`[Layout] 双pass边刷新完成: pass1=${refreshResult.pass1}, pass2=${refreshResult.pass2}, bezierChanged=${refreshResult.bezierChangedPass1}/${refreshResult.bezierChangedPass2}, pathDChanged=${refreshResult.pathDChangedPass1}/${refreshResult.pathDChangedPass2}, ctx=${arrangeId}`);
             await edgeRefreshWatchPromise;
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-style-truth', arrangeId);
+            }
 
             // [时序修复] 第二轮轻量 cleanup：处理 edge-refresh 等待期间才注入到 DOM 的节点。
             // [振荡修复] arrange 流程中禁止释放 fix class，避免"治好→停药→复发"循环
@@ -1188,32 +1274,40 @@ export class LayoutManager {
                 await new Promise<void>((resolve) => {
                     requestAnimationFrame(() => resolve());
                 });
-                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-cleanup-style-truth', arrangeId);
+                if (this.shouldLogVerboseCanvasDiagnostics()) {
+                    this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-cleanup-style-truth', arrangeId);
+                }
             }
 
             // 最终 requestUpdate 让Canvas引擎同步所有变更到DOM（不手工写path）
-            const finalRequestUpdateWatchPromise = this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
-                freshNodes,
-                'final-request-update-watch',
-                arrangeId,
-                260
-            );
+            const finalRequestUpdateWatchPromise = this.shouldLogVerboseCanvasDiagnostics()
+                ? this.edgeGeometryService.traceStyleMutationsForVisibleNodes(
+                    freshNodes,
+                    'final-request-update-watch',
+                    arrangeId,
+                    260
+                )
+                : Promise.resolve();
 
             if (typeof (freshCanvas as any).requestUpdate === 'function') {
                 (freshCanvas as any).requestUpdate();
             }
 
             await finalRequestUpdateWatchPromise;
-            this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-final-request-update-style-truth', arrangeId);
+            if (this.shouldLogVerboseCanvasDiagnostics()) {
+                this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-final-request-update-style-truth', arrangeId);
+            }
 
             // 最终诊断：给一次延迟采样，便于观察 requestUpdate 后的稳定状态
             window.setTimeout(() => {
                 const finalView = getCanvasView(this.app);
                 const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? freshCanvas) : freshCanvas;
                 const finalNodes = this.getCanvasNodes(finalCanvas);
-                this.edgeGeometryService.logFullDiagSnapshot(finalCanvas, finalNodes, 'final', arrangeId);
-                this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'final', arrangeId);
-                this.edgeGeometryService.logNodeStyleTruth(finalNodes, 'final-style-truth', arrangeId);
+                if (this.shouldLogVerboseCanvasDiagnostics()) {
+                    this.edgeGeometryService.logFullDiagSnapshot(finalCanvas, finalNodes, 'final', arrangeId);
+                    this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'final', arrangeId);
+                    this.edgeGeometryService.logNodeStyleTruth(finalNodes, 'final-style-truth', arrangeId);
+                }
             }, 350);
 
             new Notice(`布局完成！已写入 ${predictedChangedCount} 个节点位置`);
@@ -1492,7 +1586,7 @@ export class LayoutManager {
         try {
             const data = await this.canvasFileService.readCanvasData(canvasFilePath);
             if (!data?.nodes || data.nodes.length === 0) {
-                log(`[Layout] HeightDrift: fileData empty, ctx=${contextId || 'none'}`);
+                logVerbose(`[Layout] HeightDrift: fileData empty, ctx=${contextId || 'none'}`);
                 return;
             }
 
@@ -1525,12 +1619,12 @@ export class LayoutManager {
                 }
             }
 
-            log(`[Layout] HeightDrift: sampled=${sampled}, drift(>5px)=${driftCount}, ctx=${contextId || 'none'}`);
+            logVerbose(`[Layout] HeightDrift: sampled=${sampled}, drift(>5px)=${driftCount}, ctx=${contextId || 'none'}`);
             if (lines.length > 0) {
-                log(`[Layout] HeightDriftSamples:\n${lines.join('\n')}`);
+                logVerbose(`[Layout] HeightDriftSamples:\n${lines.join('\n')}`);
             }
         } catch (err) {
-            log(`[Layout] HeightDrift error: ${err}, ctx=${contextId || 'none'}`);
+            logVerbose(`[Layout] HeightDrift error: ${err}, ctx=${contextId || 'none'}`);
         }
     }
 

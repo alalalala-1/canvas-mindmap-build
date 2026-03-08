@@ -4,7 +4,7 @@ import {
     CanvasLike,
     CanvasNodeLike
 } from '../types';
-import { log } from '../../utils/logger';
+import { log, logVerbose } from '../../utils/logger';
 import { getEdgesFromCanvas, getNodeIdFromEdgeEndpoint, isRecord } from '../../utils/canvas-utils';
 import { CONSTANTS } from '../../constants';
 import { Platform } from 'obsidian';
@@ -332,9 +332,9 @@ export class EdgeGeometryService {
             }
         }
 
-        log(`[StyleTruth-${tag}] visible=${visible}, anomalous=${anomalous}, sample=${lines.length}, ctx=${contextId || 'none'}`);
+        logVerbose(`[StyleTruth-${tag}] visible=${visible}, anomalous=${anomalous}, sample=${lines.length}, ctx=${contextId || 'none'}`);
         if (lines.length > 0) {
-            log(`[StyleTruth-${tag}] Samples:\n${lines.join('\n')}`);
+            logVerbose(`[StyleTruth-${tag}] Samples:\n${lines.join('\n')}`);
         }
     }
 
@@ -775,7 +775,7 @@ export class EdgeGeometryService {
     ): Promise<{ pass1: number; pass2: number; bezierChangedPass1: number; bezierChangedPass2: number; pathDChangedPass1: number; pathDChangedPass2: number }> {
         const edges = this.getCanvasEdges(canvas);
         if (edges.length === 0) {
-            log(`[Layout] EdgeRefresh: edges=0, ctx=${contextId || 'none'}`);
+            logVerbose(`[Layout] EdgeRefresh: edges=0, ctx=${contextId || 'none'}`);
             return { pass1: 0, pass2: 0, bezierChangedPass1: 0, bezierChangedPass2: 0, pathDChangedPass1: 0, pathDChangedPass2: 0 };
         }
 
@@ -1931,7 +1931,7 @@ export class EdgeGeometryService {
                         const edgePathKeys = edgePath && typeof edgePath === 'object' ? Object.keys(edgePath).slice(0, 10).join(',') : 'n/a';
                         const edgePathHasUpdate = edgePath && typeof edgePath.update === 'function';
                         const edgePathHasRender = edgePath && typeof edgePath.render === 'function';
-                        log(`[Layout] EdgeStructDiag: id=${edge.id}, ` +
+                        logVerbose(`[Layout] EdgeStructDiag: id=${edge.id}, ` +
                             `pathElDirect=${!!(edge as any).pathEl}, lineGroupChildren=[${lgChildren}], ` +
                             `lgTransformAttr=${lgTransformAttr}, lgStyleTransform=${lgStyleTransform.slice(0,40)}, ` +
                             `actualD=${actualD}, ` +
@@ -1941,10 +1941,10 @@ export class EdgeGeometryService {
                         // [诊断] 如果 edge.path 有 render/update 方法，也调用一次看效果
                         if (edgePathHasUpdate) {
                             try { edgePath.update(); } catch { /* ignore */ }
-                            log(`[Layout] EdgePathUpdate: called edge.path.update() for id=${edge.id}`);
+                            logVerbose(`[Layout] EdgePathUpdate: called edge.path.update() for id=${edge.id}`);
                         } else if (edgePathHasRender) {
                             try { edgePath.render(); } catch { /* ignore */ }
-                            log(`[Layout] EdgePathRender: called edge.path.render() for id=${edge.id}`);
+                            logVerbose(`[Layout] EdgePathRender: called edge.path.render() for id=${edge.id}`);
                         }
                     }
                 }
