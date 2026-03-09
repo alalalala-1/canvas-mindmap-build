@@ -353,7 +353,8 @@ export class LayoutManager {
 
                 const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapAfter = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
-                const pulseBlockers = this.getOpenStabilizeBlockers(anomalyAfterStats, gapAfter, lateVisibleNodes);
+                const blockerEval = this.getOpenStabilizeBlockers(anomalyAfterStats, gapAfter, lateVisibleNodes, pulseNo);
+                const pulseBlockers = blockerEval.blockers;
                 const pulseStable = pulseBlockers.length === 0;
                 stableStreak = pulseStable ? (stableStreak + 1) : 0;
 
@@ -361,7 +362,8 @@ export class LayoutManager {
                     `[Layout] OpenStabilizePulse#${pulseNo}Done: source=${source}, cleaned=${cleanedPass1}/${cleanedPass2}, ` +
                     `edgePass=${edgePass1}/${edgePass2}, anomalies={${this.formatAnomalyStats(anomalyAfterStats)}}, ` +
                     `late-visible-nodes=${lateVisibleNodes}, pulse-gap-summary=${this.formatGapSummary(gapAfter)}, ` +
-                    `stable=${pulseStable}, blockers=${pulseBlockers.join('|') || 'none'}, stableStreak=${stableStreak}, ctx=${stabilizeId}`
+                    `stable=${pulseStable}, blockers=${pulseBlockers.join('|') || 'none'}, ` +
+                    `downgraded=${blockerEval.downgraded.join('|') || 'none'}, stableStreak=${stableStreak}, ctx=${stabilizeId}`
                 );
 
                 if (this.shouldLogVerboseCanvasDiagnostics() && (pulseNo === 1 || pulseNo === this.openStabilizePulseDelays.length || shouldRunHeavy)) {
@@ -441,29 +443,65 @@ export class LayoutManager {
             `topAndLeft=${stats.topAndLeft},insetTopLeft=${stats.insetTopLeft},softInsetOnly=${stats.softInsetOnly}`;
     }
 
+    private evaluateOpenStabilizeGapConfidence(
+        gapSummary: EdgeScreenGapSummary,
+        pulseNo: number
+    ): { shouldDowngradeGapBlockers: boolean; reason: string } {
+        const noVisiblePairSample = gapSummary.bothVisibleEdges === 0 || gapSummary.sampledEdges === 0;
+        const sparseMixedVisibility = gapSummary.bothVisibleEdges <= 1
+            && gapSummary.oneSideVisibleEdges > 0
+            && gapSummary.sampledEdges <= 1;
+        const lowConfidence = noVisiblePairSample || sparseMixedVisibility;
+
+        const mildResidualCap = this.openStabilizeStableMaxGapPx + 6;
+        const mildResidual = gapSummary.residualBadEdges <= 1
+            && gapSummary.maxResidualGap <= mildResidualCap;
+
+        const shouldDowngradeGapBlockers = pulseNo >= 2 && lowConfidence && mildResidual;
+        const reason = `p${pulseNo},bothVis=${gapSummary.bothVisibleEdges},oneVis=${gapSummary.oneSideVisibleEdges},sampled=${gapSummary.sampledEdges},resBad=${gapSummary.residualBadEdges},maxRes=${gapSummary.maxResidualGap.toFixed(1)}`;
+        return { shouldDowngradeGapBlockers, reason };
+    }
+
     private getOpenStabilizeBlockers(
         anomalyStats: OffsetAnomalyStats,
         gapSummary: EdgeScreenGapSummary,
-        lateVisibleNodes: number
-    ): string[] {
+        lateVisibleNodes: number,
+        pulseNo: number
+    ): { blockers: string[]; downgraded: string[] } {
         const blockers: string[] = [];
+        const downgraded: string[] = [];
+
+        const gapConfidence = this.evaluateOpenStabilizeGapConfidence(gapSummary, pulseNo);
 
         const actionableAnomaly = anomalyStats.anomalous > 0
             && (gapSummary.residualBadEdges > 0 || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx);
         if (actionableAnomaly) {
             blockers.push(`anomaly:${anomalyStats.anomalous}`);
         }
+
         if (gapSummary.residualBadEdges > 0) {
-            blockers.push(`resBadEdges:${gapSummary.residualBadEdges}`);
+            if (gapConfidence.shouldDowngradeGapBlockers) {
+                downgraded.push(`resBadEdges:${gapSummary.residualBadEdges}(${gapConfidence.reason})`);
+            } else {
+                blockers.push(`resBadEdges:${gapSummary.residualBadEdges}`);
+            }
         }
+
         if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
-            blockers.push(`maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`);
+            if (gapConfidence.shouldDowngradeGapBlockers) {
+                downgraded.push(
+                    `maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}(${gapConfidence.reason})`
+                );
+            } else {
+                blockers.push(`maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`);
+            }
         }
+
         if (lateVisibleNodes > 0) {
             blockers.push(`lateVisible:${lateVisibleNodes}`);
         }
 
-        return blockers;
+        return { blockers, downgraded };
     }
 
     private getLayoutSettings(): CanvasArrangerSettings {
