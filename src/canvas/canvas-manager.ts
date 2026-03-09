@@ -199,7 +199,7 @@ export class CanvasManager implements ICanvasManager {
     // =========================================================================
     // 公共接口方法供事件管理器调用
     // =========================================================================
-    public async checkAndAddCollapseButtons() {
+    public checkAndAddCollapseButtons(): void {
         // 防抖：如果已有待执行的检查，取消之前的
         if (this.buttonCheckTimeoutId !== null) {
             clearTimeout(this.buttonCheckTimeoutId);
@@ -226,12 +226,12 @@ export class CanvasManager implements ICanvasManager {
         await this.layoutManager.syncHiddenChildrenOnDrag(node);
     }
 
-    public async scheduleButtonCheck() {
+    public scheduleButtonCheck(): void {
         // 现在 checkAndAddCollapseButtons 已有防抖机制，直接调用即可
-        await this.checkAndAddCollapseButtons();
+        this.checkAndAddCollapseButtons();
     }
 
-    public async checkAndClearFloatingStateForNewEdges() {
+    public checkAndClearFloatingStateForNewEdges(): void {
         const canvasView = this.getCanvasView();
         if (!canvasView) {
             log(`[CanvasManager] 无 canvasView，跳过浮动清理检测`);

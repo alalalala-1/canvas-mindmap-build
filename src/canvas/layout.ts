@@ -1,7 +1,7 @@
 import { log } from '../utils/logger';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, FloatingNodeRecord, LayoutNode, FloatingNodesInfo, SubtreeBounds, CanvasArrangerSettings, LayoutPosition } from './types';
 import { CONSTANTS } from '../constants';
-import { estimateTextNodeHeight, parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint, getArrangedTextWidthDecision } from '../utils/canvas-utils';
+import { parseFloatingNodeInfo, getNodeIdFromEdgeEndpoint, getArrangedTextWidthDecision } from '../utils/canvas-utils';
 
 export interface ArrangeLayoutOptions {
     forceResetCoordinates?: boolean;

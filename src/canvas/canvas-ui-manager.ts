@@ -22,7 +22,7 @@ export class CanvasUIManager {
         this.collapseStateManager = collapseStateManager;
     }
 
-    async checkAndAddCollapseButtons() {
+    checkAndAddCollapseButtons() {
         const canvasView = this.getCanvasView();
         if (!canvasView) {
             log(`[UI] checkAndAddCollapseButtons: 无 canvasView`);
@@ -108,7 +108,7 @@ export class CanvasUIManager {
                 continue;
             }
 
-            await this.addCollapseButtonToNodeIfNeeded(nodeEl, nodeId, edges);
+            this.addCollapseButtonToNodeIfNeeded(nodeEl, nodeId, edges);
         }
     }
 
@@ -131,11 +131,11 @@ export class CanvasUIManager {
         return (repair as Record<string, unknown>).unmatched === true;
     }
 
-    private async addCollapseButtonToNodeIfNeeded(
-        nodeEl: Element, 
-        nodeId: string, 
+    private addCollapseButtonToNodeIfNeeded(
+        nodeEl: Element,
+        nodeId: string,
         edges: CanvasEdgeLike[]
-    ): Promise<void> {
+    ): void {
         const existingBtn = nodeEl.querySelector('.cmb-collapse-button');
         
         const hasChildren = edges.some((e) => {
@@ -151,7 +151,7 @@ export class CanvasUIManager {
         }
 
         if (!existingBtn) {
-            await this.addCollapseButton(nodeEl, nodeId, edges);
+            this.addCollapseButton(nodeEl, nodeId, edges);
         } else {
             const isCollapsed = this.collapseStateManager.isCollapsed(nodeId);
             existingBtn.classList.toggle('collapsed', isCollapsed);
@@ -159,7 +159,7 @@ export class CanvasUIManager {
         }
     }
 
-    private async addCollapseButton(nodeEl: Element, nodeId: string, edges: CanvasEdgeLike[]) {
+    private addCollapseButton(nodeEl: Element, nodeId: string, edges: CanvasEdgeLike[]): void {
         const direction = this.collapseStateManager.getNodeDirection(nodeId, edges);
         const computedStyle = window.getComputedStyle(nodeEl);
         if (computedStyle.position !== 'relative' && computedStyle.position !== 'absolute') {

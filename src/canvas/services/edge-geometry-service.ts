@@ -899,11 +899,6 @@ export class EdgeGeometryService {
 
         // [修复] 检测低置信度场景（虚拟化节点多）— 墨水屏横/竖屏切换后，
         // 大量节点 DOM 尚未渲染，需要更长的等待时间让 Canvas 引擎完成虚拟化节点的几何更新
-        const domVisibleCount = edges.slice(0, 20).filter(e => {
-            const fromId = getNodeIdFromEdgeEndpoint((e).from) || this.toStringId((e).fromNode);
-            const toId = getNodeIdFromEdgeEndpoint((e).to) || this.toStringId((e).toNode);
-            return fromId && toId; // 仅做粗略检测，详情在 logEdgeGeometryDiagnostics
-        }).length;
         const allSampleVirtualized = pass1Rendered > 0 && bezierChangedPass1 === 0 && lineGroupConnected === pass1Rendered;
         const isMobile = Platform.isMobile;
         const isLowConfidence = allSampleVirtualized || isMobile;

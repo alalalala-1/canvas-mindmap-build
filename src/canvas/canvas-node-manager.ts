@@ -172,7 +172,7 @@ export class CanvasNodeManager {
             const textDimensions = this.nodeTypeService.getTextDimensions();
             const CURRENT_EPOCH = 3; // 与 NodeHeightService.CURRENT_EPOCH 保持一致
 
-            await this.canvasFileService.modifyCanvasDataAtomic(file.path, async (canvasData) => {
+            await this.canvasFileService.modifyCanvasDataAtomic(file.path, (canvasData) => {
                 if (!canvasData.nodes) return false;
 
                 let repairedCount = 0;
@@ -656,7 +656,7 @@ export class CanvasNodeManager {
         return this.nodeDeletionService.handleCascadeDelete(node, canvas);
     }
 
-    async editNodeText(node: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
+    editNodeText(node: CanvasNodeLike, canvas: CanvasLike): void {
         const currentText = node.text || '';
 
         const modal = new EditTextModal(
@@ -741,10 +741,10 @@ export class CanvasNodeManager {
      * 使用 Obsidian 原生 API 而非直接文件写入，避免触发重渲染循环
      * @param nodeId 节点ID
      */
-    async measureAndPersistTrustedHeight(
+    measureAndPersistTrustedHeight(
         nodeId: string,
         options?: { suppressSuccessLogs?: boolean; collector?: TrustedMeasureCollector; suppressRequestSave?: boolean }
-    ): Promise<void> {
+    ): void {
         const suppressSuccessLogs = !!options?.suppressSuccessLogs;
         const collector = options?.collector;
         if (collector) collector.total++;

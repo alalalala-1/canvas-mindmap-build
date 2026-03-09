@@ -85,12 +85,12 @@ export class CollapseToggleService {
         };
     }
 
-    async updateNodePositionsWithOffset(
+    updateNodePositionsWithOffset(
         newLayout: Map<string, { x: number; y: number }>,
         nodes: Map<string, CanvasNodeLike>,
         offsetX: number,
         offsetY: number
-    ): Promise<number> {
+    ): number {
         let updatedCount = 0;
         let movedCount = 0;
         let missingCount = 0;

@@ -108,7 +108,7 @@ export class LayoutManager {
      * @param source 触发来源：manual/file-change/debounce/pending-resume
      */
     private arrangeTimeoutId: number | null = null;
-    async arrangeCanvas(source: string = 'debounce') {
+    arrangeCanvas(source: string = 'debounce'): void {
         // [D] 记录触发来源
         this.arrangeTriggerSource = source;
         log(`[Layout] ArrangeTrigger: source=${source}`);
@@ -153,6 +153,123 @@ export class LayoutManager {
     private shouldForceHeavyOnFirstPulse(source: string): boolean {
         const baseSource = this.getOpenStabilizeBaseSource(source);
         return !baseSource.startsWith('node-mounted');
+    }
+
+    private isOpenEntryStabilizeSource(source: string): boolean {
+        const baseSource = this.getOpenStabilizeBaseSource(source);
+        return baseSource === 'canvas-open'
+            || baseSource.startsWith('active-leaf-change')
+            || baseSource.startsWith('file-open');
+    }
+
+    private isHealthyOpenStabilizeContext(
+        anomalyStats: OffsetAnomalyStats,
+        gapSummary: EdgeScreenGapSummary
+    ): boolean {
+        return anomalyStats.anomalous === 0
+            && gapSummary.residualBadEdges === 0
+            && gapSummary.maxResidualGap <= this.openStabilizeStableMaxGapPx;
+    }
+
+    private evaluateLateVisibleSignal(
+        pulseNo: number,
+        lateVisibleNodes: number,
+        visibleNodeCount: number,
+        anomalyStats: OffsetAnomalyStats,
+        gapSummary: EdgeScreenGapSummary
+    ): {
+        isBootstrapLateVisible: boolean;
+        isBootstrapLateVisibleHealthy: boolean;
+        shouldEscalateHeavy: boolean;
+        reason: string;
+    } {
+        if (lateVisibleNodes <= 0) {
+            return {
+                isBootstrapLateVisible: false,
+                isBootstrapLateVisibleHealthy: false,
+                shouldEscalateHeavy: false,
+                reason: 'lateVisible:none'
+            };
+        }
+
+        const isBootstrapLateVisible = pulseNo === 1
+            && visibleNodeCount > 0
+            && lateVisibleNodes === visibleNodeCount;
+        const healthyContext = this.isHealthyOpenStabilizeContext(anomalyStats, gapSummary);
+
+        if (isBootstrapLateVisible && healthyContext) {
+            return {
+                isBootstrapLateVisible,
+                isBootstrapLateVisibleHealthy: true,
+                shouldEscalateHeavy: false,
+                reason: 'bootstrap-lateVisible-healthy'
+            };
+        }
+
+        if (isBootstrapLateVisible) {
+            return {
+                isBootstrapLateVisible,
+                isBootstrapLateVisibleHealthy: false,
+                shouldEscalateHeavy: true,
+                reason: `bootstrap-lateVisible-risk:lateVisible=${lateVisibleNodes}`
+            };
+        }
+
+        return {
+            isBootstrapLateVisible: false,
+            isBootstrapLateVisibleHealthy: false,
+            shouldEscalateHeavy: true,
+            reason: `lateVisible:${lateVisibleNodes}`
+        };
+    }
+
+    private shouldSkipForcedHeavyFirstPulse(
+        source: string,
+        anomalyStats: OffsetAnomalyStats,
+        gapSummary: EdgeScreenGapSummary,
+        lateVisibleNodes: number,
+        visibleNodeCount: number,
+        pulseNo: number
+    ): { skip: boolean; reason: string } {
+        if (!this.isOpenEntryStabilizeSource(source)) {
+            return { skip: false, reason: 'non-open-entry-source' };
+        }
+
+        const lateVisibleSignal = this.evaluateLateVisibleSignal(
+            pulseNo,
+            lateVisibleNodes,
+            visibleNodeCount,
+            anomalyStats,
+            gapSummary
+        );
+
+        if (lateVisibleSignal.isBootstrapLateVisibleHealthy) {
+            return { skip: true, reason: lateVisibleSignal.reason };
+        }
+
+        if (anomalyStats.anomalous > 0) {
+            return { skip: false, reason: `anomaly:${anomalyStats.anomalous}` };
+        }
+
+        if (gapSummary.residualBadEdges > 0) {
+            return { skip: false, reason: `resBadEdges:${gapSummary.residualBadEdges}` };
+        }
+
+        if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
+            return {
+                skip: false,
+                reason: `maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`
+            };
+        }
+
+        if (lateVisibleSignal.shouldEscalateHeavy) {
+            return { skip: false, reason: lateVisibleSignal.reason };
+        }
+
+        return {
+            skip: true,
+            reason: `healthy-first-pulse:anomaly=0,resBad=0,maxRes<=${this.openStabilizeStableMaxGapPx.toFixed(1)},lateVisible=0`
+        };
     }
 
     private getOffsetCleanupOptionsForSource(source: string, phase: string): OffsetCleanupOptions {
@@ -261,15 +378,40 @@ export class LayoutManager {
 
                 const anomalyBeforeStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapBefore = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
+                const lateVisibleSignal = this.evaluateLateVisibleSignal(
+                    pulseNo,
+                    lateVisibleNodes,
+                    visibleNodeCount,
+                    anomalyBeforeStats,
+                    gapBefore
+                );
                 const forceHeavyFirstPulse = this.shouldForceHeavyOnFirstPulse(source);
+                const forcedHeavyFirstPulse = pulseNo === 1 && forceHeavyFirstPulse;
+                const forceHeavyDecision = forcedHeavyFirstPulse
+                    ? this.shouldSkipForcedHeavyFirstPulse(
+                        source,
+                        anomalyBeforeStats,
+                        gapBefore,
+                        lateVisibleNodes,
+                        visibleNodeCount,
+                        pulseNo
+                    )
+                    : { skip: false, reason: 'not-forced' };
                 const actionableAnomaly = anomalyBeforeStats.anomalous > 0
                     && (gapBefore.residualBadEdges > 0 || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx);
-                const heavyEscalated = lateVisibleNodes > 0
+                const heavyEscalated = lateVisibleSignal.shouldEscalateHeavy
                     || gapBefore.residualBadEdges > 0
                     || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx
                     || actionableAnomaly;
-                const shouldRunHeavy = (pulseNo === 1 && forceHeavyFirstPulse) || heavyEscalated;
+                const shouldRunHeavy = (forcedHeavyFirstPulse && !forceHeavyDecision.skip) || heavyEscalated;
                 const cleanupOptions = this.getOffsetCleanupOptionsForSource(source, `open-p${pulseNo}`);
+                const firstPulseForceLabel = forcedHeavyFirstPulse
+                    ? (forceHeavyDecision.skip
+                        ? (forceHeavyDecision.reason === 'bootstrap-lateVisible-healthy'
+                            ? 'downgraded-bootstrap-late-visible'
+                            : 'downgraded-to-light')
+                        : 'forced-heavy')
+                    : 'not-applicable';
 
                 const persistentAnomaly = anomalyBeforeStats.anomalous > 0
                     && lateVisibleNodes === 0
@@ -282,6 +424,7 @@ export class LayoutManager {
                     if (heavyEscalated) {
                     logVerbose(
                             `[Layout] OpenStabilizeEscalateHeavy: source=${source}, lateVisible=${lateVisibleNodes}, ` +
+                            `lateVisibleSignal=${lateVisibleSignal.reason}, ` +
                             `anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, anomalyActionable=${actionableAnomaly}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
                             `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, topBad=${gapBefore.topResidualBadSample || gapBefore.topBadSample}, ctx=${stabilizeId}`
                         );
@@ -301,8 +444,11 @@ export class LayoutManager {
                 logVerbose(
                     `[Layout] OpenStabilizePulse#${pulseNo}: source=${source}, delay=${pulseDelay}, visible=${visibleNodeCount}, ` +
                     `late-visible-nodes=${lateVisibleNodes}, anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, ` +
+                    `lateVisibleSignal=${lateVisibleSignal.reason}, ` +
                     `pulse-gap-summary=${this.formatGapSummary(gapBefore)}, ` +
                     `runHeavy=${shouldRunHeavy}, sourceAware=${forceHeavyFirstPulse ? 'force-first-pulse' : 'node-mounted-light-first'}, ` +
+                    `firstPulseForce=${firstPulseForceLabel}, ` +
+                    `firstPulseReason=${forceHeavyDecision.reason}, ` +
                     `anomalyActionable=${actionableAnomaly}, persistentGuard=${shouldRunLightPersistentGuard}, cleanupRelease=${cleanupOptions.releaseFixClass ? 'allow' : 'hold'}, ctx=${stabilizeId}`
                 );
 
@@ -353,7 +499,13 @@ export class LayoutManager {
 
                 const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapAfter = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
-                const blockerEval = this.getOpenStabilizeBlockers(anomalyAfterStats, gapAfter, lateVisibleNodes, pulseNo);
+                const blockerEval = this.getOpenStabilizeBlockers(
+                    anomalyAfterStats,
+                    gapAfter,
+                    lateVisibleNodes,
+                    pulseNo,
+                    visibleNodeCount
+                );
                 const pulseBlockers = blockerEval.blockers;
                 const pulseStable = pulseBlockers.length === 0;
                 stableStreak = pulseStable ? (stableStreak + 1) : 0;
@@ -466,12 +618,20 @@ export class LayoutManager {
         anomalyStats: OffsetAnomalyStats,
         gapSummary: EdgeScreenGapSummary,
         lateVisibleNodes: number,
-        pulseNo: number
+        pulseNo: number,
+        visibleNodeCount: number
     ): { blockers: string[]; downgraded: string[] } {
         const blockers: string[] = [];
         const downgraded: string[] = [];
 
         const gapConfidence = this.evaluateOpenStabilizeGapConfidence(gapSummary, pulseNo);
+        const lateVisibleSignal = this.evaluateLateVisibleSignal(
+            pulseNo,
+            lateVisibleNodes,
+            visibleNodeCount,
+            anomalyStats,
+            gapSummary
+        );
 
         const actionableAnomaly = anomalyStats.anomalous > 0
             && (gapSummary.residualBadEdges > 0 || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx);
@@ -497,7 +657,9 @@ export class LayoutManager {
             }
         }
 
-        if (lateVisibleNodes > 0) {
+        if (lateVisibleSignal.isBootstrapLateVisibleHealthy) {
+            downgraded.push(`lateVisibleBootstrap:${lateVisibleNodes}`);
+        } else if (lateVisibleSignal.shouldEscalateHeavy) {
             blockers.push(`lateVisible:${lateVisibleNodes}`);
         }
 
@@ -800,12 +962,12 @@ export class LayoutManager {
      * @param canvas Canvas对象
      * @returns 更新的节点数量
      */
-    private async updateNodePositions(
+    private updateNodePositions(
         result: Map<string, { x: number; y: number; width?: number; height?: number }>,
         allNodes: Map<string, CanvasNodeLike>,
         canvas: CanvasLike,
         contextId?: string
-    ): Promise<number> {
+    ): number {
         let updatedCount = 0;
         let movedCount = 0;
         let missingCount = 0;
@@ -1387,7 +1549,7 @@ export class LayoutManager {
     // =========================================================================
     // 拖拽时同步隐藏的子节点和浮动子树
     // =========================================================================
-    async syncHiddenChildrenOnDrag(node: CanvasNodeLike) {
+    syncHiddenChildrenOnDrag(node: CanvasNodeLike): void {
         if (!node?.id) return;
 
         const canvas = node.canvas;
@@ -1487,7 +1649,7 @@ export class LayoutManager {
     // =========================================================================
     // 重新应用浮动节点的红框样式
     // =========================================================================
-    private async reapplyFloatingNodeStyles(canvas: CanvasLike): Promise<void> {
+    private reapplyFloatingNodeStyles(canvas: CanvasLike): void {
         log(`[Layout] reapplyFloatingNodeStyles 被调用, floatingNodeService=${this.floatingNodeService ? 'exists' : 'null'}`);
         try {
             const canvasFilePath = canvas.file?.path || getCurrentCanvasFilePath(this.app);

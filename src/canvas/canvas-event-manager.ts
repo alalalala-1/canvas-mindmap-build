@@ -832,7 +832,7 @@ export class CanvasEventManager {
         this.scheduleOpenStabilizationWithDedup('node-mounted-idle-batch', filePath || null);
     }
 
-    private async handleZoomToFitVisibleNodes(): Promise<boolean> {
+    private handleZoomToFitVisibleNodes(): boolean {
         const canvasView = getCanvasView(this.app);
         if (!canvasView) return false;
 
@@ -893,7 +893,7 @@ export class CanvasEventManager {
         return false;
     }
 
-    private async handleDeleteButtonClick(canvasView: ItemView): Promise<void> {
+    private handleDeleteButtonClick(canvasView: ItemView): void {
         const canvas = this.getCanvasFromView(canvasView);
         if (!canvas) return;
         
