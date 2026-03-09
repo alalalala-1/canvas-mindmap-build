@@ -506,7 +506,7 @@ export class CanvasNodeManager {
         let newHeight: number;
         let source = 'estimate';
         const width = isFormula
-            ? (domNode.width || textDimensions.width)
+            ? (domNode.width || formulaDimensions.width || textDimensions.width)
             : resolveArrangedTextWidth(text, textDimensions.width);
 
         const oldWidth = domNode.width ?? textDimensions.width;
@@ -527,10 +527,29 @@ export class CanvasNodeManager {
         let trustedStateReason = '';
 
         if (isFormula) {
-            newHeight = formulaDimensions.height;
-            source = 'formula';
+            const formulaNodeEl = domNode.nodeEl;
+            const canMeasureFormula = !!formulaNodeEl && !this.isNodeVirtualized(formulaNodeEl);
+            const currentFormulaHeight = oldHeight > 0 ? oldHeight : 0;
+            const measuredFormulaHeight = canMeasureFormula
+                ? this.nodeHeightService.calculateTextNodeHeight(text, formulaNodeEl, width, domNode.id)
+                : 0;
+
+            if (measuredFormulaHeight > 0) {
+                newHeight = measuredFormulaHeight;
+                source = 'dom';
+            } else if (currentFormulaHeight > 0) {
+                newHeight = currentFormulaHeight;
+                source = 'formula-preserve';
+            } else {
+                newHeight = formulaDimensions.height;
+                source = 'formula';
+            }
+
             if (this.shouldLogVerboseNodeDiagnostics()) {
-                log(`[Node.perNode] id=${domNode.id} formula: newH=${newHeight}`);
+                log(
+                    `[Node.perNode] id=${domNode.id} formula: oldH=${oldHeight}, newH=${newHeight}, ` +
+                    `measured=${measuredFormulaHeight || 0}, source=${source}, mounted=${canMeasureFormula}, w=${width}`
+                );
             }
         } else {
             // 获取节点元数据

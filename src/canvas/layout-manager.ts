@@ -147,12 +147,13 @@ export class LayoutManager {
     }
 
     private getOpenStabilizeBaseSource(source: string): string {
-        return source.replace(/-resume/g, '');
+        return source
+            .replace(/-resume/g, '')
+            .replace(/-arrange-busy/g, '');
     }
 
     private shouldForceHeavyOnFirstPulse(source: string): boolean {
-        const baseSource = this.getOpenStabilizeBaseSource(source);
-        return !baseSource.startsWith('node-mounted');
+        return this.isOpenEntryStabilizeSource(source);
     }
 
     private isOpenEntryStabilizeSource(source: string): boolean {
@@ -281,6 +282,19 @@ export class LayoutManager {
         };
     }
 
+    private getOpenStabilizeFirstPulseStrategyLabel(source: string, forceHeavyFirstPulse: boolean): string {
+        if (forceHeavyFirstPulse) {
+            return 'open-entry-force-first';
+        }
+
+        const baseSource = this.getOpenStabilizeBaseSource(source);
+        if (baseSource.startsWith('node-mounted')) {
+            return 'node-mounted-light-first';
+        }
+
+        return 'non-open-light-first';
+    }
+
     private canScheduleOpenStabilizeResume(nextSource: string): boolean {
         const baseSource = this.getOpenStabilizeBaseSource(nextSource);
         const currentCount = this.openStabilizeResumeCountByBaseSource.get(baseSource) ?? 0;
@@ -405,6 +419,7 @@ export class LayoutManager {
                     || actionableAnomaly;
                 const shouldRunHeavy = (forcedHeavyFirstPulse && !forceHeavyDecision.skip) || heavyEscalated;
                 const cleanupOptions = this.getOffsetCleanupOptionsForSource(source, `open-p${pulseNo}`);
+                const firstPulseStrategyLabel = this.getOpenStabilizeFirstPulseStrategyLabel(source, forceHeavyFirstPulse);
                 const firstPulseForceLabel = forcedHeavyFirstPulse
                     ? (forceHeavyDecision.skip
                         ? (forceHeavyDecision.reason === 'bootstrap-lateVisible-healthy'
@@ -446,7 +461,7 @@ export class LayoutManager {
                     `late-visible-nodes=${lateVisibleNodes}, anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, ` +
                     `lateVisibleSignal=${lateVisibleSignal.reason}, ` +
                     `pulse-gap-summary=${this.formatGapSummary(gapBefore)}, ` +
-                    `runHeavy=${shouldRunHeavy}, sourceAware=${forceHeavyFirstPulse ? 'force-first-pulse' : 'node-mounted-light-first'}, ` +
+                    `runHeavy=${shouldRunHeavy}, sourceAware=${firstPulseStrategyLabel}, ` +
                     `firstPulseForce=${firstPulseForceLabel}, ` +
                     `firstPulseReason=${forceHeavyDecision.reason}, ` +
                     `anomalyActionable=${actionableAnomaly}, persistentGuard=${shouldRunLightPersistentGuard}, cleanupRelease=${cleanupOptions.releaseFixClass ? 'allow' : 'hold'}, ctx=${stabilizeId}`
