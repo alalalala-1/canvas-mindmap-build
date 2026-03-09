@@ -70,6 +70,22 @@ export class NodeHeightService {
         return Number.isFinite(parsed) ? parsed : null;
     }
 
+    private calculateChromeFromComputed(
+        nodeComputed: CSSStyleDeclaration,
+        contentComputed: CSSStyleDeclaration | null
+    ): number {
+        try {
+            const contentPaddingTop = contentComputed ? parseFloat(contentComputed.paddingTop) || 0 : 0;
+            const contentPaddingBottom = contentComputed ? parseFloat(contentComputed.paddingBottom) || 0 : 0;
+            const borderTop = parseFloat(nodeComputed.borderTopWidth) || 0;
+            const borderBottom = parseFloat(nodeComputed.borderBottomWidth) || 0;
+            const chrome = Math.ceil(contentPaddingTop + contentPaddingBottom + borderTop + borderBottom);
+            return chrome > 0 ? chrome : 16;
+        } catch {
+            return 16;
+        }
+    }
+
     constructor(
         app: App,
         settings: CanvasMindmapBuildSettings,
@@ -346,14 +362,16 @@ export class NodeHeightService {
 
             const nodeElHtml = nodeEl as HTMLElement;
             const nodeOffsetH = nodeElHtml.offsetHeight;
-            const nodeRectH = nodeElHtml.getBoundingClientRect().height;
+            const nodeRectH = nodeOffsetH > 0 ? nodeOffsetH : nodeElHtml.getBoundingClientRect().height;
             const nodeBestH = Math.max(nodeOffsetH, nodeRectH);
 
-            const computed = window.getComputedStyle(nodeElHtml);
-            const computedTopPx = this.parsePx(computed.top);
-            const computedPos = computed.position || 'unknown';
+            const nodeComputed = window.getComputedStyle(nodeElHtml);
+            const contentComputed = contentEl ? window.getComputedStyle(contentEl) : null;
+            const computedTopPx = this.parsePx(nodeComputed.top);
+            const computedPos = nodeComputed.position || 'unknown';
             const styleAnomalous = computedPos !== 'absolute'
                 || (computedTopPx !== null && Math.abs(computedTopPx) > 0.1);
+            const dynamicChrome = this.calculateChromeFromComputed(nodeComputed, contentComputed);
 
             if (sizerEl) {
                 let minH = 0;
@@ -365,36 +383,7 @@ export class NodeHeightService {
                 }
 
                 const scrollH = sizerEl.scrollHeight;
-                const sizerRect = sizerEl.getBoundingClientRect();
-
-                // [修复] 动态测量chrome：contentEl的padding + nodeEl的border
-                const measureChrome = (): number => {
-                    let chrome = 16; // 默认值兜底
-                    try {
-                        const contentComputed = contentEl ? window.getComputedStyle(contentEl) : null;
-                        const nodeComputed = window.getComputedStyle(nodeElHtml);
-                        
-                        // contentEl(.canvas-node-content)的padding
-                        const contentPaddingTop = contentComputed ? parseFloat(contentComputed.paddingTop) || 0 : 0;
-                        const contentPaddingBottom = contentComputed ? parseFloat(contentComputed.paddingBottom) || 0 : 0;
-                        
-                        // nodeEl(.canvas-node)的border
-                        const borderTop = parseFloat(nodeComputed.borderTopWidth) || 0;
-                        const borderBottom = parseFloat(nodeComputed.borderBottomWidth) || 0;
-                        
-                        chrome = Math.ceil(
-                            contentPaddingTop + contentPaddingBottom 
-                            + borderTop + borderBottom
-                        );
-                        // 防御性兜底：chrome不可能是0或负数
-                        if (chrome <= 0) chrome = 16;
-                    } catch {
-                        chrome = 16;
-                    }
-                    return chrome;
-                };
-                
-                const dynamicChrome = measureChrome();
+                const sizerRectH = sizerEl.offsetHeight;
                 const comfortPadding = Math.max(
                     NodeHeightService.DOM_COMFORT_PADDING_MIN_PX,
                     Math.round(dynamicChrome * 0.5)
@@ -402,7 +391,7 @@ export class NodeHeightService {
 
                 const nodeCandidate = nodeBestH > 20 ? Math.ceil(nodeBestH) : 0;
                 const minCandidate = minH > 20 ? Math.ceil(minH + dynamicChrome) : 0;
-                let contentCandidateRaw = Math.max(scrollH, sizerRect.height);
+                let contentCandidateRaw = Math.max(scrollH, sizerRectH);
                 // [收敛修复] 仅在样式异常且 scroll 明显虚高时才允许用 minH 限幅。
                 // 避免正常场景下把真实内容需求压回 minH 导致轻微截断。
                 if (
@@ -440,7 +429,8 @@ export class NodeHeightService {
                     source = 'content';
                     decisionTags.push('prefer-content-comfort');
 
-                    const lh = parseFloat(window.getComputedStyle(contentEl || nodeElHtml).lineHeight || '0');
+                    const lineHeightSource = contentComputed?.lineHeight || nodeComputed.lineHeight;
+                    const lh = parseFloat(lineHeightSource || '0');
                     if (Number.isFinite(lh) && lh > 0) {
                         const lineHeightComfortFloor = Math.ceil(bestContent + lh * 0.8);
                         if (lineHeightComfortFloor > preferred) {
@@ -483,8 +473,8 @@ export class NodeHeightService {
                 if (result > 20) {
                     if (logDetail) {
                         log(
-                            `[NodeHeight] measure: id=${nodeId || 'unknown'}, minH=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, ` +
-                            `nodeOffsetH=${nodeOffsetH}, nodeRectH=${nodeRectH.toFixed(1)}, pos=${computedPos}, top=${computed.top}, ` +
+                            `[NodeHeight] measure: id=${nodeId || 'unknown'}, minH=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRectH.toFixed(1)}, ` +
+                            `nodeOffsetH=${nodeOffsetH}, nodeRectH=${nodeRectH.toFixed(1)}, pos=${computedPos}, top=${nodeComputed.top}, ` +
                             `chrome=${dynamicChrome}, candidates(node/min/content)=${nodeCandidate}/${minCandidate}/${contentCandidate}, ` +
                             `comfort=${comfortPadding}, styleAnomaly=${styleAnomalous}, underflowRisk=${underflowRisk}, source=${source}, ` +
                             `decision=${decisionTags.join('+') || 'none'}, final=${result}`
@@ -495,22 +485,20 @@ export class NodeHeightService {
 
                 // fallback：nodeEl 高度不可用时，用 sizer.minHeight + 动态chrome
                 if (minH > 20) {
-                    const dynamicChrome = measureChrome();
                     const result = Math.ceil(minH + dynamicChrome);
                     if (logDetail) {
-                        log(`[NodeHeight] measure: nodeEl不可用，minH优先=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
+                        log(`[NodeHeight] measure: nodeEl不可用，minH优先=${minH.toFixed(1)}, scrollH=${scrollH}, rectH=${sizerRectH.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
                     }
                     return result;
                 }
                 
                 // fallback2：minH 不可用时，用 scrollH 或 rectHeight + 动态chrome
-                const maxMeasured = Math.max(scrollH, sizerRect.height);
+                const maxMeasured = Math.max(scrollH, sizerRectH);
                 
                 if (maxMeasured > 20) {
-                    const dynamicChrome = measureChrome();
                     const result = Math.ceil(maxMeasured + dynamicChrome);
-                    if (logDetail && (scrollH > 20 || sizerRect.height > 20)) {
-                        log(`[NodeHeight] measure: minH无数据, scrollH=${scrollH}, rectH=${sizerRect.height.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
+                    if (logDetail && (scrollH > 20 || sizerRectH > 20)) {
+                        log(`[NodeHeight] measure: minH无数据, scrollH=${scrollH}, rectH=${sizerRectH.toFixed(1)}, chrome=${dynamicChrome}, final=${result}`);
                     }
                     return result;
                 }
@@ -554,8 +542,20 @@ export class NodeHeightService {
 
     private isZeroSizedNode(nodeEl: Element, logDetail: boolean = false): boolean {
         const el = nodeEl as HTMLElement;
+        const offsetHeight = el.offsetHeight;
+        const clientHeight = el.clientHeight;
+        const scrollHeight = el.scrollHeight;
+
+        // 常见非零路径提前返回，避免额外 rect 测量
+        if (offsetHeight > 0 || clientHeight > 0 || scrollHeight > 0) {
+            return false;
+        }
+
         const rectHeight = el.getBoundingClientRect().height;
-        const isZero = rectHeight === 0 && el.offsetHeight === 0 && el.clientHeight === 0 && el.scrollHeight === 0;
+        const isZero = rectHeight === 0;
+        if (logDetail && !isZero) {
+            log(`[NodeHeight] zero-check: rect=${rectHeight.toFixed(1)}, offset=${offsetHeight}, client=${clientHeight}, scroll=${scrollHeight}`);
+        }
         return isZero;
     }
 
