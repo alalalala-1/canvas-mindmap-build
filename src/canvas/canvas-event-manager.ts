@@ -4,7 +4,6 @@ import { CollapseStateManager } from '../state/collapse-state';
 import { DeleteConfirmationModal } from '../ui/delete-modal';
 import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
 import { FloatingNodeService } from './services/floating-node-service';
-import { CanvasFileService } from './services/canvas-file-service';
 import { CanvasManager } from './canvas-manager';
 import { log } from '../utils/logger';
 import { CONSTANTS } from '../constants';
@@ -205,80 +204,82 @@ export class CanvasEventManager {
 
         // 监听 Canvas 视图打开
         this.plugin.registerEvent(
-            this.app.workspace.on('active-leaf-change', async (leaf) => {
-                log(`[Event] active-leaf-change 触发, leaf=${leaf ? 'exists' : 'null'}, viewType=${leaf?.view?.getViewType() || 'null'}`);
-                if (leaf?.view?.getViewType() === 'canvas') {
-                    log(`[Event] Canvas 视图打开，开始设置事件监听`);
-                    
-                    // [已移除] 健康检查会用估算值覆盖文件中Obsidian设置的准确minHeight值
-                    // 导致与批量调整产生死循环：健康检查改成估算值 → 批量调整改回minHeight → 重新加载又被改成估算值
-                    // 文件中的值本身就是历史准确值，应该保持不变，只通过批量调整和minHeight来更新
-                    const canvasView = leaf.view as ItemView;
+            this.app.workspace.on('active-leaf-change', (leaf) => {
+                void (async () => {
+                    log(`[Event] active-leaf-change 触发, leaf=${leaf ? 'exists' : 'null'}, viewType=${leaf?.view?.getViewType() || 'null'}`);
+                    if (leaf?.view?.getViewType() === 'canvas') {
+                        log(`[Event] Canvas 视图打开，开始设置事件监听`);
+                        
+                        // [已移除] 健康检查会用估算值覆盖文件中Obsidian设置的准确minHeight值
+                        // 导致与批量调整产生死循环：健康检查改成估算值 → 批量调整改回minHeight → 重新加载又被改成估算值
+                        // 文件中的值本身就是历史准确值，应该保持不变，只通过批量调整和minHeight来更新
+                        const canvasView = leaf.view as ItemView;
 
-                    // 启动 MutationObserver
-                    this.setupMutationObserver();
-                    
-                    if (canvasView) {
-                        await this.setupCanvasEventListeners(canvasView);
-                        // Canvas打开时立即检查并添加所有必要的DOM属性和按钮
-                        setTimeout(() => {
-                            void this.canvasManager.checkAndAddCollapseButtons();
-                        }, CONSTANTS.TIMING.RENDER_DELAY);
+                        // 启动 MutationObserver
+                        this.setupMutationObserver();
+                        
+                        if (canvasView) {
+                            await this.setupCanvasEventListeners(canvasView);
+                            // Canvas打开时立即检查并添加所有必要的DOM属性和按钮
+                            setTimeout(() => {
+                                void this.canvasManager.checkAndAddCollapseButtons();
+                            }, CONSTANTS.TIMING.RENDER_DELAY);
 
-                        // [OpenFix] Canvas 打开后触发轻量自愈，覆盖“重开后连线再次错位”的复发场景。
-                        // 该流程仅修复视觉层 offset/edge，不写布局坐标。
-                        const canvasFilePath = this.getCanvasFromView(canvasView)?.file?.path
-                            || (canvasView as CanvasViewLike).file?.path
-                            || null;
-                        if (this.shouldSuppressOpenStabilization('active-leaf-change', canvasFilePath)) {
-                            return;
-                        }
-                        this.markOpenProtectionWindow('active-leaf-change');
-                        this.scheduleOpenStabilizationWithDedup('active-leaf-change', canvasFilePath);
+                            // [OpenFix] Canvas 打开后触发轻量自愈，覆盖“重开后连线再次错位”的复发场景。
+                            // 该流程仅修复视觉层 offset/edge，不写布局坐标。
+                            const canvasFilePath = this.getCanvasFromView(canvasView)?.file?.path
+                                || (canvasView as CanvasViewLike).file?.path
+                                || null;
+                            if (this.shouldSuppressOpenStabilization('active-leaf-change', canvasFilePath)) {
+                                return;
+                            }
+                            this.markOpenProtectionWindow('active-leaf-change');
+                            this.scheduleOpenStabilizationWithDedup('active-leaf-change', canvasFilePath);
 
-                        // [ViewportFix] Canvas 重新激活时，检查是否有待处理的 viewport 刷新
-                        // 场景：屏幕旋转时 Canvas 临时关闭，debounce 触发时 canvas 不可用，需要在重新激活后补充刷新
-                        if (this.pendingViewportRefresh) {
-                            const pendingTrigger = this.lastViewportChangeTrigger;
-                            const pendingToken = this.pendingViewportToken || this.activeViewportToken;
-                            const pendingTraceId = this.pendingViewportTraceId || this.createViewportTraceId('pending');
-                            this.logViewportTrace(pendingTraceId, 'pending-resume', pendingToken, canvasView, {
-                                trigger: pendingTrigger,
-                                reason: 'canvas-reactivated'
-                            });
-                            this.pendingViewportRefresh = false;
-                            // 额外等待 Canvas 完成自身初始化渲染后再刷新
-                            const pendingDelay = Platform.isMobile
-                                ? CONSTANTS.TIMING.VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE + 200
-                                : 300;
-                            window.setTimeout(() => {
-                                const activeCanvas = this.getCanvasFromView(canvasView);
-                                if (!activeCanvas) {
-                                    this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
-                                        trigger: pendingTrigger,
-                                        reason: 'canvas-unavailable-after-delay'
-                                    });
-                                    return;
-                                }
-                                const edges = getEdgesFromCanvas(activeCanvas);
-                                if (edges.length === 0) {
-                                    this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
-                                        trigger: pendingTrigger,
-                                        reason: 'edges-empty'
-                                    });
-                                    return;
-                                }
-                                void this.convergeCanvasEdgesAfterViewportChange(
-                                    activeCanvas,
-                                    `viewport-pending-${pendingTrigger}`,
-                                    pendingTraceId,
-                                    pendingToken,
-                                    canvasView
-                                );
-                            }, pendingDelay);
+                            // [ViewportFix] Canvas 重新激活时，检查是否有待处理的 viewport 刷新
+                            // 场景：屏幕旋转时 Canvas 临时关闭，debounce 触发时 canvas 不可用，需要在重新激活后补充刷新
+                            if (this.pendingViewportRefresh) {
+                                const pendingTrigger = this.lastViewportChangeTrigger;
+                                const pendingToken = this.pendingViewportToken || this.activeViewportToken;
+                                const pendingTraceId = this.pendingViewportTraceId || this.createViewportTraceId('pending');
+                                this.logViewportTrace(pendingTraceId, 'pending-resume', pendingToken, canvasView, {
+                                    trigger: pendingTrigger,
+                                    reason: 'canvas-reactivated'
+                                });
+                                this.pendingViewportRefresh = false;
+                                // 额外等待 Canvas 完成自身初始化渲染后再刷新
+                                const pendingDelay = Platform.isMobile
+                                    ? CONSTANTS.TIMING.VIEWPORT_CHANGE_EXTRA_DELAY_MOBILE + 200
+                                    : 300;
+                                window.setTimeout(() => {
+                                    const activeCanvas = this.getCanvasFromView(canvasView);
+                                    if (!activeCanvas) {
+                                        this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
+                                            trigger: pendingTrigger,
+                                            reason: 'canvas-unavailable-after-delay'
+                                        });
+                                        return;
+                                    }
+                                    const edges = getEdgesFromCanvas(activeCanvas);
+                                    if (edges.length === 0) {
+                                        this.logViewportTrace(pendingTraceId, 'pending-skip', pendingToken, canvasView, {
+                                            trigger: pendingTrigger,
+                                            reason: 'edges-empty'
+                                        });
+                                        return;
+                                    }
+                                    void this.convergeCanvasEdgesAfterViewportChange(
+                                        activeCanvas,
+                                        `viewport-pending-${pendingTrigger}`,
+                                        pendingTraceId,
+                                        pendingToken,
+                                        canvasView
+                                    );
+                                }, pendingDelay);
+                            }
                         }
                     }
-                }
+                })();
             })
         );
 
@@ -694,9 +695,11 @@ export class CanvasEventManager {
         }));
 
         for (const el of owners) {
-            el.style.setProperty('overflow-y', 'hidden', 'important');
-            el.style.setProperty('-webkit-overflow-scrolling', 'auto', 'important');
-            el.style.setProperty('overscroll-behavior', 'none', 'important');
+            el.setCssProps({
+                'overflow-y': 'hidden',
+                '-webkit-overflow-scrolling': 'auto',
+                'overscroll-behavior': 'none'
+            });
         }
     }
 
@@ -1051,7 +1054,7 @@ export class CanvasEventManager {
                 mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
                 await mdLeaf.openFile(sourceFile);
             } else {
-                this.app.workspace.setActiveLeaf(mdLeaf, true, true);
+                this.app.workspace.setActiveLeaf(mdLeaf, { focus: true });
             }
 
             const view = mdLeaf.view as MarkdownViewLike;
@@ -1066,9 +1069,9 @@ export class CanvasEventManager {
                 if (!editor) return;
                 // 强制聚焦编辑器，确保选区能被接受
                 editor.focus?.();
-                editor.setSelection(fromLink!.from, fromLink!.to);
-                editor.scrollIntoView({ from: fromLink!.from, to: fromLink!.to }, true);
-                log(`[Event] fromLink 选区已应用: L${fromLink!.from.line}:${fromLink!.from.ch}-${fromLink!.to.ch}`);
+                editor.setSelection(fromLink.from, fromLink.to);
+                editor.scrollIntoView({ from: fromLink.from, to: fromLink.to }, true);
+                log(`[Event] fromLink 选区已应用: L${fromLink.from.line}:${fromLink.from.ch}-${fromLink.to.ch}`);
             };
 
             setTimeout(() => {
@@ -1079,7 +1082,7 @@ export class CanvasEventManager {
                 }
             }, initialDelay);
         } catch (err) {
-            log(`[Event] UI: 跳转失败: ${err}`);
+            log(`[Event] UI: 跳转失败: ${String(err)}`);
         }
     }
 
@@ -1183,32 +1186,36 @@ export class CanvasEventManager {
 
     private registerCanvasWorkspaceEvents(canvas: CanvasLike) {
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:edge-create', async (edge: CanvasEdgeLike) => {
-                const { fromId, toId } = extractEdgeNodeIds(edge);
-                log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
+            this.app.workspace.on('canvas:edge-create', (edge: CanvasEdgeLike) => {
+                void (async () => {
+                    const { fromId, toId } = extractEdgeNodeIds(edge);
+                    log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
-                this.collapseStateManager.clearCache();
-                const activeCanvasView = getActiveCanvasView(this.app);
-                if (activeCanvasView) {
-                    const activeCanvas = (activeCanvasView as CanvasViewLike).canvas;
-                    if (activeCanvas && activeCanvas === canvas) {
-                        this.floatingNodeService.startEdgeDetectionWindow(activeCanvas);
+                    this.collapseStateManager.clearCache();
+                    const activeCanvasView = getActiveCanvasView(this.app);
+                    if (activeCanvasView) {
+                        const activeCanvas = (activeCanvasView as CanvasViewLike).canvas;
+                        if (activeCanvas && activeCanvas === canvas) {
+                            this.floatingNodeService.startEdgeDetectionWindow(activeCanvas);
+                        }
                     }
-                }
-                requestAnimationFrame(async () => {
-                    try {
-                        await this.floatingNodeService.handleNewEdge(edge, false);
-                    } catch (err) {
-                        log(`[EdgeCreate] 异常: ${err}`);
+                    requestAnimationFrame(() => {
+                        void (async () => {
+                            try {
+                                await this.floatingNodeService.handleNewEdge(edge, false);
+                            } catch (err) {
+                                log(`[EdgeCreate] 异常: ${String(err)}`);
+                            }
+                        })();
+                    });
+                    await this.canvasManager.checkAndAddCollapseButtons();
+                    for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
+                        setTimeout(() => {
+                            void this.canvasManager.checkAndAddCollapseButtons();
+                            void this.canvasManager.checkAndClearFloatingStateForNewEdges();
+                        }, delay);
                     }
-                });
-                await this.canvasManager.checkAndAddCollapseButtons();
-                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
-                    setTimeout(() => {
-                        void this.canvasManager.checkAndAddCollapseButtons();
-                        void this.canvasManager.checkAndClearFloatingStateForNewEdges();
-                    }, delay);
-                }
+                })();
             })
         );
 
@@ -1241,21 +1248,23 @@ export class CanvasEventManager {
         );
 
         this.plugin.registerEvent(
-            this.app.workspace.on('canvas:node-create', async (node: CanvasNodeLike) => {
-                const nodeId = node?.id;
-                log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(nodeId || node)}`);
-                if (nodeId) {
-                    const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
-                    if (isFloating) {
-                        await this.floatingNodeService.clearNodeFloatingState(nodeId);
+            this.app.workspace.on('canvas:node-create', (node: CanvasNodeLike) => {
+                void (async () => {
+                    const nodeId = node?.id;
+                    log(`[Event] Canvas:NodeCreate 触发, node=${JSON.stringify(nodeId || node)}`);
+                    if (nodeId) {
+                        const isFloating = await this.floatingNodeService.isNodeFloating(nodeId);
+                        if (isFloating) {
+                            await this.floatingNodeService.clearNodeFloatingState(nodeId);
+                        }
+                        log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
+                        setTimeout(() => {
+                            void this.canvasManager.adjustNodeHeightAfterRender(nodeId);
+                        }, CONSTANTS.TIMING.SCROLL_DELAY);
+                    } else {
+                        log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
                     }
-                    log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
-                    setTimeout(() => {
-                        void this.canvasManager.adjustNodeHeightAfterRender(nodeId);
-                    }, CONSTANTS.TIMING.SCROLL_DELAY);
-                } else {
-                    log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
-                }
+                })();
             })
         );
 
@@ -1590,7 +1599,7 @@ export class CanvasEventManager {
     }
 
     private getCanvasLeafRect(view: ItemView | null): DOMRect | null {
-        const leaf = (view as unknown as { leaf?: { containerEl?: HTMLElement } })?.leaf;
+        const leaf = (view as { leaf?: { containerEl?: HTMLElement } })?.leaf;
         const containerEl = leaf?.containerEl;
         if (!containerEl) return null;
         return containerEl.getBoundingClientRect();
@@ -1669,14 +1678,14 @@ export class CanvasEventManager {
 
         for (const edge of edges) {
             const edgeId = edge.id || `${edge.fromNode || 'from'}->${edge.toNode || 'to'}`;
-            const bezier = (edge as any).bezier;
+            const bezier = (edge).bezier;
             const bezierSig = bezier
                 ? `${bezier.from?.x?.toFixed?.(1) || 'na'},${bezier.from?.y?.toFixed?.(1) || 'na'}->${bezier.to?.x?.toFixed?.(1) || 'na'},${bezier.to?.y?.toFixed?.(1) || 'na'}`
                 : 'no-bezier';
 
-            let pathEl: Element | null = (edge as any).pathEl || null;
+            let pathEl: Element | null = (edge).pathEl || null;
             if (!pathEl) {
-                const lineGroupEl = (edge as any).lineGroupEl as Element | null;
+                const lineGroupEl = (edge).lineGroupEl as Element | null;
                 if (lineGroupEl) {
                     pathEl = lineGroupEl.querySelector('path');
                 }
@@ -1685,8 +1694,8 @@ export class CanvasEventManager {
 
             const fromNode = edge.fromNode || extractNodeId(edge.from);
             const toNode = edge.toNode || extractNodeId(edge.to);
-            const fromSide = edge.fromSide || (typeof edge.from === 'object' ? (edge.from as any)?.side : undefined) || 'unknown';
-            const toSide = edge.toSide || (typeof edge.to === 'object' ? (edge.to as any)?.side : undefined) || 'unknown';
+            const fromSide = edge.fromSide || (typeof edge.from === 'object' ? (edge.from)?.side : undefined) || 'unknown';
+            const toSide = edge.toSide || (typeof edge.to === 'object' ? (edge.to)?.side : undefined) || 'unknown';
             const endpoint = `${fromNode || 'unknown'}:${fromSide}->${toNode || 'unknown'}:${toSide}`;
 
             map.set(edgeId, { bezier: bezierSig, pathD, endpoint });
@@ -1780,9 +1789,9 @@ export class CanvasEventManager {
 
             let rendered = 0;
             for (const edge of edges) {
-                if (typeof (edge as any).render === 'function') {
+                if (typeof (edge).render === 'function') {
                     try {
-                        (edge as any).render();
+                        (edge).render();
                         rendered++;
                     } catch {
                         // 单边失败不阻断收敛
@@ -1790,8 +1799,8 @@ export class CanvasEventManager {
                 }
             }
 
-            if (typeof (canvas as any).requestUpdate === 'function') {
-                (canvas as any).requestUpdate();
+            if (typeof (canvas).requestUpdate === 'function') {
+                (canvas).requestUpdate();
             }
 
             await this.waitForEngineFrame(passInterval);
@@ -1863,12 +1872,12 @@ export class CanvasEventManager {
      * 仅触发 Canvas 引擎自身刷新，不手动 render 边，避免与引擎内部状态冲突。
      */
     private triggerCanvasEngineEdgeRefresh(canvas: CanvasLike, reason: string): void {
-        const c = canvas as any;
+        const c = canvas;
         if (typeof c.requestUpdate !== 'function') return;
 
         c.requestUpdate();
         requestAnimationFrame(() => {
-            c.requestUpdate();
+            c.requestUpdate?.();
             log(`[ViewportFix] EngineRefresh: reason=${reason}`);
         });
     }

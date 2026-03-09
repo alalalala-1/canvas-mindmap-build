@@ -39,12 +39,12 @@ describe('canvas-utils', () => {
 
 	describe('getEdgeFromNodeId', () => {
 		it('should extract fromNode when present', () => {
-			const edge = { id: 'edge-1', fromNode: 'source-node', toNode: 'target-node' } as any;
+			const edge = { id: 'edge-1', fromNode: 'source-node', toNode: 'target-node' };
 			expect(getEdgeFromNodeId(edge)).toBe('source-node');
 		});
 
 		it('should extract from as string', () => {
-			const edge = { id: 'edge-1', from: 'direct-source', to: 'direct-target' } as any;
+			const edge = { id: 'edge-1', from: 'direct-source', to: 'direct-target' };
 			expect(getEdgeFromNodeId(edge)).toBe('direct-source');
 		});
 
@@ -59,12 +59,12 @@ describe('canvas-utils', () => {
 
 	describe('getEdgeToNodeId', () => {
 		it('should extract toNode when present', () => {
-			const edge = { id: 'edge-1', fromNode: 'source-node', toNode: 'target-node' } as any;
+			const edge = { id: 'edge-1', fromNode: 'source-node', toNode: 'target-node' };
 			expect(getEdgeToNodeId(edge)).toBe('target-node');
 		});
 
 		it('should extract to as string', () => {
-			const edge = { id: 'edge-1', from: 'direct-source', to: 'direct-target' } as any;
+			const edge = { id: 'edge-1', from: 'direct-source', to: 'direct-target' };
 			expect(getEdgeToNodeId(edge)).toBe('direct-target');
 		});
 
@@ -75,9 +75,9 @@ describe('canvas-utils', () => {
 
 	describe('hasChildNodes', () => {
 		const edges = [
-			{ id: 'e1', fromNode: 'parent', toNode: 'child1' } as any,
-			{ id: 'e2', fromNode: 'parent', toNode: 'child2' } as any,
-			{ id: 'e3', fromNode: 'other', toNode: 'orphan' } as any,
+			{ id: 'e1', fromNode: 'parent', toNode: 'child1' },
+			{ id: 'e2', fromNode: 'parent', toNode: 'child2' },
+			{ id: 'e3', fromNode: 'other', toNode: 'orphan' },
 		];
 
 		it('should return true when node has children', () => {
@@ -105,7 +105,7 @@ describe('canvas-utils', () => {
 					{ id: 'e1', fromNode: 'node1', toNode: 'node2' },
 					{ id: 'e2', fromNode: 'node1', toNode: 'node3' },
 				],
-			} as any;
+			};
 
 			const roots = identifyRootNodes(canvasData);
 			expect(roots).toContain('node1');
@@ -117,14 +117,14 @@ describe('canvas-utils', () => {
 			const canvasData = {
 				nodes: [{ id: 'node1' }, { id: 'node2' }],
 				edges: [],
-			} as any;
+			};
 
 			const roots = identifyRootNodes(canvasData);
 			expect(roots).toHaveLength(2);
 		});
 
 		it('should handle empty canvas data', () => {
-			const canvasData = { nodes: [], edges: [] } as any;
+			const canvasData = { nodes: [], edges: [] };
 			const roots = identifyRootNodes(canvasData);
 			expect(roots).toHaveLength(0);
 		});

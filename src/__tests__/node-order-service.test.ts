@@ -62,6 +62,14 @@ function getChildOrder(data: CanvasDataLike): string[] {
     return (data.edges || []).map(edge => edge.toNode || '').filter(Boolean);
 }
 
+type NodeOrderServiceTestAccess = {
+    applySortSiblingsByMarkdownOrder: (canvasData: CanvasDataLike) => Promise<{
+        changedParents: number;
+        changedEdges: number;
+        updatedFromLinks: number;
+    }>;
+};
+
 describe('NodeOrderService.sortSiblingsByMarkdownOrder', () => {
     it('should sort siblings by actual markdown position even when one node lacks fromLink', async () => {
         const sourcePath = 'docs/source.md';
@@ -79,7 +87,7 @@ describe('NodeOrderService.sortSiblingsByMarkdownOrder', () => {
             edges: createEdges(['beta', 'alpha', 'gamma']),
         };
 
-        const summary = await (service as any).applySortSiblingsByMarkdownOrder(canvasData);
+        const summary = await (service as unknown as NodeOrderServiceTestAccess).applySortSiblingsByMarkdownOrder(canvasData);
 
         expect(summary.changedParents).toBe(1);
         expect(summary.changedEdges).toBeGreaterThan(0);
@@ -102,7 +110,7 @@ describe('NodeOrderService.sortSiblingsByMarkdownOrder', () => {
             edges: createEdges(['beta', 'unknown', 'alpha']),
         };
 
-        const summary = await (service as any).applySortSiblingsByMarkdownOrder(canvasData);
+        const summary = await (service as unknown as NodeOrderServiceTestAccess).applySortSiblingsByMarkdownOrder(canvasData);
 
         expect(summary.changedParents).toBe(1);
         expect(summary.changedEdges).toBeGreaterThan(0);
@@ -140,7 +148,7 @@ describe('NodeOrderService.sortSiblingsByMarkdownOrder', () => {
             edges: createEdges(['n2', 'n3', 'n1']),
         };
 
-        const summary = await (service as any).applySortSiblingsByMarkdownOrder(canvasData);
+        const summary = await (service as unknown as NodeOrderServiceTestAccess).applySortSiblingsByMarkdownOrder(canvasData);
 
         expect(summary.changedParents).toBe(1);
         expect(summary.changedEdges).toBeGreaterThan(0);

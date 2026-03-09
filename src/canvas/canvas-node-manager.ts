@@ -662,8 +662,10 @@ export class CanvasNodeManager {
         const modal = new EditTextModal(
             this.app,
             currentText,
-            async (newText: string) => {
-                if (newText && newText !== currentText) {
+            (newText: string) => {
+                if (!newText || newText === currentText) return;
+
+                void (async () => {
                     try {
                         const currentCanvasView = getCanvasView(this.app);
                         const canvasFilePath = currentCanvasView ? this.canvasFileService.getCanvasFilePathFromView(currentCanvasView) : undefined;
@@ -686,9 +688,9 @@ export class CanvasNodeManager {
 
                         this.refreshNodeAndButtons();
                     } catch (err) {
-                        log(`[Node] 更新文本失败: ${err}`);
+                        log(`[Node] 更新文本失败: ${String(err)}`);
                     }
-                }
+                })();
             }
         );
 
@@ -698,7 +700,7 @@ export class CanvasNodeManager {
     private refreshNodeAndButtons(): void {
         const canvasView = getCanvasView(this.app);
         if (canvasView && this.canvasManager) {
-            this.canvasManager.checkAndAddCollapseButtons();
+            void this.canvasManager.checkAndAddCollapseButtons();
         }
     }
 
@@ -886,7 +888,7 @@ export class CanvasNodeManager {
                 this.pushCollectorSample(collector, `error:${nodeId}`);
             }
             this.logBlurMeasureSummary('error');
-            log(`[Node] 失焦测量异常: ${err}`);
+            log(`[Node] 失焦测量异常: ${String(err)}`);
         }
     }
 
@@ -977,7 +979,7 @@ export class CanvasNodeManager {
      * 同步单个节点的滚动条显示状态：仅在“命中最大高度且内容溢出”时允许纵向滚动
      */
     private updateNodeScrollability(node: CanvasNodeLike): boolean {
-        const nodeEl = node.nodeEl as HTMLElement | undefined;
+        const nodeEl = node.nodeEl;
         if (!nodeEl) return false;
 
         // 虚拟化节点不做溢出测量，避免不必要的强制回流；待节点重新挂载后再同步
@@ -991,7 +993,7 @@ export class CanvasNodeManager {
         const scrollOwners = this.getScrollableOwnerElements(nodeEl);
 
         const nodeMeta = this.getNodeTextAndType(node);
-        const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement | null;
+        const contentEl = nodeEl.querySelector('.canvas-node-content');
         if (!contentEl || !nodeMeta.isTextLike || !nodeMeta.text) {
             nodeEl.classList.remove(CanvasNodeManager.SCROLLABLE_NODE_CLASS);
             let changed = before;
@@ -1240,8 +1242,8 @@ export class CanvasNodeManager {
                 ? Array.from(canvas.edges.values())
                 : Array.isArray(canvas.edges) ? canvas.edges : [];
             for (const edge of edgesArray) {
-                if (typeof (edge as any).render === 'function') {
-                    (edge as any).render();
+                if (typeof (edge).render === 'function') {
+                    (edge).render();
                 }
             }
         }

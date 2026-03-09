@@ -30,20 +30,20 @@ export class FromLinkRepairService {
     async repairFromLinksForCurrentCanvas(): Promise<void> {
         const canvasFilePath = this.canvasFileService.getCurrentCanvasFilePath();
         if (!canvasFilePath) {
-            new Notice('未找到当前 Canvas 文件，请先打开 Canvas');
+            new Notice('未找到当前 canvas 文件，请先打开 canvas');
             return;
         }
 
         const canvasData = await this.canvasFileService.readCanvasData(canvasFilePath);
         if (!canvasData) {
-            new Notice('读取 Canvas 文件失败');
+            new Notice('读取 canvas 文件失败');
             return;
         }
 
-        const allNodes = (canvasData.nodes || []) as CanvasNodeLike[];
+        const allNodes = (canvasData.nodes || []);
         const targetNodes = allNodes.filter((node) => this.isRepairableTextNode(node));
         if (targetNodes.length === 0) {
-            new Notice('没有需要修复 fromLink 的节点');
+            new Notice('没有需要修复 from link 的节点');
             return;
         }
 
@@ -585,7 +585,7 @@ export class FromLinkRepairService {
     }
 
     private trimTrailingPunctuation(text: string): string {
-        return (text || '').replace(/[：:。\.、，,；;！!？?…·]+$/u, '').trimEnd();
+        return (text || '').replace(/[：:。.、，,；;！!？?…·]+$/u, '').trimEnd();
     }
 
     private mapRawRangeFromStrippedIndex(

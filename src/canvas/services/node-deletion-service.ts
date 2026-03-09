@@ -158,7 +158,7 @@ export class NodeDeletionService {
     private refreshCollapseButtons(): void {
         log(`[Delete] refreshCollapseButtons 被调用, canvasManager=${this.canvasManager ? 'exists' : 'null'}`);
         if (this.canvasManager) {
-            this.canvasManager.checkAndAddCollapseButtons();
+            void this.canvasManager.checkAndAddCollapseButtons();
         } else {
             log(`[Delete] canvasManager 未设置，尝试从视图获取`);
             const canvasView = this.getCanvasView();
@@ -166,7 +166,7 @@ export class NodeDeletionService {
                 const viewWithPlugin = canvasView as ItemView & { plugin?: { canvasManager?: ICanvasManager } };
                 const canvasManager = viewWithPlugin.plugin?.canvasManager;
                 if (canvasManager) {
-                    canvasManager.checkAndAddCollapseButtons();
+                    void canvasManager.checkAndAddCollapseButtons();
                 }
             }
         }

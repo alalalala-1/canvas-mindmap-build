@@ -117,10 +117,10 @@ export class LayoutManager {
             window.clearTimeout(this.arrangeTimeoutId);
         }
 
-        this.arrangeTimeoutId = window.setTimeout(async () => {
+        this.arrangeTimeoutId = window.setTimeout(() => {
             this.arrangeTimeoutId = null;
             // [D] 在 performArrange 中使用记录的触发来源
-            await this.performArrange(false, source);
+            void this.performArrange(false, source);
         }, CONSTANTS.TIMING.ARRANGE_DEBOUNCE);
     }
 
@@ -347,8 +347,8 @@ export class LayoutManager {
                     edgePass2 = refreshResult.pass2;
                 }
 
-                if (typeof (pulseCanvas as any).requestUpdate === 'function') {
-                    (pulseCanvas as any).requestUpdate();
+                if (typeof (pulseCanvas).requestUpdate === 'function') {
+                    (pulseCanvas).requestUpdate();
                 }
 
                 const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
@@ -418,7 +418,7 @@ export class LayoutManager {
     private getVisibleNodeCount(allNodes: Map<string, CanvasNodeLike>): number {
         let visible = 0;
         for (const [, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (nodeEl && nodeEl.offsetHeight > 0) {
                 visible++;
             }
@@ -537,7 +537,7 @@ export class LayoutManager {
         // 采样前 5 个节点的位置和高度
         const samples = canvasData.nodes.slice(0, 5).map(n => {
             const node = allNodes.get(n.id ?? '');
-            const domH = (node as any)?.nodeEl?.offsetHeight ?? 0;
+            const domH = (node)?.nodeEl?.offsetHeight ?? 0;
             return `${n.id?.slice(0, 6)}:${n.x?.toFixed(0)},${n.y?.toFixed(0)},${n.height?.toFixed(0)},domH=${domH}`;
         });
         return `in:${samples.join('|')}`;
@@ -633,7 +633,7 @@ export class LayoutManager {
      * [C2] 获取节点的安全尺寸（带 fallback 防止 0 宽高）
      */
     private getSafeNodeSize(originalNode: CanvasNodeLike, currentData: Record<string, unknown>): { width: number; height: number } {
-        const nodeAny = originalNode as any;
+        const nodeAny = originalNode;
         
         // 来源1: currentData (内存中最新)
         let width = typeof currentData.width === 'number' && currentData.width > 0 ? currentData.width : 0;
@@ -671,7 +671,7 @@ export class LayoutManager {
         contextId?: string,
         layoutResult?: Map<string, { x: number; y: number; width?: number; height?: number }>
     ): Promise<boolean> {
-        const c = canvas as any;
+        const c = canvas;
         const canvasFile = this.app.vault.getAbstractFileByPath(canvasFilePath);
         if (!(canvasFile instanceof TFile)) {
             log(`[Layout] LeafReload: canvasFile not found, ctx=${contextId || 'none'}`);
@@ -680,12 +680,15 @@ export class LayoutManager {
 
         // 探测可用的 reload API（仅用于日志，不调用 setData/importData）
         const reloadApis = ['setData', 'importData', 'loadData', 'deserialize'];
-        const available = reloadApis.filter(m => typeof c[m] === 'function');
+        const reloadApiHost = c as Record<string, unknown>;
+        const available = reloadApis.filter(m => typeof reloadApiHost[m] === 'function');
         log(`[Layout] CanvasReloadAPIs(detected,unused): available=[${available.join(',')}], ctx=${contextId || 'none'}`);
 
         // 通过 leaf.openFile() 重新加载 canvas（与手动关闭再打开等效）
         try {
-            const leaf = (view as any)?.leaf;
+            const leaf = isRecord(view)
+                ? (view as { leaf?: { openFile?: (file: TFile, options?: { active?: boolean }) => Promise<void> } }).leaf
+                : undefined;
             if (leaf && typeof leaf.openFile === 'function') {
                 log(`[Layout] LeafReload: calling leaf.openFile, ctx=${contextId || 'none'}`);
                 await leaf.openFile(canvasFile, { active: false });
@@ -702,7 +705,7 @@ export class LayoutManager {
                 return true;
             }
         } catch (e) {
-            log(`[Layout] LeafReload error: ${e}, ctx=${contextId || 'none'}`);
+            log(`[Layout] LeafReload error: ${String(e)}, ctx=${contextId || 'none'}`);
         }
 
         // 降级：仅记录，不再强制修改视图缩放
@@ -719,7 +722,7 @@ export class LayoutManager {
         contextId?: string,
         layoutResult?: Map<string, { x: number; y: number; width?: number; height?: number }>
     ): void {
-        const c = canvas as any;
+        const c = canvas;
         if (typeof c.zoomToBbox !== 'function') {
             log(`[Layout] ZoomToBbox: API not available, ctx=${contextId || 'none'}`);
             return;
@@ -747,7 +750,7 @@ export class LayoutManager {
             c.zoomToBbox({ minX, minY, maxX, maxY });
             log(`[Layout] ZoomToBbox: bbox=${minX.toFixed(0)},${minY.toFixed(0)}->${maxX.toFixed(0)},${maxY.toFixed(0)}, nodes=${count}, ctx=${contextId || 'none'}`);
         } catch (e) {
-            log(`[Layout] ZoomToBbox error: ${e}, ctx=${contextId || 'none'}`);
+            log(`[Layout] ZoomToBbox error: ${String(e)}, ctx=${contextId || 'none'}`);
         }
     }
 
@@ -804,7 +807,7 @@ export class LayoutManager {
                 const currentHeight = layoutHeight || fallbackSize?.height || 60;
                 
                 // 统计尺寸来源
-                const nodeAny = originalNode as any;
+                const nodeAny = originalNode;
                 const dataWidthOk = typeof currentData.width === 'number' && currentData.width > 0;
                 const dataHeightOk = typeof currentData.height === 'number' && currentData.height > 0;
                 if (!dataWidthOk || !dataHeightOk) {
@@ -829,7 +832,7 @@ export class LayoutManager {
                 //
                 // 方案：只用 setData + bbox 更新内存数据，不触发任何 Canvas 引擎内部渲染链。
                 // 数据层正确后，由后续的 canvas.setData(fileData) 重加载触发完整干净渲染。
-                const nodeEl = (originalNode as any).nodeEl as HTMLElement | undefined;
+                const nodeEl = (originalNode).nodeEl;
                 const isVirtualized = !nodeEl || nodeEl.offsetHeight === 0;
                 if (isVirtualized) { virtualizedCount++; } else { visibleCount++; }
 
@@ -843,7 +846,7 @@ export class LayoutManager {
                 originalNode.setData(newData);
 
                 // 同步 bbox — 边的锚点计算依赖 bbox（setData 不一定自动更新 bbox）
-                (originalNode as any).bbox = {
+                (originalNode).bbox = {
                     minX: newPosition.x,
                     minY: newPosition.y,
                     maxX: newPosition.x + currentWidth,
@@ -1099,7 +1102,7 @@ export class LayoutManager {
             // arrange 结果总是正确的，数据应无条件写入文件。
             const inViewportRate = layoutData.visibilityStats?.inViewportRate ?? 1;
             const inViewportCount = layoutData.visibilityStats?.inViewportCount ?? 0;
-            log(`[Layout] FileWriteAlways: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}, ctx=${arrangeId}`);
+            log(`[Layout] FileWriteAlways: domVisibleRate=${(domVisibleRate * 100).toFixed(1)}%, domVisibleCount=${domVisibleCount}, inViewportRate=${(inViewportRate * 100).toFixed(1)}%, inViewportCount=${inViewportCount}, predictedChanged=${predictedChangedCount}, forceResetApplied=${forceResetApplied}, ctx=${arrangeId}`);
 
             const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 const canvasData = data;
@@ -1289,8 +1292,8 @@ export class LayoutManager {
                 )
                 : Promise.resolve();
 
-            if (typeof (freshCanvas as any).requestUpdate === 'function') {
-                (freshCanvas as any).requestUpdate();
+            if (typeof (freshCanvas).requestUpdate === 'function') {
+                (freshCanvas).requestUpdate();
             }
 
             await finalRequestUpdateWatchPromise;
@@ -1457,11 +1460,16 @@ export class LayoutManager {
 
             log(`[Layout] 开始重新应用浮动节点样式 for ${canvasFilePath}`);
             // 延迟一点时间确保 DOM 已渲染完毕
-            setTimeout(async () => {
+            setTimeout(() => {
                 if (this.floatingNodeService) {
                     log(`[Layout] 调用 floatingNodeService.reapplyAllFloatingStyles...`);
-                    await this.floatingNodeService.reapplyAllFloatingStyles(canvas);
-                    log(`[Layout] 完成重新应用浮动节点样式 for ${canvasFilePath}`);
+                    void this.floatingNodeService.reapplyAllFloatingStyles(canvas)
+                        .then(() => {
+                            log(`[Layout] 完成重新应用浮动节点样式 for ${canvasFilePath}`);
+                        })
+                        .catch((err) => {
+                            handleError(err, { context: 'Layout', message: '重新应用样式失败', showNotice: false });
+                        });
                 } else {
                     log(`[Layout] 警告: floatingNodeService 为 null，无法应用样式`);
                 }
@@ -1490,7 +1498,10 @@ export class LayoutManager {
         return isRecord(value) && typeof value.adjustAllTextNodeHeights === 'function';
     }
 
-    private canSetData(node: unknown): node is { setData: (data: Record<string, unknown>) => void; getData?: () => Record<string, unknown> } {
+    private canSetData(node: unknown): node is CanvasNodeLike & {
+        setData: (data: Record<string, unknown>) => void;
+        getData?: () => Record<string, unknown>;
+    } {
         return isRecord(node) && typeof node.setData === 'function';
     }
 
@@ -1601,12 +1612,12 @@ export class LayoutManager {
             let driftCount = 0;
             const lines: string[] = [];
             for (const [nodeId, node] of freshNodes) {
-                const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+                const nodeEl = (node).nodeEl;
                 const domH = nodeEl ? nodeEl.offsetHeight : 0;
                 if (domH <= 0) continue;
 
                 const fileH = fileMap.get(nodeId);
-                const memH = typeof (node as any).height === 'number' ? (node as any).height as number : -1;
+                const memH = typeof (node).height === 'number' ? (node).height : -1;
                 if (typeof fileH !== 'number' || memH < 0) continue;
 
                 sampled++;
@@ -1624,7 +1635,7 @@ export class LayoutManager {
                 logVerbose(`[Layout] HeightDriftSamples:\n${lines.join('\n')}`);
             }
         } catch (err) {
-            logVerbose(`[Layout] HeightDrift error: ${err}, ctx=${contextId || 'none'}`);
+            logVerbose(`[Layout] HeightDrift error: ${String(err)}, ctx=${contextId || 'none'}`);
         }
     }
 
@@ -1645,13 +1656,13 @@ export class LayoutManager {
         const corrections: Array<{ id: string; oldH: number; newH: number }> = [];
 
         for (const [nodeId, node] of freshNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || nodeEl.offsetHeight === 0) {
                 virt++;
                 continue;
             }
             const domH = nodeEl.offsetHeight;
-            const memH = typeof (node as any).height === 'number' ? (node as any).height as number : -1;
+            const memH = typeof (node).height === 'number' ? (node).height : -1;
             if (memH < 0 || Math.abs(domH - memH) <= 5) {
                 skipped++;
                 continue;
@@ -1664,10 +1675,10 @@ export class LayoutManager {
                 const getDataFn = node.getData;
                 const currentData: Record<string, unknown> = getDataFn ? getDataFn.call(node) : {};
                 node.setData({ ...currentData, height: domH });
-                const x = typeof (node as any).x === 'number' ? (node as any).x as number : 0;
-                const y = typeof (node as any).y === 'number' ? (node as any).y as number : 0;
-                const w = typeof (node as any).width === 'number' ? (node as any).width as number : 0;
-                (node as any).bbox = { minX: x, minY: y, maxX: x + w, maxY: y + domH };
+                const x = typeof (node).x === 'number' ? (node).x : 0;
+                const y = typeof (node).y === 'number' ? (node).y : 0;
+                const w = typeof (node).width === 'number' ? (node).width : 0;
+                (node).bbox = { minX: x, minY: y, maxX: x + w, maxY: y + domH };
                 corrections.push({ id: nodeId, oldH: memH, newH: domH });
                 calibrated++;
             } catch {

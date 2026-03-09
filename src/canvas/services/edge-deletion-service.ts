@@ -37,13 +37,13 @@ export class EdgeDeletionService {
         log('[Event] UI: 确认删除边');
         const canvasView = getCanvasView(this.app);
         if (!canvasView) {
-            new Notice('未找到活动的 Canvas');
+            new Notice('未找到活动的 canvas');
             return;
         }
 
         const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) {
-            new Notice('Canvas 未初始化');
+            new Notice('画布未初始化');
             return;
         }
 
@@ -143,7 +143,7 @@ export class EdgeDeletionService {
             setTimeout(() => {
                 if (this.canvasManager) {
                     log(`[EdgeDelete] 刷新折叠按钮`);
-                    this.canvasManager.checkAndAddCollapseButtons();
+                    void this.canvasManager.checkAndAddCollapseButtons();
                 }
             }, CONSTANTS.TIMING.STYLE_APPLY_DELAY);
         } catch (err) {

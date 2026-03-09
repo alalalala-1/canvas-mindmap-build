@@ -58,7 +58,7 @@ export interface OffsetCleanupOptions {
 
 export class EdgeGeometryService {
     private getCanvasScaleAbs(canvas: CanvasLike): number {
-        const zoomRaw = Number((canvas as any)?.zoom);
+        const zoomRaw = Number((canvas)?.zoom);
         if (Number.isFinite(zoomRaw)) {
             // Obsidian Canvas 的 zoom 常见为指数空间（例如 -1.5 => scale≈0.3536）
             const expScale = Math.pow(2, zoomRaw);
@@ -67,7 +67,7 @@ export class EdgeGeometryService {
             }
         }
 
-        const canvasEl = (canvas as any)?.canvasEl as HTMLElement | undefined;
+        const canvasEl = (canvas)?.canvasEl;
         const tf = canvasEl ? window.getComputedStyle(canvasEl).transform : 'none';
         if (tf && tf !== 'none') {
             const match = tf.match(/matrix\(([-\d.]+),\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+),/);
@@ -272,8 +272,8 @@ export class EdgeGeometryService {
         for (const sheet of Array.from(document.styleSheets)) {
             if (matched.length >= maxMatches) break;
             try {
-                const source = this.describeStyleSheet(sheet as CSSStyleSheet);
-                walkRules((sheet as CSSStyleSheet).cssRules, source);
+                const source = this.describeStyleSheet(sheet);
+                walkRules((sheet).cssRules, source);
             } catch {
                 // 跨域或受限样式表会抛异常，忽略即可。
             }
@@ -314,7 +314,7 @@ export class EdgeGeometryService {
         const lines: string[] = [];
 
         for (const [nodeId, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || nodeEl.offsetHeight === 0) continue;
 
             visible++;
@@ -350,7 +350,7 @@ export class EdgeGeometryService {
         };
 
         for (const [, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || nodeEl.offsetHeight === 0) continue;
 
             stats.visible++;
@@ -379,7 +379,7 @@ export class EdgeGeometryService {
 
     private getNodeBboxAnchor(node: CanvasNodeLike | undefined, side: string): { x: number; y: number } | null {
         if (!node) return null;
-        const bbox = (node as any).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
+        const bbox = (node).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
         if (!bbox) return null;
         return this.calculateAnchorPoint(bbox, side);
     }
@@ -425,7 +425,7 @@ export class EdgeGeometryService {
         const visibleRectMap = new Map<string, DOMRect>();
         const visiblePositionMap = new Map<string, string>();
         for (const [nodeId, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || nodeEl.offsetHeight === 0) continue;
             visibleRectMap.set(nodeId, nodeEl.getBoundingClientRect());
             visiblePositionMap.set(nodeId, window.getComputedStyle(nodeEl).position || 'unknown');
@@ -436,8 +436,8 @@ export class EdgeGeometryService {
         let bothVirtualizedEdges = 0;
 
         for (const edge of allEdges) {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) || this.toStringId((edge as any).fromNode) || '';
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) || this.toStringId((edge as any).toNode) || '';
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) || this.toStringId((edge).fromNode) || '';
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) || this.toStringId((edge).toNode) || '';
             if (!fromId || !toId) continue;
 
             const fromVisible = visibleRectMap.has(fromId);
@@ -477,8 +477,8 @@ export class EdgeGeometryService {
             : Number.POSITIVE_INFINITY;
 
         const candidateEdges = allEdges.filter((edge) => {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) || this.toStringId((edge as any).fromNode) || '';
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) || this.toStringId((edge as any).toNode) || '';
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) || this.toStringId((edge).fromNode) || '';
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) || this.toStringId((edge).toNode) || '';
             return fromId !== '' && toId !== '' && visibleRectMap.has(fromId) && visibleRectMap.has(toId);
         }).slice(0, normalizedLimit);
 
@@ -542,16 +542,16 @@ export class EdgeGeometryService {
         };
 
         for (const edge of candidateEdges) {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) || this.toStringId((edge as any).fromNode) || '';
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) || this.toStringId((edge as any).toNode) || '';
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) || this.toStringId((edge).fromNode) || '';
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) || this.toStringId((edge).toNode) || '';
             if (!fromId || !toId) continue;
 
             const fromRect = visibleRectMap.get(fromId);
             const toRect = visibleRectMap.get(toId);
             if (!fromRect || !toRect) continue;
 
-            const fromSide = this.toStringId((edge as any).fromSide) ?? (isRecord((edge as any).from) ? this.toStringId(((edge as any).from as Record<string, unknown>).side) : undefined) ?? 'right';
-            const toSide = this.toStringId((edge as any).toSide) ?? (isRecord((edge as any).to) ? this.toStringId(((edge as any).to as Record<string, unknown>).side) : undefined) ?? 'left';
+            const fromSide = this.toStringId((edge).fromSide) ?? (isRecord((edge).from) ? this.toStringId(((edge).from as Record<string, unknown>).side) : undefined) ?? 'right';
+            const toSide = this.toStringId((edge).toSide) ?? (isRecord((edge).to) ? this.toStringId(((edge).to as Record<string, unknown>).side) : undefined) ?? 'left';
 
             const fromAnchor = this.getAnchorPointForRect(fromRect, fromSide);
             const toAnchor = this.getAnchorPointForRect(toRect, toSide);
@@ -703,7 +703,7 @@ export class EdgeGeometryService {
     ): Promise<void> {
         const targets: Array<{ nodeId: string; nodeEl: HTMLElement }> = [];
         for (const [nodeId, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || nodeEl.offsetHeight === 0) continue;
             targets.push({ nodeId, nodeEl });
         }
@@ -780,7 +780,7 @@ export class EdgeGeometryService {
         }
 
         const getEdgeBezierSignature = (edge: CanvasEdgeLike): string => {
-            const bezier = (edge as any).bezier;
+            const bezier = (edge).bezier;
             if (!bezier) return 'no-bezier';
             const from = bezier.from ? `${bezier.from.x?.toFixed(1)},${bezier.from.y?.toFixed(1)}` : 'no-from';
             const to = bezier.to ? `${bezier.to.x?.toFixed(1)},${bezier.to.y?.toFixed(1)}` : 'no-to';
@@ -791,19 +791,19 @@ export class EdgeGeometryService {
 
         const getEdgePathD = (edge: CanvasEdgeLike): string => {
             // [修复A] 优先使用直接属性 pathEl，不存在则通过 lineGroupEl 查找第一个 <path>
-            let pathEl: Element | null = (edge as any).pathEl || null;
+            let pathEl: Element | null = (edge).pathEl || null;
             if (!pathEl) {
-                const lineGroupEl = (edge as any).lineGroupEl as Element | null;
+                const lineGroupEl = (edge).lineGroupEl as Element | null;
                 if (lineGroupEl) {
                     pathEl = lineGroupEl.querySelector('path') ?? null;
                 }
             }
             if (!pathEl) return 'no-pathEl';
-            return (pathEl as Element).getAttribute('d') || 'no-d';
+            return (pathEl).getAttribute('d') || 'no-d';
         };
 
         const getLineGroupState = (edge: CanvasEdgeLike): string => {
-            const lineGroupEl = (edge as any).lineGroupEl;
+            const lineGroupEl = (edge).lineGroupEl;
             if (!lineGroupEl) return 'no-lineGroup';
             const display = lineGroupEl.style.display || window.getComputedStyle(lineGroupEl).display;
             const transform = lineGroupEl.style.transform || 'none';
@@ -811,10 +811,10 @@ export class EdgeGeometryService {
         };
 
         const getEdgeEndpointSignature = (edge: CanvasEdgeLike): string => {
-            const fromNode = this.toStringId((edge as any).fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint((edge as any).from)) || 'unknown';
-            const toNode = this.toStringId((edge as any).toNode) || this.toStringId(getNodeIdFromEdgeEndpoint((edge as any).to)) || 'unknown';
-            const fromSide = this.toStringId((edge as any).fromSide) || (isRecord((edge as any).from) ? this.toStringId(((edge as any).from as Record<string, unknown>).side) : undefined) || 'unknown';
-            const toSide = this.toStringId((edge as any).toSide) || (isRecord((edge as any).to) ? this.toStringId(((edge as any).to as Record<string, unknown>).side) : undefined) || 'unknown';
+            const fromNode = this.toStringId((edge).fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint((edge).from)) || 'unknown';
+            const toNode = this.toStringId((edge).toNode) || this.toStringId(getNodeIdFromEdgeEndpoint((edge).to)) || 'unknown';
+            const fromSide = this.toStringId((edge).fromSide) || (isRecord((edge).from) ? this.toStringId(((edge).from as Record<string, unknown>).side) : undefined) || 'unknown';
+            const toSide = this.toStringId((edge).toSide) || (isRecord((edge).to) ? this.toStringId(((edge).to as Record<string, unknown>).side) : undefined) || 'unknown';
             return `${fromNode}:${fromSide}->${toNode}:${toSide}`;
         };
 
@@ -840,23 +840,23 @@ export class EdgeGeometryService {
         let lineGroupTransformChangedPass1 = 0;
 
         for (const edge of edges) {
-            if (typeof (edge as any).render === 'function') {
+            if (typeof (edge).render === 'function') {
                 try {
-                    (edge as any).render();
+                    (edge).render();
                     pass1Rendered++;
                 } catch {
                     // 忽略单条边渲染失败
                 }
             }
-            if ((edge as any).lineGroupEl) {
+            if ((edge).lineGroupEl) {
                 lineGroupConnected++;
             }
         }
 
         // Canvas 引擎会在 requestUpdate() 后自动刷新 SVG 路径（含7px stub + bezier曲线）
         // forceApplySVGPathFromBezier 已移除：该方法只写bezier部分，缺少stub，是不完整的
-        if (typeof (canvas as any).requestUpdate === 'function') {
-            (canvas as any).requestUpdate();
+        if (typeof (canvas).requestUpdate === 'function') {
+            (canvas).requestUpdate();
         }
 
         for (const edge of edges) {
@@ -900,8 +900,8 @@ export class EdgeGeometryService {
         // [修复] 检测低置信度场景（虚拟化节点多）— 墨水屏横/竖屏切换后，
         // 大量节点 DOM 尚未渲染，需要更长的等待时间让 Canvas 引擎完成虚拟化节点的几何更新
         const domVisibleCount = edges.slice(0, 20).filter(e => {
-            const fromId = getNodeIdFromEdgeEndpoint((e as any).from) || this.toStringId((e as any).fromNode);
-            const toId = getNodeIdFromEdgeEndpoint((e as any).to) || this.toStringId((e as any).toNode);
+            const fromId = getNodeIdFromEdgeEndpoint((e).from) || this.toStringId((e).fromNode);
+            const toId = getNodeIdFromEdgeEndpoint((e).to) || this.toStringId((e).toNode);
             return fromId && toId; // 仅做粗略检测，详情在 logEdgeGeometryDiagnostics
         }).length;
         const allSampleVirtualized = pass1Rendered > 0 && bezierChangedPass1 === 0 && lineGroupConnected === pass1Rendered;
@@ -930,9 +930,9 @@ export class EdgeGeometryService {
         const endpointChangedButPathUnchangedSamples: string[] = [];
 
         for (const edge of edges) {
-            if (typeof (edge as any).render === 'function') {
+            if (typeof (edge).render === 'function') {
                 try {
-                    (edge as any).render();
+                    (edge).render();
                     pass2Rendered++;
                 } catch {
                     // 忽略单条边渲染失败
@@ -942,8 +942,8 @@ export class EdgeGeometryService {
 
         // Canvas 引擎在 requestUpdate() 后会自动构造完整 SVG 路径（含7px stub + bezier曲线）
         // 不再手动写 SVG path（forceApplySVGPathFromBezier 已从 pass2 移除）
-        if (typeof (canvas as any).requestUpdate === 'function') {
-            (canvas as any).requestUpdate();
+        if (typeof (canvas).requestUpdate === 'function') {
+            (canvas).requestUpdate();
         }
 
         for (const edge of edges) {
@@ -1001,7 +1001,7 @@ export class EdgeGeometryService {
             const beforeSigs = new Map<string, string>();
             for (const edge of edges) {
                 if (edge.id) {
-                    const bezier = (edge as any).bezier;
+                    const bezier = (edge).bezier;
                     if (!bezier) {
                         beforeSigs.set(edge.id, 'no-bezier');
                         continue;
@@ -1013,9 +1013,9 @@ export class EdgeGeometryService {
             }
 
             for (const edge of edges) {
-                if (typeof (edge as any).render === 'function') {
+                if (typeof (edge).render === 'function') {
                     try {
-                        (edge as any).render();
+                        (edge).render();
                         pass3Rendered++;
                     } catch {
                         // 忽略单条边渲染失败
@@ -1025,7 +1025,7 @@ export class EdgeGeometryService {
 
             for (const edge of edges) {
                 if (!edge.id) continue;
-                const bezier = (edge as any).bezier;
+                const bezier = (edge).bezier;
                 if (!bezier) continue;
                 const from = bezier.from ? `${bezier.from.x?.toFixed(1)},${bezier.from.y?.toFixed(1)}` : 'no-from';
                 const to = bezier.to ? `${bezier.to.x?.toFixed(1)},${bezier.to.y?.toFixed(1)}` : 'no-to';
@@ -1034,8 +1034,8 @@ export class EdgeGeometryService {
             }
 
             // Canvas 引擎在 requestUpdate() 后自动渲染完整路径，不再手动写 SVG path
-            if (typeof (canvas as any).requestUpdate === 'function') {
-                (canvas as any).requestUpdate();
+            if (typeof (canvas).requestUpdate === 'function') {
+                (canvas).requestUpdate();
             }
 
             log(`[Layout] EdgeRefreshV3(pass3): rendered=${pass3Rendered}/${edges.length}, bezierChanged=${bezierChanged}, delay=${delay}ms, ctx=${contextId || 'none'}`);
@@ -1057,7 +1057,7 @@ export class EdgeGeometryService {
         const fileNodes: Map<string, Record<string, unknown>> = new Map();
 
         // 读取文件层数据
-        const fileData = (canvas as any)?.data ?? (canvas as any)?.fileData;
+        const fileData = (canvas)?.data ?? (canvas)?.fileData;
         if (Array.isArray(fileData?.nodes)) {
             for (const fn of fileData.nodes as Array<Record<string, unknown>>) {
                 if (typeof fn.id === 'string') fileNodes.set(fn.id, fn);
@@ -1065,8 +1065,8 @@ export class EdgeGeometryService {
         }
 
         // Canvas zoom / transform
-        const zoom = Number((canvas as any).zoom ?? 1);
-        const canvasEl = (canvas as any).canvasEl as HTMLElement | undefined;
+        const zoom = Number((canvas).zoom ?? 1);
+        const canvasEl = (canvas).canvasEl;
         const canvasTf = canvasEl?.style?.transform ?? 'n/a';
         const vpEl = document.querySelector('.canvas-wrapper') ?? document.querySelector('.canvas-viewport');
         const vpRect = vpEl?.getBoundingClientRect();
@@ -1076,7 +1076,7 @@ export class EdgeGeometryService {
         // 找视口可见节点（DOM offsetHeight > 0）
         const visibleNodes: Array<{ id: string; node: CanvasNodeLike }> = [];
         for (const [id, node] of allNodes) {
-            const el = (node as any).nodeEl as HTMLElement | undefined;
+            const el = (node).nodeEl;
             if (el && el.offsetHeight > 0) {
                 visibleNodes.push({ id, node });
             }
@@ -1087,14 +1087,14 @@ export class EdgeGeometryService {
         const lines: string[] = [];
 
         for (const { id, node } of Array.from(allNodes.values()).map((n) => ({ id: n.id ?? '', node: n }))) {
-            const el = (node as any).nodeEl as HTMLElement | undefined;
+            const el = (node).nodeEl;
             const dH = el ? el.offsetHeight : 0;
             if (dH === 0) domZero++;
 
             const fileNode = fileNodes.get(id);
             const fH = typeof fileNode?.height === 'number' ? fileNode.height : -1;
-            const mH = typeof (node as any).height === 'number' ? (node as any).height : -1;
-            const bbox = (node as any).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
+            const mH = typeof (node).height === 'number' ? (node).height : -1;
+            const bbox = (node).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
             const bH = bbox ? Math.round(bbox.maxY - bbox.minY) : -1;
 
             const hOk = fH === mH && (bH < 0 || Math.abs(bH - mH) <= 1) && (dH === 0 || Math.abs(dH - mH) <= 2);
@@ -1123,31 +1123,31 @@ export class EdgeGeometryService {
         // 边锚点误差（只检查连接到视口可见节点的边，最多10条）
         const visibleIds = new Set(visibleNodes.map((v) => v.id));
         const vpEdges = edges.filter((e) => {
-            const fId = getNodeIdFromEdgeEndpoint((e as any).from) ?? this.toStringId((e as any).fromNode);
-            const tId = getNodeIdFromEdgeEndpoint((e as any).to) ?? this.toStringId((e as any).toNode);
+            const fId = getNodeIdFromEdgeEndpoint((e).from) ?? this.toStringId((e).fromNode);
+            const tId = getNodeIdFromEdgeEndpoint((e).to) ?? this.toStringId((e).toNode);
             return (fId && visibleIds.has(fId)) || (tId && visibleIds.has(tId));
         }).slice(0, 10);
 
         const edgeLines: string[] = [];
         for (const edge of vpEdges) {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) ?? this.toStringId((edge as any).fromNode);
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) ?? this.toStringId((edge as any).toNode);
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode);
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) ?? this.toStringId((edge).toNode);
             if (!fromId || !toId) continue;
             const fromNode = allNodes.get(fromId);
             const toNode = allNodes.get(toId);
             if (!fromNode || !toNode) continue;
 
-            const fromSide = this.toStringId((edge as any).fromSide) ?? (isRecord((edge as any).from) ? this.toStringId(((edge as any).from as Record<string, unknown>).side) : undefined) ?? 'right';
-            const toSide = this.toStringId((edge as any).toSide) ?? (isRecord((edge as any).to) ? this.toStringId(((edge as any).to as Record<string, unknown>).side) : undefined) ?? 'left';
+            const fromSide = this.toStringId((edge).fromSide) ?? (isRecord((edge).from) ? this.toStringId(((edge).from as Record<string, unknown>).side) : undefined) ?? 'right';
+            const toSide = this.toStringId((edge).toSide) ?? (isRecord((edge).to) ? this.toStringId(((edge).to as Record<string, unknown>).side) : undefined) ?? 'left';
 
-            const fromBbox = (fromNode as any).bbox;
-            const toBbox = (toNode as any).bbox;
+            const fromBbox = (fromNode).bbox;
+            const toBbox = (toNode).bbox;
             if (!fromBbox || !toBbox) continue;
 
             const expFrom = this.calculateAnchorPoint(fromBbox, fromSide);
             const expTo = this.calculateAnchorPoint(toBbox, toSide);
 
-            const bezier = (edge as any).bezier;
+            const bezier = (edge).bezier;
             const bzrFrom = bezier?.from;
             const bzrTo = bezier?.to;
 
@@ -1192,7 +1192,7 @@ export class EdgeGeometryService {
         tag: string,
         contextId?: string
     ): void {
-        const c = canvas as any;
+        const c = canvas;
         const ctxStr = contextId ?? 'none';
 
         // [真值工具] 从 SVG path 提取“屏幕像素坐标”端点，不依赖手工 transform 推算
@@ -1249,7 +1249,7 @@ export class EdgeGeometryService {
         };
 
         // --- 1. Canvas 容器 transform 分析 ---
-        const canvasEl = c.canvasEl as HTMLElement | undefined;
+        const canvasEl = c.canvasEl;
         const canvasContainerEl = canvasEl?.parentElement;
         const containerRect = canvasContainerEl?.getBoundingClientRect();
         const canvasCssTransform = canvasEl?.style?.transform ?? 'n/a';
@@ -1288,13 +1288,13 @@ export class EdgeGeometryService {
         const nodeLines: string[] = [];
         const sampleNodes = visibleNodes.slice(0, 3);
         for (const { id, node } of sampleNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl) continue;
 
-            const dataX = typeof (node as any).x === 'number' ? (node as any).x : 0;
-            const dataY = typeof (node as any).y === 'number' ? (node as any).y : 0;
-            const dataW = typeof (node as any).width === 'number' ? (node as any).width : 0;
-            const dataH = typeof (node as any).height === 'number' ? (node as any).height : 0;
+            const dataX = typeof (node).x === 'number' ? (node).x : 0;
+            const dataY = typeof (node).y === 'number' ? (node).y : 0;
+            const dataW = typeof (node).width === 'number' ? (node).width : 0;
+            const dataH = typeof (node).height === 'number' ? (node).height : 0;
 
             // 实际屏幕位置
             const actualRect = nodeEl.getBoundingClientRect();
@@ -1336,20 +1336,20 @@ export class EdgeGeometryService {
         const edgeVisualLines: string[] = [];
         const visibleIds = new Set(visibleNodes.map(v => v.id));
         const sampleEdges = getEdgesFromCanvas(canvas).filter(e => {
-            const fId = getNodeIdFromEdgeEndpoint((e as any).from) ?? this.toStringId((e as any).fromNode) ?? '';
-            const tId = getNodeIdFromEdgeEndpoint((e as any).to) ?? this.toStringId((e as any).toNode) ?? '';
+            const fId = getNodeIdFromEdgeEndpoint((e).from) ?? this.toStringId((e).fromNode) ?? '';
+            const tId = getNodeIdFromEdgeEndpoint((e).to) ?? this.toStringId((e).toNode) ?? '';
             return fId !== '' && visibleIds.has(fId) && tId !== '' && visibleIds.has(tId);
         }).slice(0, 3);
 
         for (const edge of sampleEdges) {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) ?? this.toStringId((edge as any).fromNode) ?? '';
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) ?? this.toStringId((edge as any).toNode) ?? '';
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode) ?? '';
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) ?? this.toStringId((edge).toNode) ?? '';
             const fromNode = allNodes.get(fromId);
             const toNode = allNodes.get(toId);
 
             // Edge SVG 路径实际屏幕 BoundingRect
-            const lineGroupEl = (edge as any).lineGroupEl as HTMLElement | undefined;
-            const pathEl: Element | null = (edge as any).pathEl || lineGroupEl?.querySelector('path') || null;
+            const lineGroupEl = (edge).lineGroupEl;
+            const pathEl: Element | null = (edge).pathEl || lineGroupEl?.querySelector('path') || null;
             const pathRect = pathEl ? pathEl.getBoundingClientRect() : null;
             const pathCTM = pathEl instanceof SVGGraphicsElement ? pathEl.getScreenCTM() : null;
             const pathCTMStr = pathCTM
@@ -1361,14 +1361,14 @@ export class EdgeGeometryService {
             const pathEndScreen = getPathEndpointScreen(pathEl, false);
 
             // 从节点框算出 right edge 的实际屏幕 x/y（中心）
-            const fromNodeEl = fromNode ? (fromNode as any).nodeEl as HTMLElement | undefined : undefined;
-            const toNodeEl = toNode ? (toNode as any).nodeEl as HTMLElement | undefined : undefined;
+            const fromNodeEl = fromNode ? (fromNode).nodeEl : undefined;
+            const toNodeEl = toNode ? (toNode).nodeEl : undefined;
             const fromRect = fromNodeEl ? fromNodeEl.getBoundingClientRect() : null;
             const toRect = toNodeEl ? toNodeEl.getBoundingClientRect() : null;
 
             // 右侧锚点实际屏幕坐标
-            const fromSide = this.toStringId((edge as any).fromSide) ?? 'right';
-            const toSide = this.toStringId((edge as any).toSide) ?? 'left';
+            const fromSide = this.toStringId((edge).fromSide) ?? 'right';
+            const toSide = this.toStringId((edge).toSide) ?? 'left';
             const fromAnchorX = fromRect ? (fromSide === 'right' ? fromRect.right : fromRect.left) : null;
             const fromAnchorY = fromRect ? (fromRect.top + fromRect.bottom) / 2 : null;
             const toAnchorX = toRect ? (toSide === 'left' ? toRect.left : toRect.right) : null;
@@ -1435,7 +1435,7 @@ export class EdgeGeometryService {
                 : 'toRectCenter=n/a';
             const toBboxCenter = toNode
                 ? (() => {
-                    const b = (toNode as any).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
+                    const b = (toNode).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
                     if (!b) return 'toBboxCenter=n/a';
                     return `toBboxCenter=(${((b.minX + b.maxX) / 2).toFixed(1)},${((b.minY + b.maxY) / 2).toFixed(1)})`;
                 })()
@@ -1478,7 +1478,7 @@ export class EdgeGeometryService {
         const edges = this.getCanvasEdges(canvas);
 
         // 读取文件层数据（canvas 内部缓存的文件数据，不同于已写磁盘的数据）
-        const fileData = (canvas as any)?.data ?? (canvas as any)?.fileData;
+        const fileData = (canvas)?.data ?? (canvas)?.fileData;
         const fileNodeMap = new Map<string, Record<string, unknown>>();
         if (Array.isArray(fileData?.nodes)) {
             for (const fn of fileData.nodes as Array<Record<string, unknown>>) {
@@ -1491,11 +1491,11 @@ export class EdgeGeometryService {
         let matchCount = 0, mismatch5 = 0, mismatch20 = 0, virtCount = 0;
 
         for (const [id, node] of allNodes) {
-            const nodeEl = (node as any).nodeEl as HTMLElement | undefined;
+            const nodeEl = (node).nodeEl;
             const domH = nodeEl ? nodeEl.offsetHeight : 0;
             const domRectH = nodeEl ? Math.round(nodeEl.getBoundingClientRect().height) : 0;
-            const memH = typeof (node as any).height === 'number' ? (node as any).height : -1;
-            const bbox = (node as any).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
+            const memH = typeof (node).height === 'number' ? (node).height : -1;
+            const bbox = (node).bbox as { minX: number; minY: number; maxX: number; maxY: number } | undefined;
             const bboxH = bbox ? Math.round(bbox.maxY - bbox.minY) : -1;
             const fileNode = fileNodeMap.get(id);
             const fileH = typeof fileNode?.height === 'number' ? fileNode.height : -1;
@@ -1516,9 +1516,9 @@ export class EdgeGeometryService {
             }
 
             // 节点 DATA 层的 x/y
-            const dataX = typeof (node as any).x === 'number' ? (node as any).x : 0;
-            const dataY = typeof (node as any).y === 'number' ? (node as any).y : 0;
-            const dataW = typeof (node as any).width === 'number' ? (node as any).width : 0;
+            const dataX = typeof (node).x === 'number' ? (node).x : 0;
+            const dataY = typeof (node).y === 'number' ? (node).y : 0;
+            const dataW = typeof (node).width === 'number' ? (node).width : 0;
             const nodeTf = nodeEl?.style?.transform ?? 'n/a';
 
             const deltaStr = absDelta < 0 ? 'virt' : `${domH > memH ? '+' : ''}${domH - memH}`;
@@ -1543,25 +1543,25 @@ export class EdgeGeometryService {
         let edgeOk = 0, edgeWarn = 0, edgeBad = 0, edgeNoData = 0;
 
         for (const edge of edges) {
-            const fromId = getNodeIdFromEdgeEndpoint((edge as any).from) ?? this.toStringId((edge as any).fromNode) ?? '';
-            const toId = getNodeIdFromEdgeEndpoint((edge as any).to) ?? this.toStringId((edge as any).toNode) ?? '';
+            const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode) ?? '';
+            const toId = getNodeIdFromEdgeEndpoint((edge).to) ?? this.toStringId((edge).toNode) ?? '';
             const fromNode = allNodes.get(fromId);
             const toNode = allNodes.get(toId);
 
-            const bezier = (edge as any).bezier;
+            const bezier = (edge).bezier;
             const bzrFrom = bezier?.from;
             const bzrTo = bezier?.to;
 
-            const fromBbox = fromNode ? (fromNode as any).bbox : undefined;
-            const toBbox = toNode ? (toNode as any).bbox : undefined;
+            const fromBbox = fromNode ? (fromNode).bbox : undefined;
+            const toBbox = toNode ? (toNode).bbox : undefined;
 
             if (!fromBbox || !toBbox || !bzrFrom || !bzrTo) {
                 edgeNoData++;
                 continue;
             }
 
-            const fromSide = this.toStringId((edge as any).fromSide) ?? (isRecord((edge as any).from) ? this.toStringId(((edge as any).from as Record<string, unknown>).side) : undefined) ?? 'right';
-            const toSide = this.toStringId((edge as any).toSide) ?? (isRecord((edge as any).to) ? this.toStringId(((edge as any).to as Record<string, unknown>).side) : undefined) ?? 'left';
+            const fromSide = this.toStringId((edge).fromSide) ?? (isRecord((edge).from) ? this.toStringId(((edge).from as Record<string, unknown>).side) : undefined) ?? 'right';
+            const toSide = this.toStringId((edge).toSide) ?? (isRecord((edge).to) ? this.toStringId(((edge).to as Record<string, unknown>).side) : undefined) ?? 'left';
             const expFrom = this.calculateAnchorPoint(fromBbox, fromSide);
             const expTo = this.calculateAnchorPoint(toBbox, toSide);
             const errF = Math.hypot(bzrFrom.x - expFrom.x, bzrFrom.y - expFrom.y);
@@ -1574,10 +1574,10 @@ export class EdgeGeometryService {
 
             // 只记录 err > 8 的边（stub=7px 正常，>8 才异常）
             if (maxErr > 8) {
-                const fromMemH = fromNode && typeof (fromNode as any).height === 'number' ? (fromNode as any).height : -1;
-                const fromDomH = fromNode ? ((fromNode as any).nodeEl as HTMLElement | undefined)?.offsetHeight ?? 0 : -1;
-                const toMemH = toNode && typeof (toNode as any).height === 'number' ? (toNode as any).height : -1;
-                const toDomH = toNode ? ((toNode as any).nodeEl as HTMLElement | undefined)?.offsetHeight ?? 0 : -1;
+                const fromMemH = fromNode && typeof (fromNode).height === 'number' ? (fromNode).height : -1;
+                const fromDomH = fromNode ? ((fromNode).nodeEl)?.offsetHeight ?? 0 : -1;
+                const toMemH = toNode && typeof (toNode).height === 'number' ? (toNode).height : -1;
+                const toDomH = toNode ? ((toNode).nodeEl)?.offsetHeight ?? 0 : -1;
                 const bzrFStr = `(${bzrFrom.x.toFixed(0)},${bzrFrom.y.toFixed(0)})`;
                 const bzrTStr = `(${bzrTo.x.toFixed(0)},${bzrTo.y.toFixed(0)})`;
                 const expFStr = `(${expFrom.x.toFixed(0)},${expFrom.y.toFixed(0)})`;
@@ -1610,7 +1610,7 @@ export class EdgeGeometryService {
             return;
         }
 
-        const fileEdges = Array.isArray((canvas as any)?.fileData?.edges) ? ((canvas as any).fileData.edges as Array<Record<string, unknown>>) : [];
+        const fileEdges = Array.isArray((canvas)?.fileData?.edges) ? ((canvas).fileData.edges as Array<Record<string, unknown>>) : [];
         const fileEdgeMap = new Map<string, Record<string, unknown>>();
         for (const edge of fileEdges) {
             const edgeId = typeof edge.id === 'string' ? edge.id : undefined;
@@ -1643,14 +1643,14 @@ export class EdgeGeometryService {
         const samples: string[] = [];
         const endpointTruthSamples: string[] = [];
 
-        const zoomRaw = Number((canvas as any).zoom || 1);
+        const zoomRaw = Number((canvas).zoom || 1);
         const zoomScaleAbs = Number.isFinite(zoomRaw) && zoomRaw !== 0 ? Math.abs(zoomRaw) : 1;
         const vpEl = document.querySelector('.canvas-wrapper') || document.querySelector('.canvas-viewport');
         const vpRect = vpEl?.getBoundingClientRect();
 
         const getNodeDomState = (node: CanvasNodeLike): 'visible' | 'zero' | 'missing' => {
             if (!node) return 'missing';
-            const nodeEl = (node as any).nodeEl;
+            const nodeEl = (node).nodeEl;
             if (!nodeEl || !(nodeEl instanceof HTMLElement)) return 'missing';
 
             const display = window.getComputedStyle(nodeEl).display;
@@ -1663,7 +1663,7 @@ export class EdgeGeometryService {
 
         const isNodeInViewport = (node: CanvasNodeLike): boolean => {
             if (!vpRect) return true;
-            const nodeBbox = (node as any).bbox;
+            const nodeBbox = (node).bbox;
             if (!nodeBbox) return false;
             const centerX = (nodeBbox.minX + nodeBbox.maxX) / 2;
             const centerY = (nodeBbox.minY + nodeBbox.maxY) / 2;
@@ -1699,14 +1699,14 @@ export class EdgeGeometryService {
                 domMissingToCount++;
             }
 
-            const bezierFrom = (edge as any).bezier?.from;
-            const bezierTo = (edge as any).bezier?.to;
+            const bezierFrom = (edge).bezier?.from;
+            const bezierTo = (edge).bezier?.to;
 
-            const fromSide = edge.fromSide || (typeof edge.from === 'object' ? (edge.from as any).side : undefined) || 'right';
-            const toSide = edge.toSide || (typeof edge.to === 'object' ? (edge.to as any).side : undefined) || 'left';
+            const fromSide = edge.fromSide || (typeof edge.from === 'object' ? (edge.from).side : undefined) || 'right';
+            const toSide = edge.toSide || (typeof edge.to === 'object' ? (edge.to).side : undefined) || 'left';
 
-            const fromBbox = (fromNode as any).bbox;
-            const toBbox = (toNode as any).bbox;
+            const fromBbox = (fromNode).bbox;
+            const toBbox = (toNode).bbox;
 
             if (!fromBbox || !toBbox) continue;
 
@@ -1833,13 +1833,13 @@ export class EdgeGeometryService {
                 // 保留文件中 fromSide/toSide 作为权威值，避免因内存临时状态污染持久化数据。
                 const memFromNode = this.toStringId(memEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.from));
                 const memToNode = this.toStringId(memEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(memEdge.to));
-                const memFromSide = this.toStringId(memEdge.fromSide) || (typeof memEdge.from === 'object' ? (memEdge.from as any).side : undefined);
-                const memToSide = this.toStringId(memEdge.toSide) || (typeof memEdge.to === 'object' ? (memEdge.to as any).side : undefined);
+                const memFromSide = this.toStringId(memEdge.fromSide) || (typeof memEdge.from === 'object' ? (memEdge.from).side : undefined);
+                const memToSide = this.toStringId(memEdge.toSide) || (typeof memEdge.to === 'object' ? (memEdge.to).side : undefined);
 
                 const fileFromNode = this.toStringId(fileEdge.fromNode) || this.toStringId(getNodeIdFromEdgeEndpoint(fileEdge.from));
                 const fileToNode = this.toStringId(fileEdge.toNode) || this.toStringId(getNodeIdFromEdgeEndpoint(fileEdge.to));
-                const fileFromSide = this.toStringId(fileEdge.fromSide) || (typeof fileEdge.from === 'object' ? (fileEdge.from as any).side : undefined);
-                const fileToSide = this.toStringId(fileEdge.toSide) || (typeof fileEdge.to === 'object' ? (fileEdge.to as any).side : undefined);
+                const fileFromSide = this.toStringId(fileEdge.fromSide) || (typeof fileEdge.from === 'object' ? (fileEdge.from).side : undefined);
+                const fileToSide = this.toStringId(fileEdge.toSide) || (typeof fileEdge.to === 'object' ? (fileEdge.to).side : undefined);
 
                 // [修复B] 只在 fromNode/toNode 变化时更新（边的节点连接关系真的变了），Side 始终保留文件中的值
                 const nodeChanged = memFromNode !== fileFromNode || memToNode !== fileToNode;
@@ -1888,7 +1888,7 @@ export class EdgeGeometryService {
         let diagLogged = false;
 
         for (const edge of edges) {
-            const bezier = (edge as any).bezier;
+            const bezier = (edge).bezier;
             if (!bezier) continue;
 
             const from = bezier.from;
@@ -1896,11 +1896,11 @@ export class EdgeGeometryService {
             if (!from || !to) continue;
 
             // [修复A] 先尝试直接属性 pathEl，不存在则通过 lineGroupEl 查找子 <path>
-            let pathEl: Element | null = (edge as any).pathEl || null;
-            let interactiveEl: Element | null = (edge as any).interactiveEl || null;
+            let pathEl: Element | null = (edge).pathEl || null;
+            let interactiveEl: Element | null = (edge).interactiveEl || null;
 
             if (!pathEl) {
-                const lineGroupEl = (edge as any).lineGroupEl as Element | null;
+                const lineGroupEl = (edge).lineGroupEl as Element | null;
                 if (lineGroupEl) {
                     // Obsidian Canvas 的 edge SVG 结构：
                     // <g class="canvas-edge-line-group">
@@ -1922,27 +1922,29 @@ export class EdgeGeometryService {
                         const lgChildren = Array.from(lineGroupEl.children).map(c => `${c.tagName}.${c.className}`).join(';');
                         // [诊断] lineGroupEl 的 transform（决定坐标空间）
                         const lgTransformAttr = lineGroupEl.getAttribute('transform') || 'none-attr';
-                        const lgStyleTransform = (lineGroupEl as any).style?.transform || 'none-style';
+                        const lgStyleTransform = lineGroupEl instanceof HTMLElement
+                            ? (lineGroupEl.style.transform || 'none-style')
+                            : 'none-style';
                         // [诊断] 实际 path d 值的前80字符
-                        const actualD = pathEl ? (pathEl as Element).getAttribute('d')?.slice(0, 80) || 'no-d' : 'no-pathEl';
+                        const actualD = pathEl ? (pathEl).getAttribute('d')?.slice(0, 80) || 'no-d' : 'no-pathEl';
                         // [诊断] edge.path 的类型和方法
-                        const edgePath = (edge as any).path;
+                        const edgePath = (edge).path;
                         const edgePathType = typeof edgePath;
                         const edgePathKeys = edgePath && typeof edgePath === 'object' ? Object.keys(edgePath).slice(0, 10).join(',') : 'n/a';
                         const edgePathHasUpdate = edgePath && typeof edgePath.update === 'function';
                         const edgePathHasRender = edgePath && typeof edgePath.render === 'function';
                         logVerbose(`[Layout] EdgeStructDiag: id=${edge.id}, ` +
-                            `pathElDirect=${!!(edge as any).pathEl}, lineGroupChildren=[${lgChildren}], ` +
+                            `pathElDirect=${!!(edge).pathEl}, lineGroupChildren=[${lgChildren}], ` +
                             `lgTransformAttr=${lgTransformAttr}, lgStyleTransform=${lgStyleTransform.slice(0,40)}, ` +
                             `actualD=${actualD}, ` +
                             `edgePathType=${edgePathType}, edgePathKeys=[${edgePathKeys}], ` +
                             `edgePathHasUpdate=${edgePathHasUpdate}, edgePathHasRender=${edgePathHasRender}, ` +
                             `edgeKeys=[${edgeKeys.slice(0,120)}]`);
                         // [诊断] 如果 edge.path 有 render/update 方法，也调用一次看效果
-                        if (edgePathHasUpdate) {
+                        if (edgePathHasUpdate && edgePath?.update) {
                             try { edgePath.update(); } catch { /* ignore */ }
                             logVerbose(`[Layout] EdgePathUpdate: called edge.path.update() for id=${edge.id}`);
-                        } else if (edgePathHasRender) {
+                        } else if (edgePathHasRender && edgePath?.render) {
                             try { edgePath.render(); } catch { /* ignore */ }
                             logVerbose(`[Layout] EdgePathRender: called edge.path.render() for id=${edge.id}`);
                         }
@@ -1950,7 +1952,7 @@ export class EdgeGeometryService {
                 }
             }
 
-            if (!pathEl || typeof (pathEl as any).setAttribute !== 'function') continue;
+            if (!pathEl || typeof (pathEl).setAttribute !== 'function') continue;
 
             // 控制点若无则退化为端点（直线）
             const cp1 = bezier.cp1 || from;
@@ -1959,10 +1961,10 @@ export class EdgeGeometryService {
             const d = `M${from.x.toFixed(2)},${from.y.toFixed(2)} C${cp1.x.toFixed(2)},${cp1.y.toFixed(2)} ${cp2.x.toFixed(2)},${cp2.y.toFixed(2)} ${to.x.toFixed(2)},${to.y.toFixed(2)}`;
 
             try {
-                (pathEl as Element).setAttribute('d', d);
+                (pathEl).setAttribute('d', d);
                 // 同步更新可能存在的「点击区域」宽路径元素
-                if (interactiveEl && typeof (interactiveEl as any).setAttribute === 'function') {
-                    (interactiveEl as Element).setAttribute('d', d);
+                if (interactiveEl && typeof (interactiveEl).setAttribute === 'function') {
+                    (interactiveEl).setAttribute('d', d);
                 }
                 updatedCount++;
             } catch {
@@ -1973,9 +1975,9 @@ export class EdgeGeometryService {
     }
 
     private resolveEdgePathElement(edge: CanvasEdgeLike): Element | null {
-        let pathEl: Element | null = (edge as any).pathEl || null;
+        let pathEl: Element | null = (edge).pathEl || null;
         if (!pathEl) {
-            const lineGroupEl = (edge as any).lineGroupEl as Element | null;
+            const lineGroupEl = (edge).lineGroupEl as Element | null;
             if (lineGroupEl) {
                 pathEl = lineGroupEl.querySelector('path') ?? null;
             }

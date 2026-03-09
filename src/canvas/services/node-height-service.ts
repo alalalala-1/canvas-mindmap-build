@@ -1,6 +1,6 @@
-import { App, ItemView, Component, MarkdownRenderer } from 'obsidian';
+import { App, Component, MarkdownRenderer } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../../settings/types';
-import { CanvasNodeLike, CanvasLike, CanvasViewLike, HeightMeta } from '../types';
+import { CanvasNodeLike, CanvasViewLike, HeightMeta } from '../types';
 import { CanvasFileService } from './canvas-file-service';
 import { log } from '../../utils/logger';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
@@ -538,7 +538,7 @@ export class NodeHeightService {
                 return this.calculateTextNodeHeightComputed(content, fallbackWidth);
             }
 
-        } catch (e) {
+        } catch {
             // Silent fail
         }
         return 0;
@@ -565,13 +565,15 @@ export class NodeHeightService {
 
         const container = document.createElement('div');
         container.className = 'canvas-node-content markdown-preview-view';
-        container.style.position = 'fixed';
-        container.style.left = '-10000px';
-        container.style.top = '-10000px';
-        container.style.visibility = 'hidden';
-        container.style.pointerEvents = 'none';
-        container.style.zIndex = '-1';
-        container.style.boxSizing = 'border-box';
+        container.setCssProps({
+            position: 'fixed',
+            left: '-10000px',
+            top: '-10000px',
+            visibility: 'hidden',
+            'pointer-events': 'none',
+            'z-index': '-1',
+            'box-sizing': 'border-box'
+        });
 
         const sizer = document.createElement('div');
         sizer.className = 'markdown-preview-sizer markdown-preview-section';
@@ -586,7 +588,7 @@ export class NodeHeightService {
 
     private applyMeasurementStyles(nodeEl?: Element): void {
         if (!this.measurementContainerEl || !nodeEl) return;
-        const contentEl = nodeEl.querySelector('.canvas-node-content') as HTMLElement | null;
+        const contentEl = nodeEl.querySelector('.canvas-node-content');
         const sourceEl = contentEl || (nodeEl as HTMLElement);
         if (!sourceEl) return;
         const styles = window.getComputedStyle(sourceEl);
@@ -634,7 +636,7 @@ export class NodeHeightService {
             this.measurementContainerEl.style.width = `${width}px`;
             this.applyMeasurementStyles(nodeEl);
             this.measurementSizerEl.innerHTML = '';
-            await MarkdownRenderer.renderMarkdown(content, this.measurementSizerEl, '', this.measurementComponent);
+            await MarkdownRenderer.render(this.app, content, this.measurementSizerEl, '', this.measurementComponent);
 
             const rect = this.measurementSizerEl.getBoundingClientRect();
             const scrollHeight = this.measurementSizerEl.scrollHeight;
@@ -645,7 +647,7 @@ export class NodeHeightService {
             const result = Math.ceil(measuredHeight + paddingTop + paddingBottom);
 
             return result;
-        } catch (err) {
+        } catch {
             return 0;
         }
     }
@@ -660,9 +662,9 @@ export class NodeHeightService {
             return;
         }
 
-        const oldestKey = this.renderedHeightCache.keys().next().value;
-        if (oldestKey) {
-            this.renderedHeightCache.delete(oldestKey);
+        const oldestEntry = this.renderedHeightCache.keys().next();
+        if (!oldestEntry.done) {
+            this.renderedHeightCache.delete(oldestEntry.value);
         }
     }
 

@@ -535,7 +535,7 @@ export function getNodeFromCanvas(canvas: CanvasLike | null | undefined, nodeId:
     }
     
     if (typeof canvas.nodes === 'object') {
-        return (canvas.nodes as Record<string, CanvasNodeLike>)[nodeId] || null;
+        return (canvas.nodes)[nodeId] || null;
     }
     
     return null;
@@ -557,7 +557,7 @@ export function getNodesFromCanvas(canvas: CanvasLike | null | undefined): Canva
     }
     
     if (typeof canvas.nodes === 'object') {
-        return Object.values(canvas.nodes as Record<string, CanvasNodeLike>);
+        return Object.values(canvas.nodes);
     }
     
     return [];
@@ -767,8 +767,10 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
     const result = Math.max(60, Math.min(calculatedHeight, maxHeight));
     
     if (heightCache.size >= HEIGHT_CACHE_MAX_SIZE) {
-        const firstKey = heightCache.keys().next().value;
-        if (firstKey) heightCache.delete(firstKey);
+        const firstEntry = heightCache.keys().next();
+        if (!firstEntry.done) {
+            heightCache.delete(firstEntry.value);
+        }
     }
     heightCache.set(cacheKey, result);
     

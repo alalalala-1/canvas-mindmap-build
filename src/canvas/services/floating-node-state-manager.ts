@@ -2,6 +2,7 @@ import { App, TFile } from 'obsidian';
 import { log } from '../../utils/logger';
 import { CanvasFileService } from './canvas-file-service';
 import { FloatingNodeRecord, FloatingNodesMetadata, CanvasEdgeLike } from '../types';
+import { isRecord, getStringProp, getNumberProp, getBooleanProp } from '../../utils/type-guards';
 
 export class FloatingNodeStateManager {
     private app: App;
@@ -191,27 +192,63 @@ export class FloatingNodeStateManager {
             }
 
             const canvasContent = await this.app.vault.read(canvasFile);
-            const canvasData = JSON.parse(canvasContent);
+            const parsedCanvasData: unknown = JSON.parse(canvasContent);
+            if (!isRecord(parsedCanvasData)) {
+                return floatingNodes;
+            }
 
-            log(`[FloatingState] 读取文件: ${canvasFilePath}, nodes=${canvasData.nodes?.length || 0}, metadata=${canvasData.metadata ? 'exists' : 'null'}`);
+            const nodesValue = parsedCanvasData['nodes'];
+            const metadataValue = parsedCanvasData['metadata'];
+            const nodeCount = Array.isArray(nodesValue) ? nodesValue.length : 0;
+            const hasMetadata = isRecord(metadataValue);
+            log(`[FloatingState] 读取文件: ${canvasFilePath}, nodes=${nodeCount}, metadata=${hasMetadata ? 'exists' : 'null'}`);
 
             // 从节点 data 属性读取
-            if (canvasData.nodes && Array.isArray(canvasData.nodes)) {
-                for (const node of canvasData.nodes) {
-                    if (node.data?.isFloating) {
-                        log(`[FloatingState] 从 node.data 找到浮动节点: ${node.id}`);
-                        floatingNodes.set(node.id, {
-                            isFloating: true,
-                            originalParent: node.data.originalParent,
-                            floatingTimestamp: node.data.floatingTimestamp,
-                            isSubtreeNode: node.data.isSubtreeNode
-                        });
+            if (Array.isArray(nodesValue)) {
+                for (const rawNode of nodesValue) {
+                    if (!isRecord(rawNode)) continue;
+                    const nodeId = getStringProp(rawNode, 'id');
+                    if (!nodeId) continue;
+                    const dataValue = rawNode['data'];
+                    if (!isRecord(dataValue) || getBooleanProp(dataValue, 'isFloating') !== true) {
+                        continue;
                     }
+
+                    log(`[FloatingState] 从 node.data 找到浮动节点: ${nodeId}`);
+                    floatingNodes.set(nodeId, {
+                            isFloating: true,
+                            originalParent: getStringProp(dataValue, 'originalParent'),
+                            floatingTimestamp: getNumberProp(dataValue, 'floatingTimestamp'),
+                            isSubtreeNode: getBooleanProp(dataValue, 'isSubtreeNode')
+                        });
                 }
             }
 
             // 从 metadata 读取补充
-            const metadataFloatingNodes: FloatingNodesMetadata = canvasData.metadata?.floatingNodes || {};
+            let metadataFloatingNodes: FloatingNodesMetadata = {};
+            if (isRecord(metadataValue)) {
+                const floatingNodesValue = metadataValue['floatingNodes'];
+                if (isRecord(floatingNodesValue)) {
+                    const normalizedMetadata: FloatingNodesMetadata = {};
+                    for (const [nodeId, metaValue] of Object.entries(floatingNodesValue)) {
+                        if (typeof metaValue === 'boolean') {
+                            normalizedMetadata[nodeId] = metaValue;
+                            continue;
+                        }
+
+                        if (isRecord(metaValue)) {
+                            const isFloatingMeta = getBooleanProp(metaValue, 'isFloating');
+                            normalizedMetadata[nodeId] = {
+                                isFloating: isFloatingMeta ?? true,
+                                originalParent: getStringProp(metaValue, 'originalParent'),
+                                floatingTimestamp: getNumberProp(metaValue, 'floatingTimestamp'),
+                                isSubtreeNode: getBooleanProp(metaValue, 'isSubtreeNode')
+                            };
+                        }
+                    }
+                    metadataFloatingNodes = normalizedMetadata;
+                }
+            }
             const metaCount = Object.keys(metadataFloatingNodes).length;
             if (metaCount > 0) {
                 log(`[FloatingState] metadata.floatingNodes 数量: ${metaCount}`);
@@ -334,7 +371,7 @@ export class FloatingNodeStateManager {
                 log(`[FloatingState] 开始验证 ${floatingNodes.size} 个浮动节点...`);
             }
 
-            for (const [nodeId, data] of floatingNodes) {
+            for (const [nodeId] of floatingNodes) {
                 const incomingEdges = edges.filter((edge) => {
                     const toId = typeof edge.to === 'string' 
                         ? edge.to 

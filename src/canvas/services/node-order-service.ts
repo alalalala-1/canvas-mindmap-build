@@ -67,7 +67,7 @@ export class NodeOrderService {
     async sortSiblingsByMarkdownOrder(): Promise<boolean> {
         const selectedFilePath = this.getActiveCanvasFilePath();
         if (!selectedFilePath) {
-            new Notice('请先打开 Canvas 文件');
+            new Notice('请先打开 canvas 文件');
             return false;
         }
 
@@ -100,7 +100,7 @@ export class NodeOrderService {
 
         const selectedFilePath = this.getActiveCanvasFilePath();
         if (!selectedFilePath) {
-            new Notice('请先打开 Canvas 文件');
+            new Notice('请先打开 canvas 文件');
             return false;
         }
 
@@ -147,7 +147,7 @@ export class NodeOrderService {
 
         const selectedFilePath = this.getActiveCanvasFilePath();
         if (!selectedFilePath) {
-            new Notice('请先打开 Canvas 文件');
+            new Notice('请先打开 canvas 文件');
             return false;
         }
 
@@ -183,7 +183,7 @@ export class NodeOrderService {
 
         const selectedFilePath = this.getActiveCanvasFilePath();
         if (!selectedFilePath) {
-            new Notice('请先打开 Canvas 文件');
+            new Notice('请先打开 canvas 文件');
             return false;
         }
 
@@ -440,11 +440,16 @@ export class NodeOrderService {
         resolvedChildIds: Set<string>,
         sortedResolvedIds: string[]
     ): string[] {
-        const iterator = sortedResolvedIds[Symbol.iterator]();
+        let resolvedIndex = 0;
 
         return childOrder.map(childId => {
             if (!resolvedChildIds.has(childId)) return childId;
-            return iterator.next().value ?? childId;
+            const nextResolved = sortedResolvedIds[resolvedIndex];
+            if (nextResolved) {
+                resolvedIndex++;
+                return nextResolved;
+            }
+            return childId;
         });
     }
 
@@ -806,7 +811,7 @@ export class NodeOrderService {
     }
 
     private trimTrailingPunctuation(text: string): string {
-        return (text || '').replace(/[：:。\.、，,；;！!？?…·]+$/u, '').trimEnd();
+        return (text || '').replace(/[：:。.、，,；;！!？?…·]+$/u, '').trimEnd();
     }
 
     private mapRawRangeFromStrippedIndex(

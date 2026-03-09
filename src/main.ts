@@ -50,7 +50,7 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
         this.addCommand({
             id: 'repair-node-fromlinks',
-            name: 'Repair node fromLinks (修复节点源链接)',
+            name: 'Repair node from links (修复节点源链接)',
             callback: () => this.canvasManager.repairNodeFromLinks(),
         });
 

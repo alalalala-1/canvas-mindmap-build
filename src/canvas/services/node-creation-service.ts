@@ -50,7 +50,7 @@ export class NodeCreationService {
         }
 
         if (!canvasFilePath) {
-            new Notice('请在设置中配置 Canvas 文件路径或打开一个 Canvas 文件');
+            new Notice('请在设置中配置 canvas 文件路径或打开一个 canvas 文件');
             return;
         }
 
@@ -85,7 +85,7 @@ export class NodeCreationService {
                     fromSide: "right",
                     toSide: "left"
                 };
-                canvasData.edges!.push(newEdge);
+                canvasData.edges.push(newEdge);
                 
                 if (parentNode.id && this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id)) {
                     newNode.unknownData = {
@@ -99,13 +99,13 @@ export class NodeCreationService {
         });
 
         if (!success) {
-            new Notice('保存 Canvas 文件失败');
+            new Notice('保存 canvas 文件失败');
             return;
         }
 
         await this.postNodeCreation(newNodeId);
 
-        new Notice('节点已成功添加到 Canvas');
+        new Notice('节点已成功添加到 canvas');
     }
 
     private createNodeData(content: string, sourceFile: TFile, nodeId: string): CanvasNodeLike {
@@ -259,15 +259,15 @@ export class NodeCreationService {
 
             await this.canvasManager.checkAndAddCollapseButtons();
 
-            this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
+            void this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
             
             const manager = this.canvasManager;
             setTimeout(() => {
-                manager.adjustNodeHeightAfterRender(newNodeId);
+                void manager.adjustNodeHeightAfterRender(newNodeId);
             }, CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
 
             setTimeout(() => {
-                manager.adjustNodeHeightAfterRender(newNodeId);
+                void manager.adjustNodeHeightAfterRender(newNodeId);
             }, CONSTANTS.TIMING.HEIGHT_RECHECK_DELAY);
         }
     }

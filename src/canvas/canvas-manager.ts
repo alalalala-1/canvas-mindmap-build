@@ -206,9 +206,9 @@ export class CanvasManager implements ICanvasManager {
         }
         
         // 延迟执行，避免短时间内多次调用
-        this.buttonCheckTimeoutId = window.setTimeout(async () => {
+        this.buttonCheckTimeoutId = window.setTimeout(() => {
             this.buttonCheckTimeoutId = null;
-            await this.uiManager.checkAndAddCollapseButtons();
+            void this.uiManager.checkAndAddCollapseButtons();
         }, 50); // 50ms 防抖延迟
     }
 

@@ -1,6 +1,5 @@
 import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
-import { resolve } from 'path';
 
 export default defineConfig({
 	plugins: [tsconfigPaths()],
@@ -11,7 +10,7 @@ export default defineConfig({
 	},
 	resolve: {
 		alias: {
-			obsidian: resolve(__dirname, 'src/__mocks__/obsidian.ts'),
+			obsidian: new URL('./src/__mocks__/obsidian.ts', import.meta.url).pathname,
 		},
 	},
 });

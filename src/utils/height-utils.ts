@@ -130,8 +130,10 @@ export function estimateTextNodeHeight(content: string, width: number, maxHeight
     const result = Math.max(60, Math.min(calculatedHeight, maxHeight));
     
     if (heightCache.size >= HEIGHT_CACHE_MAX_SIZE) {
-        const firstKey = heightCache.keys().next().value;
-        if (firstKey) heightCache.delete(firstKey);
+        const firstEntry = heightCache.keys().next();
+        if (!firstEntry.done) {
+            heightCache.delete(firstEntry.value);
+        }
     }
     heightCache.set(cacheKey, result);
     

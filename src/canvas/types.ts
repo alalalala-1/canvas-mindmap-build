@@ -5,6 +5,167 @@
 import type { TFile } from 'obsidian';
 import type { CollapseStateManager } from '../state/collapse-state';
 
+// =========================================================================
+// Canvas 内部扩展类型（用于访问未公开的 Obsidian API）
+// =========================================================================
+
+/** 节点边界框 */
+export interface CanvasNodeBBox {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+}
+
+/** 贝塞尔曲线点 */
+export interface BezierPoint {
+    x: number;
+    y: number;
+}
+
+/** 边的贝塞尔曲线数据 */
+export interface EdgeBezier {
+    from: BezierPoint;
+    to: BezierPoint;
+    cp1?: BezierPoint;
+    cp2?: BezierPoint;
+}
+
+/** 边端点方向 */
+export type EdgeSide = 'top' | 'bottom' | 'left' | 'right';
+
+// =========================================================================
+// 类型守卫和辅助函数
+// =========================================================================
+
+/** 检查值是否为对象 */
+export function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+}
+
+/** 安全获取节点的 DOM 元素 */
+export function getNodeElement(node: unknown): HTMLElement | undefined {
+    if (!isObject(node)) return undefined;
+    const el = node.nodeEl;
+    return el instanceof HTMLElement ? el : undefined;
+}
+
+/** 安全获取节点的边界框 */
+export function getNodeBBox(node: unknown): CanvasNodeBBox | undefined {
+    if (!isObject(node)) return undefined;
+    const bbox = node.bbox;
+    if (!isObject(bbox)) return undefined;
+    const { minX, minY, maxX, maxY } = bbox;
+    if (typeof minX !== 'number' || typeof minY !== 'number' ||
+        typeof maxX !== 'number' || typeof maxY !== 'number') {
+        return undefined;
+    }
+    return { minX, minY, maxX, maxY };
+}
+
+/** 安全获取边的贝塞尔曲线数据 */
+export function getEdgeBezier(edge: unknown): EdgeBezier | undefined {
+    if (!isObject(edge)) return undefined;
+    const bezier = edge.bezier;
+    if (!isObject(bezier)) return undefined;
+    const from = bezier.from;
+    const to = bezier.to;
+    if (!isObject(from) || !isObject(to)) return undefined;
+    if (typeof from.x !== 'number' || typeof from.y !== 'number') return undefined;
+    if (typeof to.x !== 'number' || typeof to.y !== 'number') return undefined;
+
+    const result: EdgeBezier = {
+        from: { x: from.x, y: from.y },
+        to: { x: to.x, y: to.y }
+    };
+
+    if (isObject(bezier.cp1) && typeof bezier.cp1.x === 'number' && typeof bezier.cp1.y === 'number') {
+        result.cp1 = { x: bezier.cp1.x, y: bezier.cp1.y };
+    }
+    if (isObject(bezier.cp2) && typeof bezier.cp2.x === 'number' && typeof bezier.cp2.y === 'number') {
+        result.cp2 = { x: bezier.cp2.x, y: bezier.cp2.y };
+    }
+
+    return result;
+}
+
+/** 安全获取 Canvas 缩放比例 */
+export function getCanvasZoom(canvas: unknown): number {
+    if (!isObject(canvas)) return 1;
+    const zoom = canvas.zoom;
+    if (typeof zoom !== 'number' || !Number.isFinite(zoom)) return 1;
+    return zoom;
+}
+
+/** 安全获取 Canvas 容器元素 */
+export function getCanvasElement(canvas: unknown): HTMLElement | undefined {
+    if (!isObject(canvas)) return undefined;
+    const el = canvas.canvasEl;
+    return el instanceof HTMLElement ? el : undefined;
+}
+
+/** 安全获取边的路径元素 */
+export function getEdgePathElement(edge: unknown): SVGPathElement | null {
+    if (!isObject(edge)) return null;
+
+    // 直接属性
+    const pathEl = edge.pathEl;
+    if (pathEl instanceof SVGPathElement) return pathEl;
+
+    // 通过 lineGroupEl 查找
+    const lineGroupEl = edge.lineGroupEl;
+    if (lineGroupEl instanceof HTMLElement) {
+        const path = lineGroupEl.querySelector('path');
+        return path instanceof SVGPathElement ? path : null;
+    }
+
+    return null;
+}
+
+/** 安全获取边的 lineGroupEl */
+export function getEdgeLineGroupElement(edge: unknown): HTMLElement | undefined {
+    if (!isObject(edge)) return undefined;
+    const el = edge.lineGroupEl;
+    return el instanceof HTMLElement ? el : undefined;
+}
+
+/** 安全调用对象方法 */
+export function safeCall<T>(
+    obj: unknown,
+    method: string,
+    ...args: unknown[]
+): T | undefined {
+    if (!isObject(obj)) return undefined;
+    const fn = obj[method];
+    if (typeof fn !== 'function') return undefined;
+    try {
+        return fn.apply(obj, args) as T;
+    } catch {
+        return undefined;
+    }
+}
+
+/** 安全获取字符串属性 */
+export function getStringProp(obj: unknown, key: string): string | undefined {
+    if (!isObject(obj)) return undefined;
+    const val = obj[key];
+    return typeof val === 'string' ? val : undefined;
+}
+
+/** 安全获取数字属性 */
+export function getNumberProp(obj: unknown, key: string): number | undefined {
+    if (!isObject(obj)) return undefined;
+    const val = obj[key];
+    return typeof val === 'number' && Number.isFinite(val) ? val : undefined;
+}
+
+/** 安全获取布尔属性 */
+export function getBooleanProp(obj: unknown, key: string): boolean | undefined {
+    if (!isObject(obj)) return undefined;
+    const val = obj[key];
+    return typeof val === 'boolean' ? val : undefined;
+}
+
 
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): Promise<void>;
@@ -82,6 +243,10 @@ export type CanvasNodeLike = {
     prevY?: number;
     color?: string;
     unknownData?: Record<string, unknown>;
+    // 内部属性
+    bbox?: CanvasNodeBBox;
+    render?: () => void;
+    requestUpdate?: () => void;
 };
 
 export type EdgeEndpoint = {
@@ -105,7 +270,16 @@ export type CanvasEdgeLike = {
     label?: string;
     lineGroupEl?: HTMLElement;
     lineEndGroupEl?: HTMLElement;
-    bezier?: { from: { x: number; y: number }; to: { x: number; y: number } };
+    bezier?: EdgeBezier;
+    // 内部属性
+    pathEl?: SVGPathElement;
+    interactiveEl?: SVGPathElement;
+    path?: {
+        update?: () => void;
+        render?: () => void;
+    };
+    render?: () => void;
+    requestUpdate?: () => void;
 };
 
 export type CanvasDataLike = {
@@ -149,6 +323,14 @@ export type CanvasLike = {
     selectedNodes?: CanvasNodeLike[];
     selectedEdge?: CanvasEdgeLike;
     selectedEdges?: CanvasEdgeLike[];
+    // 内部属性
+    zoom?: number;
+    canvasEl?: HTMLElement;
+    data?: CanvasDataLike;
+    x?: number;
+    y?: number;
+    viewportEl?: HTMLElement;
+    zoomToBbox?: (bbox: CanvasNodeBBox) => void;
 };
 
 export type CanvasViewLike = {
