@@ -3,6 +3,11 @@
 > **中文**：为 Obsidian Canvas 打造的思维导图插件，从 Markdown 选区快速生成结构化画布。  
 > **English**: An Obsidian Canvas mindmap plugin that turns Markdown selections into structured canvas nodes.
 
+**Latest Release / 最新版本：`v2.5.0`**
+
+- Improved open-stabilization robustness to reduce false blocking in transient edge-gap states.
+- Continued fixes and polishing for reviewer-reported marketplace issues.
+
 ---
 
 ## ✨ Features / 功能亮点
@@ -93,6 +98,10 @@ Then enable it in **Settings → Community plugins**.
 ---
 
 ## 📝 Changelog / 更新日志
+
+### v2.5.0
+- 优化 open stabilization 判稳逻辑：对低置信度 edge-gap 阻塞信号进行降级，减少中间态误报导致的阻塞。
+- 持续修复并清理官方市场审核流程中反馈的问题，改进发布一致性（manifest / versions / release assets）。
 
 ### v2.0.0
 - 底层 bug 修复完成：滚动条、布局、链接、框高、分屏、横屏、竖屏等核心场景修复。
