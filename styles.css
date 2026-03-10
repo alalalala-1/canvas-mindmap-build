@@ -178,18 +178,15 @@
 }
 
 /* 触控/手写笔：选中态优先保证可拖拽，不抢手势 */
-.canvas-node.is-selected:not(.is-editing),
-.canvas-node.is-focused:not(.is-editing) {
+.canvas-node.cmb-touch-drag-armed:not(.is-editing) {
     touch-action: none !important;
     user-select: none !important;
     -webkit-user-select: none !important;
 }
 
-/* T13C 最新日志显示：second-tap 已不再命中 content，而是命中 .canvas-node-container。
-   因此在 selected / focused / drag-armed 状态下，让中间 container 层继续退让，
-   尽量把命中交还给外层 .canvas-node（Obsidian 原生拖拽更可能绑定在这一层）。 */
-.canvas-node.is-selected:not(.is-editing) .canvas-node-container,
-.canvas-node.is-focused:not(.is-editing) .canvas-node-container,
+/* 仅在短暂 drag-armed 窗口内退让 container/content/blocker。
+   selected/focused 不再长期劫持 pointer-events，避免破坏 Obsidian 原生
+   node-insert-event / placeholder / node-create 命中链。 */
 .canvas-node.cmb-touch-drag-armed:not(.is-editing) .canvas-node-container {
     pointer-events: none !important;
     touch-action: none !important;
@@ -207,26 +204,31 @@
     -webkit-user-select: none !important;
 }
 
-/* 选中/聚焦/drag-armed 时，让整个内容层（含根层自身，例如 markdown-embed）退让，
-   优先命中 blocker / 外层节点，避免 second-tap 仍打到 .canvas-node-content 根层或 mobile-tap 文本层 */
-.canvas-node.is-selected:not(.is-editing) .canvas-node-content,
-.canvas-node.is-focused:not(.is-editing) .canvas-node-content,
+/* drag-armed 时，让整个内容层（含根层自身，例如 markdown-embed）退让，
+   优先命中 blocker / 外层节点，避免拖拽准备窗口内仍打到内部文本层 */
 .canvas-node.cmb-touch-drag-armed:not(.is-editing) .canvas-node-content {
     pointer-events: none !important;
     touch-action: none !important;
 }
 
-.canvas-node.is-selected:not(.is-editing) .canvas-node-content > :not(.canvas-node-content-blocker),
-.canvas-node.is-focused:not(.is-editing) .canvas-node-content > :not(.canvas-node-content-blocker),
 .canvas-node.cmb-touch-drag-armed:not(.is-editing) .canvas-node-content > :not(.canvas-node-content-blocker) {
     pointer-events: none !important;
 }
 
-.canvas-node.is-selected:not(.is-editing) .canvas-node-content-blocker,
-.canvas-node.is-focused:not(.is-editing) .canvas-node-content-blocker,
 .canvas-node.cmb-touch-drag-armed:not(.is-editing) .canvas-node-content-blocker {
     pointer-events: auto !important;
     touch-action: none !important;
+}
+
+/* selected/focused 恢复 Obsidian 原生命中链，避免长期 blocker 劫持导致无法新增节点 */
+.canvas-node.is-selected:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-container,
+.canvas-node.is-focused:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-container,
+.canvas-node.is-selected:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-content,
+.canvas-node.is-focused:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-content,
+.canvas-node.is-selected:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-content-blocker,
+.canvas-node.is-focused:not(.is-editing):not(.cmb-touch-drag-armed) .canvas-node-content-blocker {
+    pointer-events: auto !important;
+    touch-action: auto !important;
 }
 
 /* 编辑态恢复文本交互 */
@@ -272,15 +274,35 @@
 }
 
 /* ============================================================================
-   Canvas连线样式 - 深蓝色2px（与节点边框颜色一致）
+   Canvas连线样式
+   - 可见线(display path) 保持深蓝色细线
+   - 交互线(interaction path) 必须保留更宽命中区，避免 touch/pen 难以选中
    ============================================================================ */
 
-.canvas-edge path,
+.canvas-edge .canvas-display-path,
+svg.canvas-edges .canvas-display-path,
 .canvas-edge line,
-svg.canvas-edges path,
 svg.canvas-edges line {
     stroke: #1e3a8a !important;
     stroke-width: 2px !important;
+}
+
+.canvas-edge .canvas-interaction-path,
+svg.canvas-edges .canvas-interaction-path {
+    stroke: transparent !important;
+    fill: none !important;
+    pointer-events: stroke !important;
+    stroke-width: 22px !important;
+    vector-effect: non-scaling-stroke !important;
+    stroke-linecap: round !important;
+    stroke-linejoin: round !important;
+}
+
+@media (pointer: coarse) {
+    .canvas-edge .canvas-interaction-path,
+    svg.canvas-edges .canvas-interaction-path {
+        stroke-width: 28px !important;
+    }
 }
 
 /* ============================================================================

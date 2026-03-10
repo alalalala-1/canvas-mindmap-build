@@ -315,6 +315,7 @@ export class LayoutManager {
     private async performOpenStabilization(source: string): Promise<void> {
         const baseSource = this.getOpenStabilizeBaseSource(source);
         const isResumeSource = this.isOpenStabilizeResumeSource(source);
+        const shouldReplayCollapseOnPulse = this.isOpenEntryStabilizeSource(source);
         if (!isResumeSource) {
             this.openStabilizeResumeCountByBaseSource.set(baseSource, 0);
         }
@@ -385,6 +386,21 @@ export class LayoutManager {
 
                 pulseCanvas = refreshedCanvas;
                 pulseNodes = refreshedNodes;
+
+                if (shouldReplayCollapseOnPulse) {
+                    const rehiddenOnOpenEntryPulse = this.reapplyCurrentCollapseVisibility(
+                        pulseCanvas,
+                        `open-entry-pulse#${pulseNo}:${source}`
+                    );
+                    if (rehiddenOnOpenEntryPulse > 0) {
+                        log(
+                            `[Layout] OpenEntryCollapseReplay: source=${source}, pulse=${pulseNo}, ` +
+                            `hidden=${rehiddenOnOpenEntryPulse}, ctx=${stabilizeId}`
+                        );
+                        await this.waitForNextFrame(24);
+                        pulseNodes = this.getCanvasNodes(pulseCanvas);
+                    }
+                }
 
                 const visibleNodeCount = this.getVisibleNodeCount(pulseNodes);
                 const lateVisibleNodes = Math.max(0, visibleNodeCount - prevVisibleNodeCount);
@@ -905,6 +921,7 @@ export class LayoutManager {
                 ? (view as { leaf?: { openFile?: (file: TFile, options?: { active?: boolean }) => Promise<void> } }).leaf
                 : undefined;
             if (leaf && typeof leaf.openFile === 'function') {
+                this.canvasManager?.markProgrammaticCanvasReload?.(canvasFilePath, 1800);
                 log(`[Layout] LeafReload: calling leaf.openFile, ctx=${contextId || 'none'}`);
                 await leaf.openFile(canvasFile, { active: false });
                 log(`[Layout] LeafReload: done, ctx=${contextId || 'none'}`);
@@ -926,6 +943,22 @@ export class LayoutManager {
         // 降级：仅记录，不再强制修改视图缩放
         log(`[Layout] LeafReload: fallback(no-zoom), ctx=${contextId || 'none'}`);
         return false;
+    }
+
+    public reapplyCurrentCollapseVisibility(canvas: CanvasLike, reason: string = 'runtime'): number {
+        const beforeVisible = this.getVisibleNodeCount(this.getCanvasNodes(canvas));
+        const result = this.collapseToggleService.reapplyCurrentCollapseVisibility(canvas, {
+            requestUpdate: true,
+            reason
+        });
+        const afterVisible = this.getVisibleNodeCount(this.getCanvasNodes(canvas));
+
+        log(
+            `[Layout] ReapplyCollapseVisibilityDone: hidden=${result.hiddenNodeCount}, nodes=${result.nodeCount}, ` +
+            `edges=${result.edgeCount}, visibleBefore=${beforeVisible}, visibleAfter=${afterVisible}, reason=${reason}`
+        );
+
+        return result.hiddenNodeCount;
     }
 
     /**
@@ -1380,6 +1413,11 @@ export class LayoutManager {
             const freshNodes = this.getCanvasNodes(freshCanvas);
             log(`[Layout] FreshRef: same=${freshCanvas === canvas}, nodes=${freshNodes.size}, ctx=${arrangeId}`);
 
+            const rehiddenAfterReload = this.reapplyCurrentCollapseVisibility(freshCanvas, `arrange-post-reload:${arrangeId}`);
+            if (rehiddenAfterReload > 0) {
+                await this.waitForNextFrame(40);
+            }
+
             // 诊断日志：reload后的节点/边几何与视觉层快照
             if (this.shouldLogVerboseCanvasDiagnostics()) {
                 this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
@@ -1509,6 +1547,14 @@ export class LayoutManager {
 
             if (typeof (freshCanvas).requestUpdate === 'function') {
                 (freshCanvas).requestUpdate();
+            }
+
+            const rehiddenAfterFinalUpdate = this.reapplyCurrentCollapseVisibility(
+                freshCanvas,
+                `arrange-post-final-request-update:${arrangeId}`
+            );
+            if (rehiddenAfterFinalUpdate > 0) {
+                await this.waitForNextFrame();
             }
 
             await finalRequestUpdateWatchPromise;

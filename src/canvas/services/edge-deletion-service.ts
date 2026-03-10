@@ -74,9 +74,9 @@ export class EdgeDeletionService {
             const nativeDeleteSuccess = this.triggerNativeEdgeDelete(edge, canvas);
             log(`[EdgeDelete] 原生删除: ${nativeDeleteSuccess ? '成功' : '失败，使用兜底方案'}`);
 
-            // 兜底方案：手动删除边数据
+            // 文件层删除：只有这里真实删到边，后续孤立/浮动后处理才允许继续
             let hasOtherIncomingEdges = false;
-            await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
+            const edgeRemovedFromFile = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 if (!canvasData.edges) return false;
 
                 const originalEdgeCount = canvasData.edges.length;
@@ -93,12 +93,24 @@ export class EdgeDeletionService {
                 return canvasData.edges.length !== originalEdgeCount;
             });
 
+            log(
+                `[EdgeDelete] 文件删边结果: removed=${edgeRemovedFromFile}, ` +
+                `hasOtherIncoming=${hasOtherIncomingEdges}, parent=${parentNodeId || 'none'}, child=${childNodeId || 'none'}`
+            );
+
             // 如果原生删除失败，手动清理 Canvas 内存中的边
             if (!nativeDeleteSuccess) {
                 this.manualCleanupEdge(edge, canvas, parentNodeId, childNodeId);
             }
 
-            if (childNodeId && parentNodeId && !hasOtherIncomingEdges) {
+            if (!edgeRemovedFromFile) {
+                log(
+                    `[EdgeDelete] 跳过孤立/浮动后处理: reason=edge-not-removed-from-file, ` +
+                    `parent=${parentNodeId || 'none'}, child=${childNodeId || 'none'}`
+                );
+            }
+
+            if (edgeRemovedFromFile && childNodeId && parentNodeId && !hasOtherIncomingEdges) {
                 log(`[EdgeDelete] 孤立: ${childNodeId}`);
 
                 const subtreeIds: string[] = [];
@@ -135,6 +147,11 @@ export class EdgeDeletionService {
                 // initialize() 会触发 reapplyAllFloatingStyles() 导致与其他操作冲突
                 this.floatingNodeService.removeFromRecentConnected(childNodeId);
                 await this.floatingNodeService.markNodeAsFloating(childNodeId, parentNodeId, canvasFilePath, subtreeIds, true);
+            } else if (edgeRemovedFromFile) {
+                log(
+                    `[EdgeDelete] 跳过浮动标记: removed=${edgeRemovedFromFile}, ` +
+                    `parent=${parentNodeId || 'none'}, child=${childNodeId || 'none'}, hasOtherIncoming=${hasOtherIncomingEdges}`
+                );
             }
 
             // 结束删除操作，恢复新边检测并更新边快照

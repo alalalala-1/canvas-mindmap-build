@@ -272,21 +272,25 @@ export class CanvasFileService {
         updateCallback: UpdateCallback
     ): Promise<boolean> {
         const canvasFile = this.app.vault.getAbstractFileByPath(filePath);
-        if (!(canvasFile instanceof TFile)) return false;
+        if (!(canvasFile instanceof TFile)) {
+            log(`[File] 原子修改失败: 找不到 canvas 文件 ${filePath}`);
+            return false;
+        }
 
         try {
+            log(`[File] 原子修改开始: ${filePath}`);
             const content = await this.app.vault.read(canvasFile);
             const data = JSON.parse(content) as CanvasDataLike;
 
             const shouldModify = await updateCallback(data);
-            log(`[File] 原子修改第一次检查: shouldModify=${shouldModify}`);
+            log(`[File] 原子修改第一次检查: file=${filePath}, shouldModify=${shouldModify}`);
 
             if (shouldModify) {
                 const latestContent = await this.app.vault.read(canvasFile);
                 const latestData = JSON.parse(latestContent) as CanvasDataLike;
                 
                 const finalShouldModify = await updateCallback(latestData);
-                log(`[File] 原子修改第二次检查: finalShouldModify=${finalShouldModify}`);
+                log(`[File] 原子修改第二次检查: file=${filePath}, finalShouldModify=${finalShouldModify}`);
                 
                 if (finalShouldModify) {
                     const output = JSON.stringify(latestData, null, 2);
@@ -294,10 +298,15 @@ export class CanvasFileService {
                     log(`[File] 原子修改成功: ${filePath}`);
                     return true;
                 }
+
+                log(`[File] 原子修改取消: file=${filePath}, reason=finalShouldModify=false`);
+                return false;
             }
+
+            log(`[File] 原子修改取消: file=${filePath}, reason=shouldModify=false`);
             return false;
         } catch (err) {
-            log('[File] 原子修改失败:', err);
+            log(`[File] 原子修改失败: ${filePath}`, err);
             return false;
         }
     }

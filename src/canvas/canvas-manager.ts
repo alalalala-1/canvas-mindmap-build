@@ -138,8 +138,64 @@ export class CanvasManager implements ICanvasManager {
         return await this.nodeManager.refreshTrustedHeightsForViewportTextNodes(limit, batchSize, options);
     }
 
+    public async refreshCanvasViewsForFile(filePath: string, reason: string = 'runtime'): Promise<number> {
+        const file = this.app.vault.getAbstractFileByPath(filePath);
+        if (!(file instanceof TFile)) {
+            log(`[CanvasManager] RefreshCanvasViewsForFileSkip: file not found, reason=${reason}, file=${filePath}`);
+            return 0;
+        }
+
+        const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
+        let refreshed = 0;
+
+        for (const leaf of canvasLeaves) {
+            const view = leaf.view as ItemView & {
+                canvas?: CanvasLike & { file?: TFile | { path?: string } };
+                file?: TFile | { path?: string };
+            };
+
+            const viewFilePath = view.canvas?.file?.path || view.file?.path || null;
+            if (viewFilePath !== filePath) continue;
+            if (typeof leaf.openFile !== 'function') {
+                log(`[CanvasManager] RefreshCanvasViewsForFileSkip: leaf has no openFile, reason=${reason}, file=${filePath}`);
+                continue;
+            }
+
+            this.markProgrammaticCanvasReload(filePath, 1800);
+            log(`[CanvasManager] RefreshCanvasViewLeaf: reason=${reason}, file=${filePath}`);
+            await leaf.openFile(file, { active: false });
+            refreshed++;
+        }
+
+        if (refreshed <= 0) {
+            log(`[CanvasManager] RefreshCanvasViewsForFileSkip: no matching canvas leaf, reason=${reason}, file=${filePath}`);
+            return 0;
+        }
+
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+
+        const activeCanvasView = this.getCanvasView() as CanvasViewLike | null;
+        const activeCanvasFilePath = activeCanvasView?.canvas?.file?.path || activeCanvasView?.file?.path || null;
+        if (activeCanvasFilePath === filePath) {
+            activeCanvasView?.canvas?.requestUpdate?.();
+        }
+
+        log(`[CanvasManager] RefreshCanvasViewsForFileDone: reason=${reason}, file=${filePath}, refreshed=${refreshed}`);
+        return refreshed;
+    }
+
     public syncScrollableStateForMountedNodes(): number {
         return this.nodeManager.syncScrollableStateForMountedNodes();
+    }
+
+    public reapplyCurrentCollapseVisibility(canvas?: CanvasLike, reason: string = 'runtime'): number {
+        const targetCanvas = canvas ?? (this.getCanvasView() as CanvasViewLike | null)?.canvas ?? null;
+        if (!targetCanvas) {
+            log(`[CanvasManager] ReapplyCollapseVisibilitySkip: no active canvas, reason=${reason}`);
+            return 0;
+        }
+
+        return this.layoutManager.reapplyCurrentCollapseVisibility(targetCanvas, reason);
     }
 
     public calculateTextNodeHeight(content: string, nodeEl?: Element, nodeWidthOverride?: number): number {

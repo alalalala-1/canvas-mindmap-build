@@ -106,7 +106,7 @@ export function getCurrentCanvasFilePath(app: App): string | undefined {
     return undefined;
 }
 
-export function findZoomToFitButton(targetEl: HTMLElement): HTMLElement | null {
+export function findZoomToFitButton(targetEl: Element): HTMLElement | null {
     const controlItem = targetEl.closest('.canvas-control-item');
     if (!(controlItem instanceof HTMLElement)) return null;
 
@@ -141,7 +141,7 @@ export function tryZoomToSelection(app: App, canvasView: ItemView, canvas: Canva
     return false;
 }
 
-export function findDeleteButton(targetEl: HTMLElement): HTMLElement | null {
+export function findDeleteButton(targetEl: Element): HTMLElement | null {
     let deleteBtn = targetEl.closest('[data-type="trash"]');
     if (deleteBtn instanceof HTMLElement) return deleteBtn;
 
@@ -158,12 +158,53 @@ export function findDeleteButton(targetEl: HTMLElement): HTMLElement | null {
     return isTrashButton ? deleteBtn : null;
 }
 
-export function findCanvasNodeElementFromTarget(targetEl: HTMLElement): HTMLElement | null {
+export function findCanvasNodeElementFromTarget(targetEl: Element): HTMLElement | null {
     let nodeEl = targetEl.closest('.canvas-node');
     if (!nodeEl && targetEl.classList.contains('canvas-node-content-blocker')) {
         nodeEl = targetEl.parentElement?.closest('.canvas-node') || null;
     }
     return nodeEl instanceof HTMLElement ? nodeEl : null;
+}
+
+function isCanvasEdgeInteractionTarget(targetEl: Element): boolean {
+    if (targetEl.closest('.canvas-edge, .canvas-edge-line-group, .canvas-edge-label, .canvas-edges, .canvas-interaction-path')) {
+        return true;
+    }
+
+    return targetEl instanceof SVGElement && !!targetEl.closest('svg.canvas-edges');
+}
+
+function isCanvasControlInteractionTarget(targetEl: Element): boolean {
+    return !!targetEl.closest('.canvas-control-item, .canvas-menu, .canvas-menu-container, .clickable-icon');
+}
+
+export function isCanvasNativeInsertGestureTarget(targetEl: Element): boolean {
+    if (targetEl.closest('.canvas-node-placeholder')) {
+        return true;
+    }
+
+    if (targetEl.closest('.canvas-node') || targetEl.closest('.cmb-collapse-button')) {
+        return false;
+    }
+
+    if (isCanvasEdgeInteractionTarget(targetEl) || isCanvasControlInteractionTarget(targetEl)) {
+        return false;
+    }
+
+    const insertWrapper = targetEl.closest('.canvas-wrapper.node-insert-event');
+    if (insertWrapper) {
+        return true;
+    }
+
+    return false;
+}
+
+export function shouldBypassCanvasNodeGestureTarget(targetEl: Element): boolean {
+    if (targetEl.closest('.cmb-collapse-button')) {
+        return true;
+    }
+
+    return isCanvasNativeInsertGestureTarget(targetEl);
 }
 
 export function getCanvasNodeByElement(canvas: CanvasLike, nodeEl: HTMLElement): CanvasNodeLike | null {
@@ -491,6 +532,20 @@ export function getEdgeId(edge: CanvasEdgeLike | null | undefined): string | nul
     return edge.id || null;
 }
 
+function isSameCanvasEdge(left: CanvasEdgeLike | null | undefined, right: CanvasEdgeLike | null | undefined): boolean {
+    if (!left || !right) return false;
+    if (left === right) return true;
+
+    const leftId = getEdgeId(left);
+    const rightId = getEdgeId(right);
+    if (leftId && rightId) {
+        return leftId === rightId;
+    }
+
+    return getEdgeFromNodeId(left) === getEdgeFromNodeId(right)
+        && getEdgeToNodeId(left) === getEdgeToNodeId(right);
+}
+
 export function buildEdgeIdSet(edges: CanvasEdgeLike[]): Set<string> {
     const ids = new Set<string>();
     for (const edge of edges) {
@@ -621,24 +676,27 @@ export function reloadCanvas(canvas: CanvasLike): void {
  * 兼容 selectedEdge 和 selectedEdges 两种属性
  */
 export function getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-    if (canvas.selectedEdge) {
+    const edgesInCanvas = getEdgesFromCanvas(canvas);
+    const isPresentInCanvas = (edge: CanvasEdgeLike | null | undefined): edge is CanvasEdgeLike => {
+        if (!edge) return false;
+        return edgesInCanvas.some(candidate => isSameCanvasEdge(candidate, edge));
+    };
+
+    if (isPresentInCanvas(canvas.selectedEdge)) {
         return canvas.selectedEdge;
     }
-    
+
     if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-        return canvas.selectedEdges[0] || null;
+        const selectedEdge = canvas.selectedEdges.find(edge => isPresentInCanvas(edge));
+        if (selectedEdge) return selectedEdge;
     }
     
     if (canvas.edges) {
-        const edgesArray = canvas.edges instanceof Map
-            ? Array.from(canvas.edges.values())
-            : Array.isArray(canvas.edges)
-                ? canvas.edges
-                : [];
-                
-        for (const edge of edgesArray) {
-            const isFocused = edge.lineGroupEl?.classList.contains('is-focused');
-            const isSelected = edge.lineGroupEl?.classList.contains('is-selected');
+        for (const edge of edgesInCanvas) {
+            const isFocused = edge.lineGroupEl?.classList.contains('is-focused')
+                || edge.lineEndGroupEl?.classList.contains('is-focused');
+            const isSelected = edge.lineGroupEl?.classList.contains('is-selected')
+                || edge.lineEndGroupEl?.classList.contains('is-selected');
             
             if (isFocused || isSelected) {
                 return edge;
@@ -647,6 +705,53 @@ export function getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
     }
     
     return null;
+}
+
+export function clearCanvasEdgeSelection(canvas: CanvasLike): {
+    cleared: boolean;
+    clearedEdgeIds: string[];
+    domClearedCount: number;
+} {
+    const clearedEdgeIds = new Set<string>();
+    let domClearedCount = 0;
+
+    const rememberEdge = (edge: CanvasEdgeLike | null | undefined) => {
+        const edgeId = getEdgeId(edge);
+        if (edgeId) {
+            clearedEdgeIds.add(edgeId);
+        }
+    };
+
+    rememberEdge(canvas.selectedEdge);
+    for (const edge of canvas.selectedEdges || []) {
+        rememberEdge(edge);
+    }
+
+    delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike }).selectedEdge;
+    (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+
+    for (const edge of getEdgesFromCanvas(canvas)) {
+        const hadSelectedClass = !!(
+            edge.lineGroupEl?.classList.contains('is-selected')
+            || edge.lineGroupEl?.classList.contains('is-focused')
+            || edge.lineEndGroupEl?.classList.contains('is-selected')
+            || edge.lineEndGroupEl?.classList.contains('is-focused')
+        );
+
+        edge.lineGroupEl?.classList.remove('is-selected', 'is-focused');
+        edge.lineEndGroupEl?.classList.remove('is-selected', 'is-focused');
+
+        if (hadSelectedClass) {
+            domClearedCount += 1;
+            rememberEdge(edge);
+        }
+    }
+
+    return {
+        cleared: clearedEdgeIds.size > 0 || domClearedCount > 0,
+        clearedEdgeIds: Array.from(clearedEdgeIds),
+        domClearedCount
+    };
 }
 
 /**

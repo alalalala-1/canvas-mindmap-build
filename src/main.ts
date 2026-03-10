@@ -10,6 +10,8 @@ import { CSS_VARS } from './constants';
 export default class CanvasMindmapBuildPlugin extends Plugin {
     settings: CanvasMindmapBuildSettings;
     lastClickedNodeId: string | null = null;
+    lastClickedCanvasFilePath: string | null = null;
+    lastNavigationSourceNodeId: string | null = null;
     private collapseStateManager: CollapseStateManager = new CollapseStateManager();
     private canvasManager: CanvasManager;
 
@@ -34,8 +36,14 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             name: 'Add to canvas mindmap',
             callback: async () => {
                 const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
-                if (mdView && mdView.editor.getSelection()) {
-                    await this.canvasManager.addNodeToCanvas(mdView.editor.getSelection(), mdView.file);
+                const selection = mdView?.editor.getSelection() || '';
+                log(
+                    `[Command] AddToCanvasMindmap: markdown=${!!mdView}, selectionLength=${selection.length}, ` +
+                    `sourceFile=${mdView?.file?.path || 'none'}, lastClickedNodeId=${this.lastClickedNodeId || 'none'}, ` +
+                    `lastClickedCanvasFilePath=${this.lastClickedCanvasFilePath || 'none'}`
+                );
+                if (mdView && selection) {
+                    await this.canvasManager.addNodeToCanvas(selection, mdView.file);
                 } else {
                     new Notice('请在 Markdown 编辑器中选择文本');
                 }
@@ -105,6 +113,12 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             // 之前用 this.settings = mergedSettings 会断开CanvasManager等模块的引用
             Object.assign(this.settings, mergedSettings);
             this.lastClickedNodeId = typeof dataObj.lastClickedNodeId === 'string' ? dataObj.lastClickedNodeId : null;
+            this.lastClickedCanvasFilePath = typeof dataObj.lastClickedCanvasFilePath === 'string'
+                ? dataObj.lastClickedCanvasFilePath
+                : null;
+            this.lastNavigationSourceNodeId = typeof dataObj.lastNavigationSourceNodeId === 'string'
+                ? dataObj.lastNavigationSourceNodeId
+                : null;
 
             updateLoggerConfig(this.settings);
             log('[Settings] 加载成功');

@@ -12,6 +12,7 @@ export class DeleteConfirmationModal extends Modal {
     constructor(app: App, hasChildren: boolean = true) {
         super(app);
         this.hasChildren = hasChildren;
+        this.shouldRestoreSelection = false;
         this.titleEl.setText('确认删除节点');
 
         this.modalEl.addClass('canvas-mindmap-delete-modal');
@@ -20,6 +21,7 @@ export class DeleteConfirmationModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
+        contentEl.empty();
         
         // 添加说明文本的样式
         const descriptionEl = contentEl.createEl('p', {

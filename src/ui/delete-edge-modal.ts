@@ -10,6 +10,7 @@ export class DeleteEdgeConfirmationModal extends Modal {
 
     constructor(app: App) {
         super(app);
+        this.shouldRestoreSelection = false;
         this.titleEl.setText('确认删除连线');
         this.modalEl.addClass('canvas-mindmap-delete-edge-modal');
         this.modalEl.addClass('canvas-mindmap-delete-edge-modal--simple');
@@ -17,6 +18,7 @@ export class DeleteEdgeConfirmationModal extends Modal {
 
     onOpen() {
         const { contentEl } = this;
+        contentEl.empty();
         
         // 添加说明文本
         const descriptionEl = contentEl.createEl('p', {

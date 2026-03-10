@@ -181,6 +181,7 @@ export interface ICanvasManager {
     refreshTrustedHeightsForVisibleTextNodes(limit?: number, options?: { suppressRequestSave?: boolean }): Promise<number>;
     refreshTrustedHeightsForViewportTextNodes(limit?: number, batchSize?: number, options?: { suppressRequestSave?: boolean }): Promise<number>;
     syncScrollableStateForMountedNodes(): number;
+    refreshCanvasViewsForFile?(filePath: string, reason?: string): Promise<number>;
     // 删除操作标志控制（防止删边后被误判为新边）
     startDeletingOperation(): void;
     endDeletingOperation(canvas: CanvasLike | null): void;
@@ -357,6 +358,8 @@ export type EditorWithSelection = {
 
 export type PluginWithLastClicked = {
     lastClickedNodeId?: string;
+    lastClickedCanvasFilePath?: string;
+    lastNavigationSourceNodeId?: string;
 };
 
 export type CanvasManagerLike = {

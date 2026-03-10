@@ -150,6 +150,38 @@ export class CollapseToggleService {
         this.applyVisibilityToEdges(edges, allHiddenNodeIds);
     }
 
+    reapplyCurrentCollapseVisibility(
+        canvas: CanvasLike,
+        options?: { requestUpdate?: boolean; reason?: string }
+    ): { hiddenNodeCount: number; nodeCount: number; edgeCount: number } {
+        const nodes = this.getCanvasNodes(canvas);
+        const runtimeEdges = this.getCanvasEdges(canvas);
+        const relationEdges = Array.isArray(canvas.fileData?.edges) && canvas.fileData.edges.length > 0
+            ? canvas.fileData.edges
+            : runtimeEdges;
+        const domEdges = runtimeEdges.length > 0 ? runtimeEdges : relationEdges;
+        const canvasData = (canvas.fileData || canvas) as CanvasDataLike;
+        const hiddenNodeIds = this.collectHiddenNodeIds(nodes, relationEdges, canvasData);
+
+        this.applyVisibilityToNodes(nodes, hiddenNodeIds);
+        this.applyVisibilityToEdges(domEdges, hiddenNodeIds);
+
+        if (options?.requestUpdate !== false && typeof canvas.requestUpdate === 'function') {
+            canvas.requestUpdate();
+        }
+
+        log(
+            `[Layout] ReapplyCollapseVisibility: hidden=${hiddenNodeIds.size}, nodes=${nodes.size}, ` +
+            `edges=${domEdges.length}, reason=${options?.reason || 'unknown'}`
+        );
+
+        return {
+            hiddenNodeCount: hiddenNodeIds.size,
+            nodeCount: nodes.size,
+            edgeCount: domEdges.length
+        };
+    }
+
     async autoArrangeAfterToggle(nodeId: string, canvas: CanvasLike, isCollapsing: boolean = true) {
         if (!canvas) return;
 
