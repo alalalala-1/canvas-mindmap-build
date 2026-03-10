@@ -96,7 +96,7 @@ export class CanvasManager implements ICanvasManager {
      * @param source 触发来源标识
      */
     async arrangeCanvas(source: string = 'manual') {
-        await this.layoutManager.arrangeCanvas(source);
+        this.layoutManager.arrangeCanvas(source);
     }
 
     /**
@@ -110,12 +110,16 @@ export class CanvasManager implements ICanvasManager {
         await this.nodeManager.addNodeToCanvas(content, sourceFile);
     }
 
+    public scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {
+        this.nodeManager.scheduleNodeHeightAdjustment(nodeId, delayMs, reason);
+    }
+
     public async adjustNodeHeightAfterRender(nodeId: string) {
         await this.nodeManager.adjustNodeHeightAfterRender(nodeId);
     }
 
     public async measureAndPersistTrustedHeight(nodeId: string, options?: { suppressRequestSave?: boolean }) {
-        await this.nodeManager.measureAndPersistTrustedHeight(nodeId, options);
+        this.nodeManager.measureAndPersistTrustedHeight(nodeId, options);
     }
 
     public async validateAndRepairNodeHeights(file: TFile) {
@@ -279,7 +283,7 @@ export class CanvasManager implements ICanvasManager {
     }
 
     public async syncHiddenChildrenOnDrag(node: CanvasNodeLike) {
-        await this.layoutManager.syncHiddenChildrenOnDrag(node);
+        this.layoutManager.syncHiddenChildrenOnDrag(node);
     }
 
     public scheduleButtonCheck(): void {
@@ -327,6 +331,7 @@ export class CanvasManager implements ICanvasManager {
     unload() {
         this.eventManager.unload();
         this.uiManager.unload();
+        this.nodeManager.cleanup();
         // 清理浮动节点服务的资源
         this.floatingNodeService.cleanup();
     }

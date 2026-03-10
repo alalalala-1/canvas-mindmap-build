@@ -112,7 +112,7 @@ export class CanvasEventManager {
     private currentCanvasFilePath: string | null = null;
     private lastEdgeIds: Set<string> = new Set();
     private canvasFileModifyTimeoutId: number | null = null;
-    private focusLostDebounceId: number | null = null;
+    private focusLostDebounceByNodeId: Map<string, number> = new Map();
     private lastFocusedNodeId: string | null = null;
     private isDeleting: boolean = false;
     private lastFromLinkNavAt: number = 0;
@@ -381,7 +381,7 @@ export class CanvasEventManager {
             
             const zoomToFitBtn = findZoomToFitButton(targetEl);
             if (zoomToFitBtn) {
-                const handled = await this.handleZoomToFitVisibleNodes();
+                const handled = this.handleZoomToFitVisibleNodes();
                 if (handled) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -843,6 +843,52 @@ export class CanvasEventManager {
         );
     }
 
+    private getCurrentCanvasInteractionNode(canvasView?: ItemView | null): CanvasNodeLike | null {
+        const targetCanvasView = canvasView ?? getCanvasView(this.app);
+        const canvas = targetCanvasView ? this.getCanvasFromView(targetCanvasView) : null;
+        if (!canvas) return null;
+        return getSelectedNodeFromCanvas(canvas);
+    }
+
+    private cancelFocusLostMeasurement(nodeId?: string | null): void {
+        if (!nodeId) return;
+        const timerId = this.focusLostDebounceByNodeId.get(nodeId);
+        if (timerId === undefined) return;
+        window.clearTimeout(timerId);
+        this.focusLostDebounceByNodeId.delete(nodeId);
+    }
+
+    private scheduleFocusLostMeasurement(nodeId: string, reason: string): void {
+        this.cancelFocusLostMeasurement(nodeId);
+
+        if (this.shouldSuppressSideEffectsForNativeInsert()) {
+            this.deferredMeasureNodeIds.add(nodeId);
+            this.scheduleDeferredPostInsertMaintenance(`${reason}:${nodeId}`);
+            log(`[Event] NativeInsertDeferredTrustedHeight: node=${nodeId}, reason=${reason}`);
+            return;
+        }
+
+        const timerId = window.setTimeout(() => {
+            this.focusLostDebounceByNodeId.delete(nodeId);
+            void this.canvasManager.measureAndPersistTrustedHeight(nodeId);
+        }, 500);
+
+        this.focusLostDebounceByNodeId.set(nodeId, timerId);
+    }
+
+    private reconcileFocusedNodeContext(reason: string, canvasView?: ItemView | null): string | null {
+        const targetCanvasView = canvasView ?? getCanvasView(this.app);
+        const currentNode = this.getCurrentCanvasInteractionNode(targetCanvasView);
+        const currentNodeId = currentNode?.id || null;
+        if (!currentNodeId) return null;
+
+        this.lastFocusedNodeId = currentNodeId;
+        this.cancelFocusLostMeasurement(currentNodeId);
+        this.clearStaleEdgeSelectionForNodeInteraction(reason, targetCanvasView);
+        this.rememberNodeInteractionContext(currentNodeId, reason, targetCanvasView);
+        return currentNodeId;
+    }
+
     private isCanvasEdgeSelectionTarget(target: EventTarget | null): boolean {
         return target instanceof Element && !!target.closest(
             '.canvas-edge, .canvas-edge-line-group, .canvas-edge-label, .canvas-edges, .canvas-interaction-path, .canvas-display-path'
@@ -1159,24 +1205,23 @@ export class CanvasEventManager {
             const original = canvasRecord[methodName];
             if (typeof original !== 'function') continue;
 
-            const manager = this;
-            const wrapped = function(this: unknown, ...args: unknown[]) {
-                const traceId = manager.activeNativeInsertSession?.traceId || 'none';
+            const wrapped = (...args: unknown[]) => {
+                const traceId = this.activeNativeInsertSession?.traceId || 'none';
                 log(
                     `[Event] NativeInsertEngineCall: trace=${traceId}, method=${methodName}, ` +
-                    `selection=${manager.describeCanvasSelection()}, args=${args.map(arg => manager.summarizeNativeInsertArg(arg)).join(';') || 'none'}`
+                    `selection=${this.describeCanvasSelection()}, args=${args.map(arg => this.summarizeNativeInsertArg(arg)).join(';') || 'none'}`
                 );
                 try {
-                    const result = (original as (...invokeArgs: unknown[]) => unknown).apply(this, args);
+                    const result = (original as (...invokeArgs: unknown[]) => unknown).apply(canvasRecord, args);
                     log(
                         `[Event] NativeInsertEngineReturn: trace=${traceId}, method=${methodName}, ` +
-                        `result=${manager.summarizeNativeInsertArg(result)}, selection=${manager.describeCanvasSelection()}`
+                        `result=${this.summarizeNativeInsertArg(result)}, selection=${this.describeCanvasSelection()}`
                     );
                     return result;
                 } catch (error) {
                     log(
                         `[Event] NativeInsertEngineError: trace=${traceId}, method=${methodName}, ` +
-                        `error=${String(error)}, selection=${manager.describeCanvasSelection()}`
+                        `error=${String(error)}, selection=${this.describeCanvasSelection()}`
                     );
                     throw error;
                 }
@@ -1468,7 +1513,11 @@ export class CanvasEventManager {
             }
 
             for (const nodeId of deferredAdjustIds) {
-                void this.canvasManager.adjustNodeHeightAfterRender(nodeId);
+                this.canvasManager.scheduleNodeHeightAdjustment(
+                    nodeId,
+                    CONSTANTS.TIMING.SCROLL_DELAY,
+                    `native-insert-post:${reason}`
+                );
             }
         }, delay);
     }
@@ -1622,10 +1671,10 @@ export class CanvasEventManager {
     }
 
     private describeDeleteModalFocusContext(): string {
-        const activeLeafViewType = this.app.workspace.activeLeaf?.view?.getViewType?.() || 'none';
+        const activeViewType = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() || 'none';
         const activeEditorInfo = this.app.workspace.activeEditor;
         return [
-            `activeLeaf=${activeLeafViewType}`,
+            `activeView=${activeViewType}`,
             `activeEditor=${!!activeEditorInfo}`,
             `editor=${!!activeEditorInfo?.editor}`
         ].join(',');
@@ -1952,7 +2001,7 @@ export class CanvasEventManager {
             for (const edge of newEdges) {
                 await this.floatingNodeService.handleNewEdge(edge, true);
             }
-            await this.canvasManager.checkAndAddCollapseButtons();
+            this.canvasManager.checkAndAddCollapseButtons();
         }
 
         this.lastEdgeIds = newEdgeIds;
@@ -1982,7 +2031,7 @@ export class CanvasEventManager {
                             }
                         })();
                     });
-                    await this.canvasManager.checkAndAddCollapseButtons();
+                    this.canvasManager.checkAndAddCollapseButtons();
                     for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
                         setTimeout(() => {
                             void this.canvasManager.checkAndAddCollapseButtons();
@@ -2037,10 +2086,12 @@ export class CanvasEventManager {
                             this.scheduleDeferredPostInsertMaintenance(`node-create:${nodeId}`);
                             log(`[Event] NativeInsertDeferredAdjustNodeHeight: node=${nodeId}`);
                         } else {
-                            log(`[Event] Canvas:NodeCreate 调用 adjustNodeHeightAfterRender: ${nodeId}`);
-                            setTimeout(() => {
-                                void this.canvasManager.adjustNodeHeightAfterRender(nodeId);
-                            }, CONSTANTS.TIMING.SCROLL_DELAY);
+                            log(`[Event] Canvas:NodeCreate 调用 scheduleNodeHeightAdjustment: ${nodeId}`);
+                            this.canvasManager.scheduleNodeHeightAdjustment(
+                                nodeId,
+                                CONSTANTS.TIMING.SCROLL_DELAY,
+                                'workspace:node-create'
+                            );
                         }
                     } else {
                         log(`[Event] Canvas:NodeCreate 警告: node.id 为空`);
@@ -2204,6 +2255,9 @@ export class CanvasEventManager {
         if (this.focusMutationObserver) return;
 
         this.focusMutationObserver = new MutationObserver((mutations) => {
+            const gainedNodeIds = new Set<string>();
+            const lostNodeIds = new Set<string>();
+
             for (const mutation of mutations) {
                 if (mutation.type !== 'attributes' || mutation.attributeName !== 'class') continue;
 
@@ -2213,39 +2267,29 @@ export class CanvasEventManager {
                 const hasFocus = target.classList.contains('is-focused') || target.classList.contains('is-editing');
                 const hasSelection = target.classList.contains('is-selected');
                 const nodeIdFromTarget = this.extractNodeIdFromElement(target);
+                if (!nodeIdFromTarget) continue;
 
                 if (hasFocus || hasSelection) {
-                    this.lastFocusedNodeId = nodeIdFromTarget;
-                    this.clearStaleEdgeSelectionForNodeInteraction(
-                        hasFocus ? 'focus-gained' : 'selection-gained'
-                    );
-                    this.rememberNodeInteractionContext(
-                        nodeIdFromTarget,
-                        hasFocus ? 'focus-gained' : 'selection-gained'
-                    );
+                    gainedNodeIds.add(nodeIdFromTarget);
                     continue;
                 }
 
-                const nodeId = nodeIdFromTarget || this.lastFocusedNodeId;
-                if (!nodeId) continue;
+                lostNodeIds.add(nodeIdFromTarget);
+            }
 
+            const reason = gainedNodeIds.size > 0 ? 'focus-gained' : 'focus-reconciled';
+            const activeNodeId = this.reconcileFocusedNodeContext(reason);
+
+            if (!activeNodeId && lostNodeIds.size > 0) {
                 this.lastFocusedNodeId = null;
+            }
 
-                if (this.focusLostDebounceId !== null) {
-                    window.clearTimeout(this.focusLostDebounceId);
-                }
-
-                if (this.shouldSuppressSideEffectsForNativeInsert()) {
-                    this.deferredMeasureNodeIds.add(nodeId);
-                    this.scheduleDeferredPostInsertMaintenance(`focus-lost:${nodeId}`);
-                    log(`[Event] NativeInsertDeferredTrustedHeight: node=${nodeId}`);
+            for (const nodeId of lostNodeIds) {
+                if (nodeId === activeNodeId || gainedNodeIds.has(nodeId)) {
+                    this.cancelFocusLostMeasurement(nodeId);
                     continue;
                 }
-
-                this.focusLostDebounceId = window.setTimeout(() => {
-                    this.focusLostDebounceId = null;
-                    void this.canvasManager.measureAndPersistTrustedHeight(nodeId);
-                }, 500);
+                this.scheduleFocusLostMeasurement(nodeId, 'focus-lost');
             }
         });
 
@@ -2753,6 +2797,10 @@ export class CanvasEventManager {
     unload() {
         this.clearPenLongPress();
         this.clearTouchDragNodeArm();
+        for (const timerId of this.focusLostDebounceByNodeId.values()) {
+            window.clearTimeout(timerId);
+        }
+        this.focusLostDebounceByNodeId.clear();
         if (this.mutationObserver) {
             this.mutationObserver.disconnect();
             this.mutationObserver = null;

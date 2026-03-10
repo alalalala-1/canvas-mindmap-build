@@ -420,18 +420,12 @@ export class NodeCreationService {
                 this.canvasManager.collapseStateManager.clearCache();
             }
 
-            await this.canvasManager.checkAndAddCollapseButtons();
-
-            void this.canvasManager.adjustNodeHeightAfterRender(newNodeId);
-            
-            const manager = this.canvasManager;
-            setTimeout(() => {
-                void manager.adjustNodeHeightAfterRender(newNodeId);
-            }, CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY);
-
-            setTimeout(() => {
-                void manager.adjustNodeHeightAfterRender(newNodeId);
-            }, CONSTANTS.TIMING.HEIGHT_RECHECK_DELAY);
+            this.canvasManager.checkAndAddCollapseButtons();
+            this.canvasManager.scheduleNodeHeightAdjustment(
+                newNodeId,
+                CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY,
+                'post-node-create'
+            );
         }
     }
 

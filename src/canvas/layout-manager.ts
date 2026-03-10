@@ -1418,6 +1418,17 @@ export class LayoutManager {
                 await this.waitForNextFrame(40);
             }
 
+            const calibratedDomHeights = await this.calibrateNodeHeightsFromDOM(
+                freshCanvas,
+                freshNodes,
+                canvasFilePath,
+                arrangeId
+            );
+            if (calibratedDomHeights > 0) {
+                freshCanvas.requestUpdate?.();
+                await this.waitForNextFrame(60);
+            }
+
             // 诊断日志：reload后的节点/边几何与视觉层快照
             if (this.shouldLogVerboseCanvasDiagnostics()) {
                 this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
@@ -1460,7 +1471,7 @@ export class LayoutManager {
             await this.logHeightDriftSnapshot(freshCanvas, freshNodes, canvasFilePath, arrangeId);
 
             await this.cleanupStaleFloatingNodes(freshCanvas, freshNodes);
-            await this.reapplyFloatingNodeStyles(freshCanvas);
+            this.reapplyFloatingNodeStyles(freshCanvas);
 
             // cleanup 前样式真值快照
             if (this.shouldLogVerboseCanvasDiagnostics()) {

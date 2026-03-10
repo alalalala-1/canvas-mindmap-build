@@ -125,6 +125,12 @@ export class CanvasNodeManager {
     private readonly perNodeAnomalyLogThresholdPx: number = 20;
     private readonly batchSummarySampleLimit: number = 5;
     private readonly trustedSuspectDeltaPx: number = 20;
+    private readonly maxNodeHeightAdjustRetries: number = 3;
+    private readonly queuedNodeHeightAdjustDelayMs: number = CONSTANTS.TIMING.SCROLL_DELAY;
+    private nodeHeightAdjustInFlight: Set<string> = new Set();
+    private nodeHeightAdjustQueued: Set<string> = new Set();
+    private nodeHeightAdjustRetryCountByNodeId: Map<string, number> = new Map();
+    private nodeHeightAdjustTimeoutByNodeId: Map<string, number> = new Map();
 
     constructor(
         app: App,
@@ -293,7 +299,66 @@ export class CanvasNodeManager {
         return this.nodeCreationService.addNodeToCanvas(content, sourceFile);
     }
 
+    scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {
+        if (!nodeId) return;
+
+        const normalizedDelay = Math.max(0, delayMs);
+        const existingTimerId = this.nodeHeightAdjustTimeoutByNodeId.get(nodeId);
+        if (existingTimerId !== undefined) {
+            window.clearTimeout(existingTimerId);
+            this.nodeHeightAdjustTimeoutByNodeId.delete(nodeId);
+        }
+
+        if (this.nodeHeightAdjustInFlight.has(nodeId) && normalizedDelay <= 0) {
+            this.nodeHeightAdjustQueued.add(nodeId);
+            if (this.shouldLogVerboseNodeDiagnostics()) {
+                log(`[Node] HeightAdjustScheduleCoalesced: node=${nodeId}, reason=${reason}, mode=in-flight`);
+            }
+            return;
+        }
+
+        const runAdjustment = () => {
+            this.nodeHeightAdjustTimeoutByNodeId.delete(nodeId);
+            if (this.nodeHeightAdjustInFlight.has(nodeId)) {
+                this.nodeHeightAdjustQueued.add(nodeId);
+                if (this.shouldLogVerboseNodeDiagnostics()) {
+                    log(`[Node] HeightAdjustScheduleDeferred: node=${nodeId}, reason=${reason}, mode=in-flight-timer`);
+                }
+                return;
+            }
+            void this.adjustNodeHeightAfterRender(nodeId);
+        };
+
+        if (normalizedDelay <= 0) {
+            window.setTimeout(runAdjustment, 0);
+            return;
+        }
+
+        const timerId = window.setTimeout(runAdjustment, normalizedDelay);
+        this.nodeHeightAdjustTimeoutByNodeId.set(nodeId, timerId);
+        if (this.shouldLogVerboseNodeDiagnostics()) {
+            log(`[Node] HeightAdjustScheduled: node=${nodeId}, delay=${normalizedDelay}, reason=${reason}`);
+        }
+    }
+
     async adjustNodeHeightAfterRender(nodeId: string): Promise<void> {
+        if (!nodeId) return;
+
+        const scheduledTimerId = this.nodeHeightAdjustTimeoutByNodeId.get(nodeId);
+        if (scheduledTimerId !== undefined) {
+            window.clearTimeout(scheduledTimerId);
+            this.nodeHeightAdjustTimeoutByNodeId.delete(nodeId);
+        }
+
+        if (this.nodeHeightAdjustInFlight.has(nodeId)) {
+            this.nodeHeightAdjustQueued.add(nodeId);
+            if (this.shouldLogVerboseNodeDiagnostics()) {
+                log(`[Node] HeightAdjustCoalesced: node=${nodeId}, reason=in-flight`);
+            }
+            return;
+        }
+
+        this.nodeHeightAdjustInFlight.add(nodeId);
         log(`[Node] adjustNodeHeightAfterRender 被调用, nodeId=${nodeId}`);
         try {
             const newHeightValue = await this.nodeHeightService.adjustNodeHeight(nodeId);
@@ -302,15 +367,51 @@ export class CanvasNodeManager {
                 this.nodeHeightService.syncMemoryNodeHeight(nodeId, newHeightValue);
 
                 const nodeData = this.nodeHeightService.getCanvasNodeElement(nodeId);
-                if (nodeData && (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0)) {
-                    setTimeout(() => {
-                        void this.adjustNodeHeightAfterRender(nodeId);
-                    }, CONSTANTS.TIMING.RETRY_DELAY);
+                const shouldRetry = !!nodeData && (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0);
+                if (shouldRetry) {
+                    const nextRetryCount = (this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0) + 1;
+                    if (nextRetryCount <= this.maxNodeHeightAdjustRetries) {
+                        this.nodeHeightAdjustRetryCountByNodeId.set(nodeId, nextRetryCount);
+                        this.scheduleNodeHeightAdjustment(
+                            nodeId,
+                            CONSTANTS.TIMING.RETRY_DELAY,
+                            `dom-not-ready#${nextRetryCount}`
+                        );
+                        log(
+                            `[Node] HeightAdjustRetryScheduled: node=${nodeId}, ` +
+                            `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready`
+                        );
+                    } else {
+                        this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+                        log(
+                            `[Node] HeightAdjustRetryExhausted: node=${nodeId}, ` +
+                            `retries=${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready`
+                        );
+                    }
+                } else {
+                    this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
                 }
+            } else {
+                this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
             }
         } catch (err) {
             log(`[Node] 调整高度失败: ${nodeId}`, err);
+        } finally {
+            this.nodeHeightAdjustInFlight.delete(nodeId);
+            if (this.nodeHeightAdjustQueued.delete(nodeId)) {
+                this.scheduleNodeHeightAdjustment(nodeId, this.queuedNodeHeightAdjustDelayMs, 'queued-after-in-flight');
+            }
         }
+    }
+
+    cleanup(): void {
+        for (const timerId of this.nodeHeightAdjustTimeoutByNodeId.values()) {
+            window.clearTimeout(timerId);
+        }
+        this.nodeHeightAdjustTimeoutByNodeId.clear();
+        this.nodeHeightAdjustQueued.clear();
+        this.nodeHeightAdjustInFlight.clear();
+        this.nodeHeightAdjustRetryCountByNodeId.clear();
     }
 
     async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean; suppressRequestSave?: boolean }): Promise<number> {
@@ -1151,7 +1252,7 @@ export class CanvasNodeManager {
         let refreshed = 0;
         const collector = createTrustedMeasureCollector();
         for (const nodeId of candidateIds) {
-            await this.measureAndPersistTrustedHeight(nodeId, {
+            this.measureAndPersistTrustedHeight(nodeId, {
                 suppressSuccessLogs: true,
                 collector,
                 suppressRequestSave: options?.suppressRequestSave
@@ -1221,7 +1322,7 @@ export class CanvasNodeManager {
         for (let i = 0; i < candidateIds.length; i++) {
             const candidateId = candidateIds[i];
             if (!candidateId) continue;
-            await this.measureAndPersistTrustedHeight(candidateId, {
+            this.measureAndPersistTrustedHeight(candidateId, {
                 suppressSuccessLogs: true,
                 collector,
                 suppressRequestSave: options?.suppressRequestSave

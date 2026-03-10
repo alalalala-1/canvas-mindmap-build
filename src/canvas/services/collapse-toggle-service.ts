@@ -221,7 +221,7 @@ export class CollapseToggleService {
 
             const { offsetX, offsetY } = this.calculateAnchorOffset(nodeId, nodes, newLayout);
 
-            const updatedCount = await this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
+            const updatedCount = this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
 
             if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
             if (canvas.requestSave) canvas.requestSave();
