@@ -284,6 +284,8 @@ export type CanvasEdgeLike = {
     requestUpdate?: () => void;
 };
 
+export type CanvasSelectionEntry = CanvasNodeLike | CanvasEdgeLike;
+
 export type CanvasDataLike = {
     nodes?: CanvasNodeLike[];
     edges?: CanvasEdgeLike[];
@@ -321,7 +323,7 @@ export type CanvasLike = {
     file?: { path?: string };
     requestUpdate?: () => void;
     requestSave?: () => void;
-    selection?: Set<CanvasNodeLike>;
+    selection?: Set<CanvasSelectionEntry>;
     selectedNodes?: CanvasNodeLike[];
     selectedEdge?: CanvasEdgeLike;
     selectedEdges?: CanvasEdgeLike[];
@@ -358,9 +360,9 @@ export type EditorWithSelection = {
 };
 
 export type PluginWithLastClicked = {
-    lastClickedNodeId?: string;
-    lastClickedCanvasFilePath?: string;
-    lastNavigationSourceNodeId?: string;
+    lastClickedNodeId?: string | null;
+    lastClickedCanvasFilePath?: string | null;
+    lastNavigationSourceNodeId?: string | null;
 };
 
 export type CanvasManagerLike = {

@@ -2,7 +2,13 @@ import { App, Notice, TFile } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../types';
 import { getCanvasView, getEdgeFromNodeId, getEdgeToNodeId, stripInvisibleMarkup } from '../../utils/canvas-utils';
-import { log } from '../../utils/logger';
+import { log, logVerbose } from '../../utils/logger';
+import {
+    buildNormalizedLineIndex as buildFromLinkNormalizedLineIndex,
+    matchNodeToSource as matchNodeToSourceWithFormatting,
+    normalizeForMatch as normalizeFromLinkMatch,
+    setNodeFromLinkRepairUnmatched,
+} from './fromlink-matcher';
 
 type FromLinkRange = {
     file: string;
@@ -14,6 +20,8 @@ type LineCandidate = {
     line: number;
     startCh: number;
     endCh: number;
+    toLine: number;
+    toCh: number;
     score: number;
     method: string;
 };
@@ -70,6 +78,7 @@ export class FromLinkRepairService {
         let unmatchedCount = 0;
         const unmatchedSamples: string[] = [];
         const unmatchedIds = new Set<string>();
+        const matchedIds = new Set<string>();
         const repairedSamples: string[] = [];
 
         const updates = new Map<string, FromLinkRange>();
@@ -89,16 +98,18 @@ export class FromLinkRepairService {
                 continue;
             }
 
+            if (nodeId) matchedIds.add(nodeId);
+
             updates.set(nodeId, {
                 file: sourceFile.path,
                 from: { line: match.line, ch: match.startCh },
-                to: { line: match.line, ch: match.endCh }
+                to: { line: match.toLine, ch: match.toCh }
             });
 
             existingRanges.set(nodeId, {
                 file: sourceFile.path,
                 from: { line: match.line, ch: match.startCh },
-                to: { line: match.line, ch: match.endCh }
+                to: { line: match.toLine, ch: match.toCh }
             });
 
             if (repairedSamples.length < 20) {
@@ -107,7 +118,7 @@ export class FromLinkRepairService {
             repairedCount++;
         }
 
-        if (updates.size > 0 || unmatchedIds.size > 0 || pathFixes.size > 0) {
+        if (updates.size > 0 || unmatchedIds.size > 0 || pathFixes.size > 0 || matchedIds.size > 0) {
             const changed = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (data) => {
                 let modified = false;
                 for (const node of data.nodes || []) {
@@ -116,26 +127,6 @@ export class FromLinkRepairService {
                     const pathFix = pathFixes.get(node.id);
                     const isText = !node.type || node.type === 'text';
                     if (!isText) continue;
-
-                    const rawData = (node.data && typeof node.data === 'object')
-                        ? (node.data as Record<string, unknown>)
-                        : {};
-                    const fromLinkRepair = (rawData.fromLinkRepair && typeof rawData.fromLinkRepair === 'object')
-                        ? (rawData.fromLinkRepair as Record<string, unknown>)
-                        : {};
-
-                    const shouldMarkUnmatched = unmatchedIds.has(node.id);
-                    const currentUnmatched = fromLinkRepair.unmatched === true;
-
-                    if (shouldMarkUnmatched !== currentUnmatched) {
-                        fromLinkRepair.unmatched = shouldMarkUnmatched;
-                        fromLinkRepair.updatedAt = Date.now();
-                        node.data = {
-                            ...rawData,
-                            fromLinkRepair
-                        };
-                        modified = true;
-                    }
 
                     if (pathFix) {
                         const fixedJson = JSON.stringify(pathFix);
@@ -170,6 +161,21 @@ export class FromLinkRepairService {
 
                     node.text = text.endsWith('\n') ? `${text}${linkComment}` : `${text}\n${linkComment}`;
                     modified = true;
+
+                    if (setNodeFromLinkRepairUnmatched(node, unmatchedIds.has(node.id))) {
+                        modified = true;
+                    }
+                    continue;
+                }
+
+                for (const node of data.nodes || []) {
+                    if (!node.id) continue;
+                    const isText = !node.type || node.type === 'text';
+                    if (!isText) continue;
+
+                    if (setNodeFromLinkRepairUnmatched(node, unmatchedIds.has(node.id))) {
+                        modified = true;
+                    }
                 }
                 return modified;
             });
@@ -185,7 +191,7 @@ export class FromLinkRepairService {
             log(`[FromLinkRepair] pathFixed=${pathFixes.size}`);
         }
         if (repairedSamples.length > 0) {
-            log(`[FromLinkRepair] repairedSamples=${repairedSamples.join(' | ')}`);
+            logVerbose(`[FromLinkRepair] repairedSamples=${repairedSamples.join(' | ')}`);
         }
         log(`[FromLinkRepair] 完成: repaired=${repairedCount}, unmatched=${unmatchedCount}, source=${sourceFile.path}, samples=${unmatchedSamples.join(' | ') || 'none'}`);
         new Notice(`fromLink 修复完成：成功 ${repairedCount}，未匹配 ${unmatchedCount}`);
@@ -423,21 +429,11 @@ export class FromLinkRepairService {
     }
 
     private normalizeForMatch(text: string): string {
-        return stripInvisibleMarkup(text || '')
-            .replace(/\r/g, '')
-            .replace(/^\s*>+\s?/gm, '')
-            .replace(/^\s*(?:[-*+]\s+|\d+\.\s+)/gm, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
+        return normalizeFromLinkMatch(text);
     }
 
     private buildNormalizedLineIndex(lines: string[]): Array<{ raw: string; normalized: string }> {
-        const index: Array<{ raw: string; normalized: string }> = [];
-        for (const raw of lines) {
-            index.push({ raw, normalized: this.normalizeForMatch(raw) });
-        }
-        return index;
+        return buildFromLinkNormalizedLineIndex(lines);
     }
 
     private matchNodeToSource(
@@ -446,86 +442,7 @@ export class FromLinkRepairService {
         lineIndex: Array<{ raw: string; normalized: string }>,
         anchorLine: number | null
     ): LineCandidate | null {
-        const rawNodeText = (node.text || '').replace(/<!--[\s\S]*?-->/g, '');
-        const normalizedNode = this.normalizeForMatch(rawNodeText);
-        if (!normalizedNode) return null;
-
-        const nodeLines = rawNodeText.split('\n').map((l) => this.normalizeForMatch(l)).filter(Boolean);
-        const longestLine = nodeLines.reduce((a, b) => (b.length > a.length ? b : a), '');
-
-        const candidates: LineCandidate[] = [];
-        const key = this.pickKeyPhrase(normalizedNode);
-        const isShortNode = normalizedNode.length < 8;
-
-        for (let i = 0; i < lineIndex.length; i++) {
-            const raw = sourceLines[i] || '';
-            const normalized = lineIndex[i]?.normalized || '';
-            if (!normalized) continue;
-
-            let score = 0;
-            let startCh = 0;
-            let endCh = raw.length;
-            let method = '';
-
-            if (normalized === normalizedNode) {
-                score = 150;
-                method = 'L0-exact';
-            } else if (normalized.includes(normalizedNode)) {
-                const lengthRatio = normalizedNode.length / Math.max(1, normalized.length);
-                score = 100 + Math.floor(Math.max(0, Math.min(1, lengthRatio)) * 30);
-                method = 'L1-contains';
-            } else if (normalizedNode.includes(normalized) && normalized.length >= 20) {
-                score = 86;
-                method = 'L2-reverse-contains';
-            } else if (longestLine && normalized.includes(longestLine) && longestLine.length >= 12) {
-                score = 80;
-                method = 'L3-longest-line';
-            } else if (key && normalized.includes(key)) {
-                score = 72;
-                method = 'L4-key-phrase';
-            }
-
-            if (score <= 0) continue;
-            if (isShortNode && method !== 'L0-exact') {
-                score = Math.min(score, 80);
-            }
-
-            const rawRange = this.findRawRangeInLine(raw, rawNodeText);
-            if (rawRange) {
-                startCh = rawRange.startCh;
-                endCh = rawRange.endCh;
-                score += 12;
-            }
-
-            if (anchorLine !== null) {
-                const distance = Math.abs(i - anchorLine);
-                if (distance <= 30) score += 30;
-                else if (distance <= 60) score += 20;
-                else if (distance <= 120) score += 8;
-            }
-
-            if (/^#{1,6}\s+/.test(rawNodeText.trim())) {
-                const heading = rawNodeText.trim().replace(/^#{1,6}\s+/, '').toLowerCase();
-                const lineHeading = (raw.match(/^\s*>*\s*#{1,6}\s+(.*)$/)?.[1] || '').toLowerCase();
-                if (lineHeading.includes(heading) || heading.includes(lineHeading)) {
-                    score += 14;
-                }
-            }
-
-            candidates.push({ line: i, startCh, endCh, score, method });
-        }
-
-        if (candidates.length === 0) return null;
-
-        candidates.sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
-            if (anchorLine !== null) {
-                return Math.abs(a.line - anchorLine) - Math.abs(b.line - anchorLine);
-            }
-            return a.line - b.line;
-        });
-
-        return candidates[0] || null;
+        return matchNodeToSourceWithFormatting(node, sourceLines, lineIndex, anchorLine);
     }
 
     private findRawRangeInLine(rawLine: string, rawNodeText: string): { startCh: number; endCh: number } | null {

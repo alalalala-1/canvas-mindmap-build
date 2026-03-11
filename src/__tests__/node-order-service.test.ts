@@ -158,4 +158,34 @@ describe('NodeOrderService.sortSiblingsByMarkdownOrder', () => {
         expect(canvasData.nodes?.find(node => node.id === 'n2')?.text).toContain('"from":{"line":6');
         expect(canvasData.nodes?.find(node => node.id === 'n3')?.text).toContain('"from":{"line":9');
     });
+
+    it('should clear stale unmatched flag when reliable fromLink is already correct', async () => {
+        const sourcePath = 'docs/source.md';
+        const sourceContent = ['Alpha concept', 'Beta concept'].join('\n');
+        const app = createAppWithMarkdown(sourcePath, sourceContent);
+        const service = new NodeOrderService(app, {} as never);
+
+        const alpha = createNode('alpha', withFromLink('Alpha concept', sourcePath, 0));
+        alpha.data = {
+            fromLinkRepair: {
+                unmatched: true,
+                updatedAt: 1,
+            },
+        };
+
+        const canvasData: CanvasDataLike = {
+            nodes: [
+                createNode('parent', 'Parent'),
+                alpha,
+                createNode('beta', withFromLink('Beta concept', sourcePath, 1)),
+            ],
+            edges: createEdges(['alpha', 'beta']),
+        };
+
+        const summary = await (service as unknown as NodeOrderServiceTestAccess).applySortSiblingsByMarkdownOrder(canvasData);
+
+        expect(summary.changedEdges).toBe(0);
+        expect(summary.updatedFromLinks).toBe(1);
+        expect(canvasData.nodes?.find(node => node.id === 'alpha')?.data?.fromLinkRepair?.unmatched).toBe(false);
+    });
 });

@@ -5,16 +5,19 @@ import { DeleteConfirmationModal } from '../ui/delete-modal';
 import { DeleteEdgeConfirmationModal } from '../ui/delete-edge-modal';
 import { FloatingNodeService } from './services/floating-node-service';
 import { CanvasManager } from './canvas-manager';
-import { log } from '../utils/logger';
+import { isVerboseCanvasDiagnosticsLoggingEnabled, log, logVerbose } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 
 import {
     getCanvasView,
     getActiveCanvasView,
+    describeCanvasSelectionState,
     getSelectedEdge,
     extractEdgeNodeIds,
     buildEdgeIdSet,
     detectNewEdges,
+    getDirectSelectedNodes,
+    getCanvasSelectionSummary,
     getEdgesFromCanvas,
     getEdgesFromCanvasOrFileData,
     getNodesFromCanvas,
@@ -151,7 +154,14 @@ export class CanvasEventManager {
     private deferredMeasureNodeIds: Set<string> = new Set();
     private deferredAdjustNodeIds: Set<string> = new Set();
     private nativeInsertEngineRestoreFns: Array<() => void> = [];
+    private suppressDeleteButtonClickUntil: number = 0;
+    private suppressDeleteButtonClickReason: string | null = null;
+    private edgeSelectionFallbackToken: number = 0;
+    private lastEdgeSelectionFallbackKey: string = '';
+    private lastEdgeSelectionFallbackAt: number = 0;
     private readonly touchDragArmedClass = 'cmb-touch-drag-armed';
+    private readonly edgeSelectionFallbackSlowLogThresholdMs: number = 12;
+    private readonly edgeSelectionFallbackDedupWindowMs: number = 120;
     private readonly touchDragScrollOwnerSelectors: string[] = [
         '.canvas-node-content',
         '.canvas-node-content .markdown-preview-view',
@@ -348,10 +358,14 @@ export class CanvasEventManager {
 
         // 节点点击处理
         const handleNodeClick = async (event: MouseEvent) => {
+            const targetEl = event.target as HTMLElement;
+            if (this.isDeleteOverlayInteractionTarget(targetEl)) {
+                return;
+            }
+
             const canvasView = getCanvasView(this.app);
             if (!canvasView) return;
 
-            const targetEl = event.target as HTMLElement;
             if (isCanvasNativeInsertGestureTarget(targetEl)) {
                 if (this.isNativeInsertSessionActive()) {
                     this.touchNativeInsertSession(targetEl);
@@ -396,6 +410,10 @@ export class CanvasEventManager {
                 event.preventDefault();
                 event.stopPropagation();
                 event.stopImmediatePropagation();
+
+                if (this.shouldSuppressDeleteButtonClick('click-capture')) {
+                    return;
+                }
                 
                 setTimeout(() => {
                     void this.handleDeleteButtonClick(canvasView);
@@ -479,6 +497,13 @@ export class CanvasEventManager {
         this.plugin.registerDomEvent(document, 'pointerdown', (event: PointerEvent) => {
             const pointerType = event.pointerType || 'mouse';
             const pointerTargetKind = this.describeCanvasPointerTargetKind(event.target);
+            if (this.isDeleteOverlayInteractionTarget(event.target)) {
+                this.activePointerGesture = null;
+                this.clearTouchDragNodeArm(event.pointerId);
+                this.clearPenLongPress(event.pointerId);
+                return;
+            }
+
             if (shouldBypassNodeGesture(event.target)) {
                 this.activePointerGesture = null;
                 this.clearTouchDragNodeArm();
@@ -487,11 +512,23 @@ export class CanvasEventManager {
                     this.startNativeInsertSession(event.pointerId, pointerType, event.target, event);
                 }
                 if (this.isTouchLikePointer(pointerType)) {
-                    log(
+                    logVerbose(
                         `[Event] DragPointerBypass: pointer=${pointerType}, target=${this.describeEventTarget(event.target)}, ` +
                         `chain=${this.describeEventTargetChain(event.target)}, flags=${this.describePointerEventState(event)}`
                     );
                 }
+                return;
+            }
+
+            const deleteBtn = event.target instanceof Element ? findDeleteButton(event.target) : null;
+            if (deleteBtn) {
+                this.activePointerGesture = null;
+                this.clearTouchDragNodeArm();
+                this.clearPenLongPress();
+                this.markSuppressDeleteButtonClick(320, `pointerdown:${pointerType}`);
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
                 return;
             }
 
@@ -552,9 +589,13 @@ export class CanvasEventManager {
                 wasSelectedBeforeDown,
                 at: Date.now()
             };
-        }, { capture: true, passive: true });
+        }, { capture: true, passive: false });
 
         this.plugin.registerDomEvent(document, 'pointermove', (event: PointerEvent) => {
+            if (this.isDeleteOverlayInteractionTarget(event.target)) {
+                return;
+            }
+
             if (this.isNativeInsertSessionActive(event.pointerId)) {
                 this.touchNativeInsertSession(event.target);
                 return;
@@ -594,6 +635,34 @@ export class CanvasEventManager {
         }, { capture: true, passive: true });
 
         const finalizePointer = (event: PointerEvent) => {
+            if (this.isDeleteOverlayInteractionTarget(event.target)) {
+                this.activePointerGesture = null;
+                this.clearPenLongPress(event.pointerId);
+                this.clearTouchDragNodeArm(event.pointerId);
+                this.activeTouchDragSawCanvasNodeMove = false;
+                return;
+            }
+
+            const deleteBtn = event.target instanceof Element ? findDeleteButton(event.target) : null;
+            if (deleteBtn) {
+                this.activePointerGesture = null;
+                this.clearPenLongPress(event.pointerId);
+                this.clearTouchDragNodeArm(event.pointerId);
+                this.activeTouchDragSawCanvasNodeMove = false;
+                this.markSuppressDeleteButtonClick(400, `pointerup:${event.pointerType || 'mouse'}`);
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation();
+
+                const canvasView = getCanvasView(this.app);
+                if (canvasView) {
+                    window.setTimeout(() => {
+                        this.handleDeleteButtonClick(canvasView);
+                    }, 0);
+                }
+                return;
+            }
+
             if (this.isNativeInsertSessionActive(event.pointerId)) {
                 this.endNativeInsertSession(event.pointerId, event.type, event.target, event);
                 this.clearPenLongPress(event.pointerId);
@@ -656,8 +725,8 @@ export class CanvasEventManager {
             this.activeTouchDragSawCanvasNodeMove = false;
         };
 
-        this.plugin.registerDomEvent(document, 'pointerup', finalizePointer, { capture: true, passive: true });
-        this.plugin.registerDomEvent(document, 'pointercancel', finalizePointer, { capture: true, passive: true });
+        this.plugin.registerDomEvent(document, 'pointerup', finalizePointer, { capture: true, passive: false });
+        this.plugin.registerDomEvent(document, 'pointercancel', finalizePointer, { capture: true, passive: false });
     }
 
     private shouldSuppressFromLinkClick(targetEl: HTMLElement): boolean {
@@ -937,30 +1006,46 @@ export class CanvasEventManager {
     private scheduleEdgeSelectionFallback(target: EventTarget | null, reason: string): void {
         if (!(target instanceof Element)) return;
         const targetEl = target;
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
+        const targetEdge = canvas ? this.resolveEdgeFromTarget(targetEl) : null;
+        const edgeKey = targetEdge ? this.getEdgeSelectionFallbackKey(targetEdge) : this.describeEventTarget(targetEl);
+        const dedupKey = `${reason}|${edgeKey}`;
+        const now = Date.now();
+        if (
+            this.lastEdgeSelectionFallbackKey === dedupKey
+            && now - this.lastEdgeSelectionFallbackAt < this.edgeSelectionFallbackDedupWindowMs
+        ) {
+            logVerbose(`[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=skip-schedule-duplicate, edge=${edgeKey}`);
+            return;
+        }
 
-        window.setTimeout(() => {
-            this.applyEdgeSelectionFallback(targetEl, `${reason}:timeout-0`);
-        }, 0);
+        this.lastEdgeSelectionFallbackKey = dedupKey;
+        this.lastEdgeSelectionFallbackAt = now;
+        const scheduleToken = ++this.edgeSelectionFallbackToken;
+        logVerbose(`[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=scheduled, edge=${edgeKey}, token=${scheduleToken}`);
 
         requestAnimationFrame(() => {
-            this.applyEdgeSelectionFallback(targetEl, `${reason}:raf`);
+            if (scheduleToken !== this.edgeSelectionFallbackToken) {
+                logVerbose(`[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=skip-stale-token, edge=${edgeKey}, token=${scheduleToken}`);
+                return;
+            }
+            this.applyEdgeSelectionFallback(targetEl, `${reason}:raf`, scheduleToken);
         });
     }
 
-    private applyEdgeSelectionFallback(targetEl: Element, reason: string): void {
+    private applyEdgeSelectionFallback(targetEl: Element, reason: string, scheduleToken?: number): void {
+        const startedAt = performance.now();
         if (!this.isCanvasEdgeSelectionTarget(targetEl)) return;
 
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
         if (!canvas) return;
+        if (!canvasView) return;
 
-        const existingSelectedEdge = getSelectedEdge(canvas);
-        if (existingSelectedEdge) {
-            log(`[Event] EdgeSelectionFallbackSkip: reason=${reason}, status=already-selected, edge=${existingSelectedEdge.id || 'unknown'}`);
-            return;
-        }
-
+        const resolveStartedAt = performance.now();
         const edge = this.resolveEdgeFromTarget(targetEl);
+        const resolveEdgeMs = performance.now() - resolveStartedAt;
         if (!edge) {
             log(
                 `[Event] EdgeSelectionFallbackMiss: reason=${reason}, target=${this.describeEventTarget(targetEl)}, ` +
@@ -969,31 +1054,77 @@ export class CanvasEventManager {
             return;
         }
 
-        const nodeSelectionCount = canvas.selection instanceof Set
-            ? canvas.selection.size
-            : (canvas.selectedNodes?.length ?? 0);
-
-        if (canvas.selection instanceof Set) {
-            canvas.selection.clear();
+        const targetEdgeKey = this.getEdgeSelectionFallbackKey(edge);
+        const selectedEdge = this.getDirectSelectedEdge(canvas);
+        if (selectedEdge && this.isSameEdgeForFallback(selectedEdge, edge)) {
+            this.ensureEdgeSelectionFallbackClasses(edge);
+            this.syncSelectedEdgeState(canvas, edge);
+            logVerbose(`[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=skip-target-already-selected, edge=${targetEdgeKey}, token=${scheduleToken ?? 'na'}`);
+            this.maybeLogEdgeSelectionFallbackPerf({
+                reason,
+                edgeKey: targetEdgeKey,
+                scheduleToken,
+                resolveEdgeMs,
+                clearSelectionMs: 0,
+                applySelectionMs: 0,
+                totalMs: performance.now() - startedAt,
+                nodeSelectionCount: this.getDirectSelectedNodeCount(canvas),
+                edgeSelectionCount: this.getDirectSelectedEdgeCount(canvas),
+                domNodeCleared: 0,
+                domEdgeCleared: 0,
+                status: 'already-selected'
+            });
+            return;
         }
-        if (Array.isArray(canvas.selectedNodes)) {
-            canvas.selectedNodes = [];
+
+        if (!selectedEdge && this.isEdgeSelectionFallbackDomSelected(edge)) {
+            this.syncSelectedEdgeState(canvas, edge);
+            logVerbose(`[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=sync-dom-selected, edge=${targetEdgeKey}, token=${scheduleToken ?? 'na'}`);
+            this.maybeLogEdgeSelectionFallbackPerf({
+                reason,
+                edgeKey: targetEdgeKey,
+                scheduleToken,
+                resolveEdgeMs,
+                clearSelectionMs: 0,
+                applySelectionMs: 0,
+                totalMs: performance.now() - startedAt,
+                nodeSelectionCount: this.getDirectSelectedNodeCount(canvas),
+                edgeSelectionCount: 1,
+                domNodeCleared: 0,
+                domEdgeCleared: 0,
+                status: 'sync-dom-selected'
+            });
+            return;
         }
 
-        for (const node of getNodesFromCanvas(canvas)) {
-            node.nodeEl?.classList.remove('is-selected', 'is-focused');
+        const nodeSelectionCount = this.getDirectSelectedNodeCount(canvas);
+        const edgeSelectionCount = this.getDirectSelectedEdgeCount(canvas);
+
+        const clearStartedAt = performance.now();
+        this.clearDirectNodeSelectionState(canvas);
+        const domNodeCleared = this.clearSelectionFallbackDomClasses(
+            canvasView.contentEl,
+            '.canvas-node.is-selected, .canvas-node.is-focused'
+        );
+        this.clearDirectEdgeSelectionState(canvas);
+        const domEdgeCleared = this.clearSelectionFallbackDomClasses(
+            canvasView.contentEl,
+            '.canvas-edge-line-group.is-selected, .canvas-edge-line-group.is-focused, .canvas-edge.is-selected, .canvas-edge.is-focused'
+        );
+        const clearSelectionMs = performance.now() - clearStartedAt;
+
+        const applyStartedAt = performance.now();
+        this.syncSelectedEdgeState(canvas, edge);
+        this.ensureEdgeSelectionFallbackClasses(edge);
+        const applySelectionMs = performance.now() - applyStartedAt;
+        const totalMs = performance.now() - startedAt;
+
+        if (selectedEdge && !this.isSameEdgeForFallback(selectedEdge, edge)) {
+            logVerbose(
+                `[Event] EdgeSelectionFallbackDedup: reason=${reason}, status=replaced-selection, ` +
+                `from=${this.getEdgeSelectionFallbackKey(selectedEdge)}, to=${targetEdgeKey}, token=${scheduleToken ?? 'na'}`
+            );
         }
-
-        for (const canvasEdge of getEdgesFromCanvas(canvas)) {
-            canvasEdge.lineGroupEl?.classList.remove('is-selected', 'is-focused');
-            canvasEdge.lineEndGroupEl?.classList.remove('is-selected', 'is-focused');
-        }
-
-        (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = edge;
-        (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [edge];
-
-        edge.lineGroupEl?.classList.add('is-selected', 'is-focused');
-        edge.lineEndGroupEl?.classList.add('is-selected');
 
         const { fromId, toId } = extractEdgeNodeIds(edge);
         log(
@@ -1001,6 +1132,133 @@ export class CanvasEventManager {
             `from=${fromId || 'unknown'}, to=${toId || 'unknown'}, clearedNodes=${nodeSelectionCount}, ` +
             `selection=${this.describeCanvasSelection()}`
         );
+        this.maybeLogEdgeSelectionFallbackPerf({
+            reason,
+            edgeKey: targetEdgeKey,
+            scheduleToken,
+            resolveEdgeMs,
+            clearSelectionMs,
+            applySelectionMs,
+            totalMs,
+            nodeSelectionCount,
+            edgeSelectionCount,
+            domNodeCleared,
+            domEdgeCleared,
+            status: 'applied'
+        });
+    }
+
+    private getDirectSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
+        if (canvas.selectedEdge) return canvas.selectedEdge;
+        if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
+            return canvas.selectedEdges[0] || null;
+        }
+        return null;
+    }
+
+    private getDirectSelectedEdgeCount(canvas: CanvasLike): number {
+        if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
+            return canvas.selectedEdges.length;
+        }
+        return canvas.selectedEdge ? 1 : 0;
+    }
+
+    private getDirectSelectedNodeCount(canvas: CanvasLike): number {
+        return getDirectSelectedNodes(canvas).length;
+    }
+
+    private clearDirectNodeSelectionState(canvas: CanvasLike): void {
+        if (canvas.selection instanceof Set) {
+            canvas.selection.clear();
+        }
+        if (Array.isArray(canvas.selectedNodes)) {
+            canvas.selectedNodes = [];
+        }
+    }
+
+    private clearDirectEdgeSelectionState(canvas: CanvasLike): void {
+        delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike | null }).selectedEdge;
+        (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+    }
+
+    private syncSelectedEdgeState(canvas: CanvasLike, edge: CanvasEdgeLike): void {
+        (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = edge;
+        (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [edge];
+    }
+
+    private clearSelectionFallbackDomClasses(root: ParentNode | null | undefined, selector: string): number {
+        if (!root) return 0;
+        const elements = root.querySelectorAll(selector);
+        let cleared = 0;
+        for (const el of Array.from(elements)) {
+            if (!(el instanceof Element)) continue;
+            const hadSelected = el.classList.contains('is-selected') || el.classList.contains('is-focused');
+            el.classList.remove('is-selected', 'is-focused');
+            if (hadSelected) cleared++;
+        }
+        return cleared;
+    }
+
+    private isEdgeSelectionFallbackDomSelected(edge: CanvasEdgeLike): boolean {
+        return !!(
+            edge.lineGroupEl?.classList.contains('is-selected')
+            || edge.lineGroupEl?.classList.contains('is-focused')
+            || edge.lineEndGroupEl?.classList.contains('is-selected')
+            || edge.lineEndGroupEl?.classList.contains('is-focused')
+        );
+    }
+
+    private ensureEdgeSelectionFallbackClasses(edge: CanvasEdgeLike): void {
+        edge.lineGroupEl?.classList.add('is-selected', 'is-focused');
+        edge.lineEndGroupEl?.classList.add('is-selected');
+        edge.lineEndGroupEl?.classList.remove('is-focused');
+    }
+
+    private getEdgeSelectionFallbackKey(edge: CanvasEdgeLike): string {
+        const edgeId = edge.id;
+        if (edgeId) return edgeId;
+        const { fromId, toId } = extractEdgeNodeIds(edge);
+        return `${fromId || 'unknown'}->${toId || 'unknown'}`;
+    }
+
+    private isSameEdgeForFallback(left: CanvasEdgeLike | null | undefined, right: CanvasEdgeLike | null | undefined): boolean {
+        if (!left || !right) return false;
+        if (left === right) return true;
+        return this.getEdgeSelectionFallbackKey(left) === this.getEdgeSelectionFallbackKey(right);
+    }
+
+    private maybeLogEdgeSelectionFallbackPerf(params: {
+        reason: string;
+        edgeKey: string;
+        scheduleToken?: number;
+        resolveEdgeMs: number;
+        clearSelectionMs: number;
+        applySelectionMs: number;
+        totalMs: number;
+        nodeSelectionCount: number;
+        edgeSelectionCount: number;
+        domNodeCleared: number;
+        domEdgeCleared: number;
+        status: 'applied' | 'already-selected' | 'sync-dom-selected';
+    }): void {
+        const shouldLogSlow = params.totalMs >= this.edgeSelectionFallbackSlowLogThresholdMs;
+        const shouldLogVerbose = isVerboseCanvasDiagnosticsLoggingEnabled();
+        if (!shouldLogSlow && !shouldLogVerbose) return;
+
+        const message =
+            `[Event] EdgeFallbackPerf: reason=${params.reason}, status=${params.status}, edge=${params.edgeKey}, ` +
+            `token=${params.scheduleToken ?? 'na'}, selectedNodes=${params.nodeSelectionCount}, ` +
+            `selectedEdges=${params.edgeSelectionCount}, domNodeCleared=${params.domNodeCleared}, ` +
+            `domEdgeCleared=${params.domEdgeCleared}, resolve=${params.resolveEdgeMs.toFixed(2)}ms, ` +
+            `clear=${params.clearSelectionMs.toFixed(2)}ms, apply=${params.applySelectionMs.toFixed(2)}ms, ` +
+            `total=${params.totalMs.toFixed(2)}ms`;
+
+        if (shouldLogSlow) {
+            log(message);
+            return;
+        }
+
+        logVerbose(message);
     }
 
     private async triggerPenLongPressNavigation(pointerId: number, nodeId: string | null, startedAt: number): Promise<void> {
@@ -1142,36 +1400,15 @@ export class CanvasEventManager {
         const methods = methodNames.map((name) => `${name}=${typeof canvasRecord?.[name] === 'function'}`).join(',');
         const nodeCount = canvas ? getNodesFromCanvas(canvas).length : 'na';
         const edgeCount = canvas ? getEdgesFromCanvas(canvas).length : 'na';
-        const selectionCount = canvas?.selection instanceof Set
-            ? canvas.selection.size
-            : (canvas?.selectedNodes?.length ?? 0);
+        const selectionSummary = getCanvasSelectionSummary(canvas);
 
-        return `canvas=${canvas ? 'yes' : 'no'},nodes=${nodeCount},edges=${edgeCount},selection=${selectionCount},methods={${methods}}`;
+        return `canvas=${canvas ? 'yes' : 'no'},nodes=${nodeCount},edges=${edgeCount},selectionNodes=${selectionSummary.nodeIds.length},selectionEdges=${selectionSummary.edgeIds.length},methods={${methods}}`;
     }
 
     private describeCanvasSelection(): string {
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
-        if (!canvas) return 'canvas=no';
-
-        const selectedIds: string[] = [];
-        if (canvas.selection instanceof Set) {
-            for (const item of Array.from(canvas.selection.values())) {
-                const itemId = item?.id;
-                if (itemId) selectedIds.push(itemId);
-            }
-        } else if (canvas.selectedNodes?.length) {
-            for (const item of canvas.selectedNodes) {
-                const itemId = item?.id;
-                if (itemId) selectedIds.push(itemId);
-            }
-        }
-
-        const edgeId = (canvas.selectedEdge as { id?: string } | undefined)?.id
-            || canvas.selectedEdges?.[0]?.id
-            || 'none';
-        const idsSample = selectedIds.slice(0, 3).join('|') || 'none';
-        return `nodes=${selectedIds.length}[${idsSample}],edge=${edgeId}`;
+        return describeCanvasSelectionState(canvas);
     }
 
     private summarizeNativeInsertArg(arg: unknown): string {
@@ -1236,15 +1473,15 @@ export class CanvasEventManager {
 
     private scheduleNativeInsertSelectionProbe(traceId: string, reason: string): void {
         window.setTimeout(() => {
-            log(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-0, selection=${this.describeCanvasSelection()}`);
+            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-0, selection=${this.describeCanvasSelection()}`);
         }, 0);
 
         requestAnimationFrame(() => {
-            log(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:raf, selection=${this.describeCanvasSelection()}`);
+            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:raf, selection=${this.describeCanvasSelection()}`);
         });
 
         window.setTimeout(() => {
-            log(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-120, selection=${this.describeCanvasSelection()}`);
+            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-120, selection=${this.describeCanvasSelection()}`);
         }, 120);
     }
 
@@ -1451,7 +1688,7 @@ export class CanvasEventManager {
         );
 
         if (!session.nodeCreateSeen) {
-            log(
+            logVerbose(
                 `[Event] NativeInsertDiagnostics: trace=${session.traceId}, downDefaultPrevented=${session.downDefaultPrevented}, ` +
                 `startTarget=${session.startTarget}, startChain=${session.startChain}, ` +
                 `startWrapperStyle=${session.initialWrapperStyle}, endTarget=${this.describeEventTarget(target)}, ` +
@@ -1680,6 +1917,112 @@ export class CanvasEventManager {
         ].join(',');
     }
 
+    private hasSuspiciousDeleteModalFocusContext(): boolean {
+        const activeViewType = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() || 'none';
+        const activeEditorInfo = this.app.workspace.activeEditor;
+        return activeViewType === 'canvas' && !!activeEditorInfo && !activeEditorInfo.editor;
+    }
+
+    private isDeleteOverlayInteractionTarget(target: EventTarget | null): boolean {
+        return target instanceof Element && !!target.closest(
+            '.canvas-mindmap-delete-overlay, .canvas-mindmap-delete-panel, .canvas-mindmap-delete-edge-overlay, .canvas-mindmap-delete-edge-panel'
+        );
+    }
+
+    private clearSuspiciousDeleteModalFocusContext(reason: string, kind: 'node' | 'edge', targetId: string): boolean {
+        if (!this.hasSuspiciousDeleteModalFocusContext()) return false;
+
+        const before = this.describeDeleteModalFocusContext();
+        const workspaceRecord = this.app.workspace as unknown as {
+            activeEditor?: { editor?: unknown } | null;
+        };
+
+        try {
+            workspaceRecord.activeEditor = null;
+        } catch {
+            try {
+                delete workspaceRecord.activeEditor;
+            } catch {
+                // ignore assignment/delete failures on Obsidian internals
+            }
+        }
+
+        const after = this.describeDeleteModalFocusContext();
+        log(
+            `[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
+            `focusBefore=${before}, focusAfter=${after}`
+        );
+        return before !== after;
+    }
+
+    private async runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {
+        return new Promise<T>((resolve, reject) => {
+            requestAnimationFrame(() => {
+                Promise.resolve()
+                    .then(action)
+                    .then(resolve)
+                    .catch(reject);
+            });
+        });
+    }
+
+    private async openDeleteModalSafely(modal: { open: () => void }, kind: 'node' | 'edge', targetId: string): Promise<void> {
+        this.clearSuspiciousDeleteModalFocusContext('pre-open', kind, targetId);
+        await this.runDeleteModalOnNextFrame(() => {
+            modal.open();
+        });
+    }
+
+    private async waitForDeleteModalFocusSettle(kind: 'node' | 'edge', targetId: string): Promise<void> {
+        this.clearSuspiciousDeleteModalFocusContext('post-close', kind, targetId);
+        await this.runDeleteModalOnNextFrame(() => undefined);
+    }
+
+    private markSuppressDeleteButtonClick(holdMs: number, reason: string): void {
+        this.suppressDeleteButtonClickUntil = Date.now() + Math.max(0, holdMs);
+        this.suppressDeleteButtonClickReason = reason;
+    }
+
+    private shouldSuppressDeleteButtonClick(reason: string): boolean {
+        const now = Date.now();
+        if (now >= this.suppressDeleteButtonClickUntil) {
+            return false;
+        }
+
+        logVerbose(
+            `[Event] DeleteButtonClickSuppressed: phase=${reason}, ` +
+            `reason=${this.suppressDeleteButtonClickReason || 'unknown'}, ` +
+            `remaining=${Math.max(0, this.suppressDeleteButtonClickUntil - now)}ms`
+        );
+        return true;
+    }
+
+    private async executeDeleteEdgeOperation(selectedEdge: CanvasEdgeLike, canvas: CanvasLike): Promise<void> {
+        const edgeKey = this.getEdgeSelectionFallbackKey(selectedEdge);
+        const modal = new DeleteEdgeConfirmationModal(this.app);
+        const resultPromise = modal.waitForResult();
+        log(
+            `[Event] DeleteEdgeModalOpen: edge=${edgeKey}, ` +
+            `focusContext=${this.describeDeleteModalFocusContext()}`
+        );
+        try {
+            await this.openDeleteModalSafely(modal, 'edge', edgeKey);
+        } catch (error) {
+            log(`[Event] DeleteEdgeModalOpenError: ${String(error)}`);
+            new Notice('删除连线确认框打开失败');
+            return;
+        }
+
+        const result = await resultPromise;
+        log(`[Event] DeleteEdgeModalResult: edge=${edgeKey}, action=${result.action}`);
+        if (result.action !== 'confirm') return;
+
+        await this.waitForDeleteModalFocusSettle('edge', edgeKey);
+        this.syncSelectedEdgeState(canvas, selectedEdge);
+        this.ensureEdgeSelectionFallbackClasses(selectedEdge);
+        await this.canvasManager.deleteSelectedEdge();
+    }
+
     private handleDeleteButtonClick(canvasView: ItemView): void {
         const canvas = this.getCanvasFromView(canvasView);
         if (!canvas) return;
@@ -1699,24 +2042,7 @@ export class CanvasEventManager {
         
         const selectedEdge = getSelectedEdge(canvas);
         if (selectedEdge) {
-            const modal = new DeleteEdgeConfirmationModal(this.app);
-            log(
-                `[Event] DeleteEdgeModalOpen: edge=${selectedEdge.id || 'unknown'}, ` +
-                `focusContext=${this.describeDeleteModalFocusContext()}`
-            );
-            try {
-                modal.open();
-            } catch (error) {
-                log(`[Event] DeleteEdgeModalOpenError: ${String(error)}`);
-                new Notice('删除连线确认框打开失败');
-                return;
-            }
-            void modal.waitForResult().then(async (result) => {
-                log(`[Event] DeleteEdgeModalResult: action=${result.action}`);
-                if (result.action === 'confirm') {
-                    await this.canvasManager.deleteSelectedEdge();
-                }
-            });
+            void this.executeDeleteEdgeOperation(selectedEdge, canvas);
             return;
         }
     }
@@ -1731,22 +2057,24 @@ export class CanvasEventManager {
         const hasChildren = this.collapseStateManager.getChildNodes(nodeId, edges).length > 0;
         
         const modal = new DeleteConfirmationModal(this.app, hasChildren);
+        const resultPromise = modal.waitForResult();
         log(
             `[Event] DeleteNodeModalOpen: node=${nodeId}, hasChildren=${hasChildren}, ` +
             `focusContext=${this.describeDeleteModalFocusContext()}`
         );
         try {
-            modal.open();
+            await this.openDeleteModalSafely(modal, 'node', nodeId);
         } catch (error) {
             log(`[Event] DeleteNodeModalOpenError: node=${nodeId}, error=${String(error)}`);
             new Notice('删除节点确认框打开失败');
             return;
         }
-        const result = await modal.waitForResult();
+        const result = await resultPromise;
         log(`[Event] DeleteNodeModalResult: node=${nodeId}, action=${result.action}`);
         
         if (result.action === 'cancel') return;
 
+        await this.waitForDeleteModalFocusSettle('node', nodeId);
         this.collapseStateManager.clearCache();
         log(`[Event] UI: 删除 ${nodeId} (${result.action})`);
         if (result.action === 'confirm' || result.action === 'single') {
@@ -1920,24 +2248,24 @@ export class CanvasEventManager {
         const currentToken = ++this.setupTokenCounter;
         const isDuplicate = this.lastSetupPath === canvasFilePath && canvasFilePath !== null;
         
-        log(`[Event] setupCanvasEventListeners(#${this.setupCallCount}): token=${currentToken}, path=${canvasFilePath || 'null'}, duplicate=${isDuplicate}, isSettingUp=${this.isSettingUp}`);
+        logVerbose(`[Event] setupCanvasEventListeners(#${this.setupCallCount}): token=${currentToken}, path=${canvasFilePath || 'null'}, duplicate=${isDuplicate}, isSettingUp=${this.isSettingUp}`);
         
         // [B1] 幂等化 - 防止重复 setup
         if (this.isSettingUp) {
-            log(`[Event] setupCanvasEventListeners: 跳过（正在设置中）`);
+            logVerbose(`[Event] setupCanvasEventListeners: 跳过（正在设置中）`);
             return;
         }
         
         // 如果是同一路径且已注册过，跳过
         if (isDuplicate && this.workspaceEventsRegistered) {
-            log(`[Event] setupCanvasEventListeners: 跳过（同一路径已注册）path=${canvasFilePath}, registered=${this.workspaceEventsRegistered}`);
+            logVerbose(`[Event] setupCanvasEventListeners: 跳过（同一路径已注册）path=${canvasFilePath}, registered=${this.workspaceEventsRegistered}`);
             return;
         }
         
         this.isSettingUp = true;
         
         try {
-            log(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
+            logVerbose(`[Event] setupCanvasEventListeners 被调用, canvas=${canvas ? 'exists' : 'null'}`);
             
             if (!canvas) {
                 log(`[Event] canvas 不存在，跳过设置`);
@@ -1970,9 +2298,9 @@ export class CanvasEventManager {
                 this.registerCanvasWorkspaceEvents(canvas);
                 this.workspaceEventsRegistered = true;
                 this.workspaceEventsPath = canvasFilePath || null;
-                log(`[Event] setupCanvasEventListeners: 工作区事件首次注册, path=${canvasFilePath || 'null'}`);
+                logVerbose(`[Event] setupCanvasEventListeners: 工作区事件首次注册, path=${canvasFilePath || 'null'}`);
             } else {
-                log(`[Event] setupCanvasEventListeners: 跳过注册（已注册）, path=${this.workspaceEventsPath}`);
+                logVerbose(`[Event] setupCanvasEventListeners: 跳过注册（已注册）, path=${this.workspaceEventsPath}`);
             }
         } finally {
             this.isSettingUp = false;
@@ -1980,7 +2308,7 @@ export class CanvasEventManager {
     }
 
     private async handleCanvasFileModified(filePath: string): Promise<void> {
-        log(`[Event] Canvas 文件变更: ${filePath}`);
+        logVerbose(`[Event] Canvas 文件变更: ${filePath}`);
         
         // 如果正在执行删除操作，跳过新边检测（防止删边后被误判为新边）
         if (this.isDeleting) {
@@ -2011,6 +2339,12 @@ export class CanvasEventManager {
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:edge-create', (edge: CanvasEdgeLike) => {
                 void (async () => {
+                    if (this.isDeleting) {
+                        const { fromId, toId } = extractEdgeNodeIds(edge);
+                        log(`[Event] Canvas:EdgeCreate 忽略（删除操作中）: ${edge.id} (${fromId} -> ${toId})`);
+                        return;
+                    }
+
                     const { fromId, toId } = extractEdgeNodeIds(edge);
                     log(`[Event] Canvas:EdgeCreate: ${edge.id} (${fromId} -> ${toId})`);
 
@@ -2054,6 +2388,11 @@ export class CanvasEventManager {
 
         this.plugin.registerEvent(
             this.app.workspace.on('canvas:change', () => {
+                if (this.isDeleting) {
+                    log(`[Event] Canvas:Change 忽略（删除操作中）`);
+                    return;
+                }
+
                 // [诊断] 添加 invocationId 区分不同触发
                 const invocationId = `chg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
                 log(`[Event] Canvas:Change start id=${invocationId}, trigger=file-change`);
@@ -2333,8 +2672,10 @@ export class CanvasEventManager {
      */
     endDeletingOperation(canvas: CanvasLike | null): void {
         this.isDeleting = false;
-        if (canvas) {
-            const edges = getEdgesFromCanvas(canvas);
+        const activeCanvasView = getCanvasView(this.app);
+        const effectiveCanvas = canvas ?? (activeCanvasView ? this.getCanvasFromView(activeCanvasView) : null);
+        if (effectiveCanvas) {
+            const edges = getEdgesFromCanvas(effectiveCanvas);
             this.lastEdgeIds = buildEdgeIdSet(edges);
             log(`[Event] 结束删除操作，更新边快照: edges=${edges.length}`);
         } else {

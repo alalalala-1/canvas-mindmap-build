@@ -136,6 +136,8 @@ export interface CanvasEdgeInternal {
     requestUpdate?: () => void;
 }
 
+export type CanvasSelectionEntryInternal = CanvasNodeInternal | CanvasEdgeInternal;
+
 // =========================================================================
 // Canvas 内部视图类型
 // =========================================================================
@@ -173,7 +175,7 @@ export interface CanvasInternal {
     /** 请求保存方法 */
     requestSave?: () => void;
     /** 选中的节点 */
-    selection?: Set<CanvasNodeInternal>;
+    selection?: Set<CanvasSelectionEntryInternal>;
     /** 选中的节点数组 */
     selectedNodes?: CanvasNodeInternal[];
     /** 选中的边 */

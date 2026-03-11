@@ -2,7 +2,7 @@ import { App, ItemView } from 'obsidian';
 import { CanvasMindmapBuildSettings } from '../settings/types';
 import { CollapseStateManager } from '../state/collapse-state';
 import { getCanvasView, getEdgeFromNodeId } from '../utils/canvas-utils';
-import { log } from '../utils/logger';
+import { logVerbose } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike } from './types';
 
@@ -25,13 +25,13 @@ export class CanvasUIManager {
     checkAndAddCollapseButtons() {
         const canvasView = this.getCanvasView();
         if (!canvasView) {
-            log(`[UI] checkAndAddCollapseButtons: 无 canvasView`);
+            logVerbose(`[UI] checkAndAddCollapseButtons: 无 canvasView`);
             return;
         }
 
         const canvas = (canvasView as CanvasViewLike).canvas;
         if (!canvas) {
-            log(`[UI] checkAndAddCollapseButtons: 无 canvas`);
+            logVerbose(`[UI] checkAndAddCollapseButtons: 无 canvas`);
             return;
         }
 
@@ -48,19 +48,19 @@ export class CanvasUIManager {
                 : Array.isArray(canvas.edges)
                     ? canvas.edges
                     : [];
-            log(`[UI] checkAndAddCollapseButtons: 从内存获取, nodes=${nodes.length}, edges=${edges.length}`);
+            logVerbose(`[UI] checkAndAddCollapseButtons: 从内存获取, nodes=${nodes.length}, edges=${edges.length}`);
             if (fileEdges.length > edges.length) {
                 edges = fileEdges;
-                log(`[UI] checkAndAddCollapseButtons: 使用 fileData 边覆盖, edges=${edges.length}`);
+                logVerbose(`[UI] checkAndAddCollapseButtons: 使用 fileData 边覆盖, edges=${edges.length}`);
             }
         } else if (canvas.fileData?.nodes) {
             nodes = canvas.fileData.nodes;
             edges = fileEdges;
-            log(`[UI] checkAndAddCollapseButtons: 从 fileData 获取, nodes=${nodes.length}, edges=${edges.length}`);
+            logVerbose(`[UI] checkAndAddCollapseButtons: 从 fileData 获取, nodes=${nodes.length}, edges=${edges.length}`);
         }
 
         if (nodes.length === 0) {
-            log(`[UI] checkAndAddCollapseButtons: 无节点`);
+            logVerbose(`[UI] checkAndAddCollapseButtons: 无节点`);
             return;
         }
 
@@ -89,7 +89,7 @@ export class CanvasUIManager {
                 nodeEl = this.findNodeElementById(nodeId);
             }
             if (!nodeEl) {
-                log(`[UI] 找不到节点元素: ${nodeId}`);
+                logVerbose(`[UI] 找不到节点元素: ${nodeId}`);
                 continue;
             }
 
@@ -101,7 +101,7 @@ export class CanvasUIManager {
             if (!hasChildren) {
                 const existingBtn = nodeEl.querySelector('.cmb-collapse-button');
                 if (existingBtn) {
-                    log(`[UI] 移除折叠按钮: ${nodeId} (无子节点)`);
+                    logVerbose(`[UI] 移除折叠按钮: ${nodeId} (无子节点)`);
                     existingBtn.remove();
                     this.collapseStateManager.markExpanded(nodeId);
                 }

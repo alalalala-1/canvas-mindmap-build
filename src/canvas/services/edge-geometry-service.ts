@@ -709,7 +709,7 @@ export class EdgeGeometryService {
         }
 
         if (targets.length === 0) {
-            log(`[StyleTrace] phase=${phase}, watchMs=${watchMs}, targets=0, ctx=${contextId || 'none'}`);
+            logVerbose(`[StyleTrace] phase=${phase}, watchMs=${watchMs}, targets=0, ctx=${contextId || 'none'}`);
             return;
         }
 
@@ -754,7 +754,7 @@ export class EdgeGeometryService {
             });
         }
 
-        log(`[StyleTrace] phase=${phase}, watchMs=${watchMs}, targets=${targets.length}, ctx=${contextId || 'none'}`);
+        logVerbose(`[StyleTrace] phase=${phase}, watchMs=${watchMs}, targets=${targets.length}, ctx=${contextId || 'none'}`);
 
         await new Promise<void>((resolve) => {
             window.setTimeout(() => {
@@ -763,9 +763,9 @@ export class EdgeGeometryService {
             }, watchMs);
         });
 
-        log(`[StyleTrace] phase=${phase}, mutations=${mutationCount}, logged=${events.length}, overflow=${overflow}, ctx=${contextId || 'none'}`);
+        logVerbose(`[StyleTrace] phase=${phase}, mutations=${mutationCount}, logged=${events.length}, overflow=${overflow}, ctx=${contextId || 'none'}`);
         if (events.length > 0) {
-            log(`[StyleTrace] Events(${phase}):\n${events.join('\n')}`);
+            logVerbose(`[StyleTrace] Events(${phase}):\n${events.join('\n')}`);
         }
     }
 

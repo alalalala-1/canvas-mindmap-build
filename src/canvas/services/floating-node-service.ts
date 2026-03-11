@@ -21,6 +21,7 @@ export class FloatingNodeService {
     private recentConnectedNodes: Map<string, number> = new Map();
     private edgeWatchTimeouts: Map<string, Set<number>> = new Map();
     private floatingNodeIds: Set<string> = new Set();
+    private suppressNewEdgeHandlingUntil: number = 0;
 
     constructor(app: App, settings: CanvasMindmapBuildSettings, canvasFileService: CanvasFileService) {
         this.canvasFileService = canvasFileService;
@@ -31,6 +32,23 @@ export class FloatingNodeService {
 
     setCanvasManager(canvasManager: ICanvasManager): void {
         this.canvasManager = canvasManager;
+    }
+
+    startDeletionSuppression(holdMs: number = 2000): void {
+        this.suppressNewEdgeHandlingUntil = Math.max(this.suppressNewEdgeHandlingUntil, Date.now() + Math.max(0, holdMs));
+        log(`[FloatingNode] 开始删除抑制窗口: holdMs=${holdMs}`);
+    }
+
+    endDeletionSuppression(holdMs: number = 900): void {
+        this.suppressNewEdgeHandlingUntil = Math.max(this.suppressNewEdgeHandlingUntil, Date.now() + Math.max(0, holdMs));
+        log(`[FloatingNode] 延长删除抑制窗口: holdMs=${holdMs}`);
+    }
+
+    private isDeletionSuppressed(reason: string): boolean {
+        const remaining = this.suppressNewEdgeHandlingUntil - Date.now();
+        if (remaining <= 0) return false;
+        log(`[FloatingNode] 跳过新边处理: reason=${reason}, remaining=${remaining}ms`);
+        return true;
     }
 
     /**
@@ -439,6 +457,10 @@ export class FloatingNodeService {
      * 因此只更新内存状态，不触发文件操作
      */
     async handleNewEdge(edge: CanvasEdgeLike, persistToFile: boolean = false): Promise<void> {
+        if (this.isDeletionSuppressed('handleNewEdge')) {
+            return;
+        }
+
         const edgeId = edge.id;
         const toNodeId = getEdgeToNodeIdUtil(edge);
         const fromNodeId = getEdgeFromNodeIdUtil(edge);
@@ -529,6 +551,10 @@ export class FloatingNodeService {
      * 手动触发边变化检测
      */
     forceEdgeDetection(canvas: CanvasLike): void {
+        if (this.isDeletionSuppressed('forceEdgeDetection')) {
+            return;
+        }
+
         log(`[FloatingNode] 手动边检测触发`);
         const edges = this.getEdgesFromCanvas();
         log(`[FloatingNode] 当前边数: ${edges.length}`);
@@ -828,6 +854,7 @@ export class FloatingNodeService {
 
     startEdgeDetectionWindow(canvas: CanvasLike): void {
         if (!canvas) return;
+        if (this.isDeletionSuppressed('startEdgeDetectionWindow')) return;
         this.canvas = canvas;
         if (this.floatingNodeIds.size === 0) return;
         if (this.edgeDetector.isRunning()) return;

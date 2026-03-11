@@ -763,8 +763,22 @@ export class NodeHeightService {
             if (nodeData) {
                 log(`[NodeHeight] 同步更新内存节点高度: ${newHeight}`);
                 nodeData.height = newHeight;
+                const width = typeof nodeData.width === 'number' && nodeData.width > 0
+                    ? nodeData.width
+                    : (this.settings.textNodeWidth || 400);
+                const x = typeof nodeData.x === 'number' ? nodeData.x : 0;
+                const y = typeof nodeData.y === 'number' ? nodeData.y : 0;
+                (nodeData as CanvasNodeLike & {
+                    bbox?: { minX: number; minY: number; maxX: number; maxY: number };
+                }).bbox = {
+                    minX: x,
+                    minY: y,
+                    maxX: x + width,
+                    maxY: y + newHeight,
+                };
                 if (nodeData.nodeEl) {
                     nodeData.nodeEl.style.height = `${newHeight}px`;
+                    nodeData.nodeEl.style.minHeight = `${newHeight}px`;
                 }
                 const nodeWithRender = nodeData as CanvasNodeLike & { render?: () => void };
                 if (typeof nodeWithRender.render === 'function') {

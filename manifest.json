@@ -1,7 +1,7 @@
 {
 	"id": "canvas-mindmap-build",
 	"name": "Canvas Mindmap Build",
-	"version": "2.5.2",
+	"version": "2.5.3",
 	"minAppVersion": "0.15.0",
 	"description": "Turn your Markdown notes into Canvas mindmaps. Add nodes from selected text, collapse/expand subtrees, auto-arrange layout, and jump back to source with one click.",
 	"author": "Saga",

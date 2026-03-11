@@ -249,10 +249,12 @@ export class CanvasManager implements ICanvasManager {
     // 删除操作标志控制（防止删边后被误判为新边）
     // =========================================================================
     startDeletingOperation(): void {
+        this.floatingNodeService.startDeletionSuppression(2200);
         this.eventManager.startDeletingOperation();
     }
 
     endDeletingOperation(canvas: CanvasLike | null): void {
+        this.floatingNodeService.endDeletionSuppression(1200);
         this.eventManager.endDeletingOperation(canvas);
     }
 

@@ -3,7 +3,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasFileService } from './canvas-file-service';
 import { NodeTypeService } from './node-type-service';
 import { NodePositionCalculator } from '../utils/node-position-calculator';
-import { generateRandomId, getCanvasView } from '../../utils/canvas-utils';
+import { describeCanvasSelectionState, generateRandomId, getCanvasView, getDirectSelectedNodes } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager, EditorWithSelection, CanvasViewLike, PluginWithLastClicked } from '../types';
@@ -206,9 +206,9 @@ export class NodeCreationService {
     }
 
     private resolveTargetCanvasFilePath(
-        contextCanvasFilePath: string | undefined,
-        openCanvasFilePath: string | undefined,
-        settingsCanvasFilePath: string | undefined
+        contextCanvasFilePath: string | null | undefined,
+        openCanvasFilePath: string | null | undefined,
+        settingsCanvasFilePath: string | null | undefined
     ): CanvasPathResolution {
         const candidates = [
             { source: 'last-clicked-canvas', path: contextCanvasFilePath },
@@ -254,7 +254,7 @@ export class NodeCreationService {
         };
     }
 
-    private canvasFileExists(filePath: string | undefined): boolean {
+    private canvasFileExists(filePath: string | null | undefined): boolean {
         if (!filePath) return false;
         return this.app.vault.getAbstractFileByPath(filePath) instanceof TFile;
     }
@@ -321,8 +321,8 @@ export class NodeCreationService {
         const canvasView = this.getCanvasView();
         if (canvasView) {
             const canvas = (canvasView as CanvasViewLike).canvas;
-            if (canvas?.selection) {
-                const selectedNodes = Array.from(canvas.selection.values());
+            if (canvas) {
+                const selectedNodes = getDirectSelectedNodes(canvas);
                 const firstSelected = selectedNodes[0];
                 if (firstSelected?.id) {
                     const selectedNodeId = firstSelected.id;
@@ -432,21 +432,7 @@ export class NodeCreationService {
     private describeCanvasSelection(): string {
         const canvasView = this.getCanvasView();
         const canvas = canvasView ? (canvasView as CanvasViewLike).canvas : null;
-        if (!canvas) return 'canvas=no';
-
-        const selectedIds: string[] = [];
-        if (canvas.selection instanceof Set) {
-            for (const item of Array.from(canvas.selection.values())) {
-                if (item?.id) selectedIds.push(item.id);
-            }
-        } else if (Array.isArray(canvas.selectedNodes)) {
-            for (const item of canvas.selectedNodes) {
-                if (item?.id) selectedIds.push(item.id);
-            }
-        }
-
-        const edgeId = canvas.selectedEdge?.id || canvas.selectedEdges?.[0]?.id || 'none';
-        return `nodes=${selectedIds.length}[${selectedIds.slice(0, 3).join('|') || 'none'}],edge=${edgeId}`;
+        return describeCanvasSelectionState(canvas);
     }
 
     private getOpenCanvasFilePath(): string | undefined {

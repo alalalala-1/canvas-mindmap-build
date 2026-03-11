@@ -1,6 +1,6 @@
 import { App, ItemView, View } from 'obsidian';
 import { CONSTANTS } from '../constants';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasSelectionEntry, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
 
 type CanvasDataNode = {
     id: string;
@@ -409,21 +409,160 @@ export function resolveArrangedTextWidth(text: string | undefined, configuredWid
 
 function isCanvasNodeLike(value: unknown): value is CanvasNodeLike {
     if (!value || typeof value !== 'object') return false;
+    if (isCanvasEdgeLike(value)) return false;
     const candidate = value as CanvasNodeLike;
     return typeof candidate.id === 'string' || !!candidate.nodeEl || typeof candidate.type === 'string';
+}
+
+function isCanvasEdgeLike(value: unknown): value is CanvasEdgeLike {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as CanvasEdgeLike;
+    return !!candidate.lineGroupEl
+        || !!candidate.lineEndGroupEl
+        || typeof candidate.fromNode === 'string'
+        || typeof candidate.toNode === 'string'
+        || candidate.from !== undefined
+        || candidate.to !== undefined;
+}
+
+function isSameCanvasNode(left: CanvasNodeLike | null | undefined, right: CanvasNodeLike | null | undefined): boolean {
+    if (!left || !right) return false;
+    if (left === right) return true;
+    return !!left.id && !!right.id && left.id === right.id;
+}
+
+function isPresentInCanvasNodes(nodesInCanvas: CanvasNodeLike[], node: CanvasNodeLike | null | undefined): node is CanvasNodeLike {
+    if (!node) return false;
+    return nodesInCanvas.some(candidate => isSameCanvasNode(candidate, node));
+}
+
+function isPresentInCanvasEdges(edgesInCanvas: CanvasEdgeLike[], edge: CanvasEdgeLike | null | undefined): edge is CanvasEdgeLike {
+    if (!edge) return false;
+    return edgesInCanvas.some(candidate => isSameCanvasEdge(candidate, edge));
+}
+
+function pushUniqueId(target: string[], seen: Set<string>, id: string | null | undefined): void {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    target.push(id);
+}
+
+export type CanvasSelectionSummary = {
+    nodeIds: string[];
+    edgeIds: string[];
+    activeEdgeId: string | null;
+};
+
+export function getDirectSelectedNodes(canvas: CanvasLike | null | undefined): CanvasNodeLike[] {
+    if (!canvas) return [];
+
+    const nodesInCanvas = getNodesFromCanvas(canvas);
+    const selectedNodes: CanvasNodeLike[] = [];
+    const seenNodeIds = new Set<string>();
+    const rememberNode = (node: CanvasNodeLike | null | undefined) => {
+        if (!node || !isPresentInCanvasNodes(nodesInCanvas, node)) return;
+        const key = node.id || `ref:${nodesInCanvas.indexOf(node)}`;
+        if (seenNodeIds.has(key)) return;
+        seenNodeIds.add(key);
+        selectedNodes.push(node);
+    };
+
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const value of canvas.selection.values()) {
+            if (isCanvasNodeLike(value)) {
+                rememberNode(value);
+            }
+        }
+        if (selectedNodes.length > 0) {
+            return selectedNodes;
+        }
+    }
+
+    if (Array.isArray(canvas.selectedNodes)) {
+        for (const node of canvas.selectedNodes) {
+            rememberNode(node);
+        }
+    }
+
+    return selectedNodes;
+}
+
+export function getDirectSelectedEdges(canvas: CanvasLike | null | undefined): CanvasEdgeLike[] {
+    if (!canvas) return [];
+
+    const edgesInCanvas = getEdgesFromCanvas(canvas);
+    const selectedEdges: CanvasEdgeLike[] = [];
+    const seenEdgeIds = new Set<string>();
+    const rememberEdge = (edge: CanvasEdgeLike | null | undefined) => {
+        if (!edge || !isPresentInCanvasEdges(edgesInCanvas, edge)) return;
+        const edgeId = getEdgeId(edge) || edge.id || `ref:${edgesInCanvas.indexOf(edge)}`;
+        if (seenEdgeIds.has(edgeId)) return;
+        seenEdgeIds.add(edgeId);
+        selectedEdges.push(edge);
+    };
+
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const value of canvas.selection.values()) {
+            if (isCanvasEdgeLike(value)) {
+                rememberEdge(value);
+            }
+        }
+    }
+
+    rememberEdge(canvas.selectedEdge);
+    for (const edge of canvas.selectedEdges || []) {
+        rememberEdge(edge);
+    }
+
+    return selectedEdges;
+}
+
+export function getCanvasSelectionSummary(canvas: CanvasLike | null | undefined): CanvasSelectionSummary {
+    if (!canvas) {
+        return {
+            nodeIds: [],
+            edgeIds: [],
+            activeEdgeId: null
+        };
+    }
+
+    const nodeIds: string[] = [];
+    const edgeIds: string[] = [];
+    const seenNodeIds = new Set<string>();
+    const seenEdgeIds = new Set<string>();
+
+    for (const node of getDirectSelectedNodes(canvas)) {
+        pushUniqueId(nodeIds, seenNodeIds, node.id || null);
+    }
+
+    for (const edge of getDirectSelectedEdges(canvas)) {
+        pushUniqueId(edgeIds, seenEdgeIds, getEdgeId(edge) || edge.id || null);
+    }
+
+    const activeEdge = getSelectedEdge(canvas);
+    const activeEdgeId = getEdgeId(activeEdge) || activeEdge?.id || edgeIds[0] || null;
+
+    return {
+        nodeIds,
+        edgeIds,
+        activeEdgeId
+    };
+}
+
+export function describeCanvasSelectionState(canvas: CanvasLike | null | undefined): string {
+    if (!canvas) return 'canvas=no';
+    const summary = getCanvasSelectionSummary(canvas);
+    const nodeSample = summary.nodeIds.slice(0, 3).join('|') || 'none';
+    const edgeSample = summary.edgeIds.slice(0, 3).join('|') || 'none';
+    return `nodes=${summary.nodeIds.length}[${nodeSample}],selectionEdges=${summary.edgeIds.length}[${edgeSample}],edge=${summary.activeEdgeId || 'none'}`;
 }
 
 export function getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | null {
     if (!canvas?.nodes) return null;
 
-    const selection = canvas.selection;
-    if (selection instanceof Set && selection.size > 0) {
-        for (const value of selection.values()) {
-            if (isCanvasNodeLike(value) && (value.nodeEl || value.type)) {
-                return value;
-            }
-            break;
-        }
+    const selectedNodes = getDirectSelectedNodes(canvas);
+    if (selectedNodes.length > 0) {
+        return selectedNodes[0] || null;
     }
 
     if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
@@ -451,14 +590,14 @@ export function withTemporaryCanvasSelection(
     action: () => boolean
 ): boolean {
     const canvasWithSelection = canvas as CanvasLike & {
-        selection?: Set<CanvasNodeLike>;
+        selection?: Set<CanvasSelectionEntry>;
         selectedNodes?: CanvasNodeLike[];
     };
 
     const prevSelection = canvasWithSelection.selection ? new Set(canvasWithSelection.selection) : null;
     const prevSelectedNodes = canvasWithSelection.selectedNodes ? [...canvasWithSelection.selectedNodes] : null;
 
-    canvasWithSelection.selection = new Set(nodes);
+    canvasWithSelection.selection = new Set<CanvasSelectionEntry>(nodes);
     canvasWithSelection.selectedNodes = nodes;
 
     const handled = action();
@@ -727,6 +866,14 @@ export function clearCanvasEdgeSelection(canvas: CanvasLike): {
         rememberEdge(edge);
     }
 
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const entry of Array.from(canvas.selection)) {
+            if (!isCanvasEdgeLike(entry)) continue;
+            rememberEdge(entry);
+            canvas.selection.delete(entry);
+        }
+    }
+
     delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike }).selectedEdge;
     (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
 
@@ -751,6 +898,93 @@ export function clearCanvasEdgeSelection(canvas: CanvasLike): {
         cleared: clearedEdgeIds.size > 0 || domClearedCount > 0,
         clearedEdgeIds: Array.from(clearedEdgeIds),
         domClearedCount
+    };
+}
+
+export function clearCanvasSelection(canvas: CanvasLike): {
+    cleared: boolean;
+    clearedNodeIds: string[];
+    clearedEdgeIds: string[];
+    domNodeClearedCount: number;
+    domEdgeClearedCount: number;
+} {
+    const clearedNodeIds = new Set<string>();
+    const clearedEdgeIds = new Set<string>();
+    let domNodeClearedCount = 0;
+    let domEdgeClearedCount = 0;
+
+    const rememberNode = (node: CanvasNodeLike | null | undefined) => {
+        if (!node?.id) return;
+        clearedNodeIds.add(node.id);
+    };
+
+    const rememberEdge = (edge: CanvasEdgeLike | null | undefined) => {
+        const edgeId = getEdgeId(edge);
+        if (!edgeId) return;
+        clearedEdgeIds.add(edgeId);
+    };
+
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const entry of Array.from(canvas.selection)) {
+            if (isCanvasNodeLike(entry)) {
+                rememberNode(entry);
+            } else if (isCanvasEdgeLike(entry)) {
+                rememberEdge(entry);
+            }
+        }
+        canvas.selection.clear();
+    }
+
+    for (const node of canvas.selectedNodes || []) {
+        rememberNode(node);
+    }
+    rememberEdge(canvas.selectedEdge);
+    for (const edge of canvas.selectedEdges || []) {
+        rememberEdge(edge);
+    }
+
+    (canvas as CanvasLike & { selectedNodes?: CanvasNodeLike[] }).selectedNodes = [];
+    delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike }).selectedEdge;
+    (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+
+    for (const node of getNodesFromCanvas(canvas)) {
+        const hadSelectedClass = !!(
+            node.nodeEl?.classList.contains('is-selected')
+            || node.nodeEl?.classList.contains('is-focused')
+            || node.nodeEl?.classList.contains('is-editing')
+        );
+
+        node.nodeEl?.classList.remove('is-selected', 'is-focused', 'is-editing');
+
+        if (hadSelectedClass) {
+            domNodeClearedCount += 1;
+            rememberNode(node);
+        }
+    }
+
+    for (const edge of getEdgesFromCanvas(canvas)) {
+        const hadSelectedClass = !!(
+            edge.lineGroupEl?.classList.contains('is-selected')
+            || edge.lineGroupEl?.classList.contains('is-focused')
+            || edge.lineEndGroupEl?.classList.contains('is-selected')
+            || edge.lineEndGroupEl?.classList.contains('is-focused')
+        );
+
+        edge.lineGroupEl?.classList.remove('is-selected', 'is-focused');
+        edge.lineEndGroupEl?.classList.remove('is-selected', 'is-focused');
+
+        if (hadSelectedClass) {
+            domEdgeClearedCount += 1;
+            rememberEdge(edge);
+        }
+    }
+
+    return {
+        cleared: clearedNodeIds.size > 0 || clearedEdgeIds.size > 0 || domNodeClearedCount > 0 || domEdgeClearedCount > 0,
+        clearedNodeIds: Array.from(clearedNodeIds),
+        clearedEdgeIds: Array.from(clearedEdgeIds),
+        domNodeClearedCount,
+        domEdgeClearedCount
     };
 }
 

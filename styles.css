@@ -406,6 +406,36 @@ svg.canvas-edges .canvas-interaction-path {
     height: 200px !important;
 }
 
+.canvas-mindmap-delete-overlay,
+.canvas-mindmap-delete-edge-overlay {
+    position: fixed !important;
+    inset: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 16px !important;
+    background-color: rgba(0, 0, 0, 0.38) !important;
+    z-index: 99999 !important;
+}
+
+.canvas-mindmap-delete-panel,
+.canvas-mindmap-delete-edge-panel {
+    width: min(100%, 470px) !important;
+    background-color: var(--background-primary, white) !important;
+    border: 3px solid #e74c3c !important;
+    border-radius: 15px !important;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24) !important;
+    padding: 18px 20px !important;
+    color: var(--text-normal, inherit) !important;
+}
+
+.canvas-mindmap-delete-title {
+    font-size: 12px !important;
+    font-weight: bold !important;
+    text-align: center !important;
+    margin-bottom: 14px !important;
+}
+
 .canvas-mindmap-delete-modal,
 .canvas-mindmap-delete-edge-modal,
 .canvas-mindmap-delete-modal .modal,
@@ -421,6 +451,7 @@ svg.canvas-edges .canvas-interaction-path {
 }
 
 .canvas-mindmap-delete-modal--simple,
+.canvas-mindmap-delete-modal--simple,
 .canvas-mindmap-delete-modal--simple .modal {
     max-width: 340px !important;
 }
@@ -430,6 +461,7 @@ svg.canvas-edges .canvas-interaction-path {
 }
 
 .canvas-mindmap-delete-modal--cascade,
+.canvas-mindmap-delete-modal--cascade,
 .canvas-mindmap-delete-modal--cascade .modal {
     max-width: 470px !important;
 }
@@ -438,6 +470,7 @@ svg.canvas-edges .canvas-interaction-path {
     max-width: 450px !important;
 }
 
+.canvas-mindmap-delete-edge-modal--simple,
 .canvas-mindmap-delete-edge-modal--simple,
 .canvas-mindmap-delete-edge-modal--simple .modal {
     max-width: 340px !important;

@@ -156,6 +156,7 @@ export class CanvasNodeManager {
         );
         this.nodeDeletionService = new NodeDeletionService(
             app,
+            plugin,
             settings,
             collapseStateManager,
             this.canvasFileService

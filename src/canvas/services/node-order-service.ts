@@ -11,6 +11,14 @@ import {
     stripInvisibleMarkup,
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
+import {
+    buildNormalizedLineIndex as buildFromLinkNormalizedLineIndex,
+    isReliableMatch as isReliableFromLinkMatch,
+    matchNodeAtSpecificLine as matchNodeAtSpecificLineWithFormatting,
+    matchNodeToSource as matchNodeToSourceWithFormatting,
+    normalizeForMatch as normalizeFromLinkMatch,
+    setNodeFromLinkRepairUnmatched,
+} from './fromlink-matcher';
 
 type MoveDirection = 'up' | 'down';
 
@@ -36,6 +44,8 @@ type LineCandidate = {
     line: number;
     startCh: number;
     endCh: number;
+    toLine: number;
+    toCh: number;
     score: number;
     method: string;
 };
@@ -557,12 +567,13 @@ export class NodeOrderService {
         filePath: string,
         candidate: LineCandidate
     ): boolean {
-        if (!fromLink) return false;
+        const unmatchedCleared = setNodeFromLinkRepairUnmatched(node, false);
+        if (!fromLink) return unmatchedCleared;
 
         const nextRange = {
             file: filePath,
             from: { line: candidate.line, ch: candidate.startCh },
-            to: { line: candidate.line, ch: candidate.endCh },
+            to: { line: candidate.toLine, ch: candidate.toCh },
         };
 
         const unchanged = fromLink.file === nextRange.file
@@ -570,7 +581,7 @@ export class NodeOrderService {
             && fromLink.from.ch === nextRange.from.ch
             && fromLink.to.line === nextRange.to.line
             && fromLink.to.ch === nextRange.to.ch;
-        if (unchanged) return false;
+        if (unchanged) return unmatchedCleared;
 
         const serialized = JSON.stringify(nextRange);
         const nextComment = `<!-- fromLink:${serialized} -->`;
@@ -593,21 +604,15 @@ export class NodeOrderService {
             }
         }
 
-        return false;
+        return unmatchedCleared;
     }
 
     private normalizeForMatch(text: string): string {
-        return stripInvisibleMarkup(text || '')
-            .replace(/\r/g, '')
-            .replace(/^\s*>+\s?/gm, '')
-            .replace(/^\s*(?:[-*+]\s+|\d+\.\s+)/gm, '')
-            .replace(/\s+/g, ' ')
-            .trim()
-            .toLowerCase();
+        return normalizeFromLinkMatch(text);
     }
 
     private buildNormalizedLineIndex(lines: string[]): NormalizedLineEntry[] {
-        return lines.map(raw => ({ raw, normalized: this.normalizeForMatch(raw) }));
+        return buildFromLinkNormalizedLineIndex(lines);
     }
 
     private matchNodeAtSpecificLine(
@@ -616,43 +621,7 @@ export class NodeOrderService {
         lineIndex: NormalizedLineEntry[],
         line: number
     ): LineCandidate | null {
-        if (line < 0 || line >= sourceLines.length) return null;
-        const rawNodeText = (node.text || '').replace(/<!--[\s\S]*?-->/g, '');
-        const normalizedNode = this.normalizeForMatch(rawNodeText);
-        const normalized = lineIndex[line]?.normalized || '';
-        const raw = sourceLines[line] || '';
-        if (!normalized || !normalizedNode) return null;
-
-        let score = 0;
-        let method = '';
-        if (normalized === normalizedNode) {
-            score = 180;
-            method = 'L0-exact';
-        } else if (normalized.includes(normalizedNode)) {
-            score = 132;
-            method = 'L1-contains';
-        } else {
-            const longestLine = rawNodeText
-                .split('\n')
-                .map(part => this.normalizeForMatch(part))
-                .filter(Boolean)
-                .reduce((longest, current) => current.length > longest.length ? current : longest, '');
-            if (longestLine && normalized.includes(longestLine) && longestLine.length >= 12) {
-                score = 104;
-                method = 'L3-longest-line';
-            }
-        }
-
-        if (score <= 0) return null;
-
-        const rawRange = this.findRawRangeInLine(raw, rawNodeText);
-        return {
-            line,
-            startCh: rawRange?.startCh ?? 0,
-            endCh: rawRange?.endCh ?? raw.length,
-            score: rawRange ? score + 12 : score,
-            method,
-        };
+        return matchNodeAtSpecificLineWithFormatting(node, sourceLines, lineIndex, line);
     }
 
     private matchNodeToSource(
@@ -661,100 +630,11 @@ export class NodeOrderService {
         lineIndex: NormalizedLineEntry[],
         anchorLine: number | null
     ): LineCandidate | null {
-        const rawNodeText = (node.text || '').replace(/<!--[\s\S]*?-->/g, '');
-        const normalizedNode = this.normalizeForMatch(rawNodeText);
-        if (!normalizedNode) return null;
-
-        const nodeLines = rawNodeText.split('\n').map(line => this.normalizeForMatch(line)).filter(Boolean);
-        const longestLine = nodeLines.reduce((longest, current) => current.length > longest.length ? current : longest, '');
-        const candidates: LineCandidate[] = [];
-        const keyPhrase = this.pickKeyPhrase(normalizedNode);
-        const isShortNode = normalizedNode.length < 8;
-
-        for (let i = 0; i < lineIndex.length; i++) {
-            const raw = sourceLines[i] || '';
-            const normalized = lineIndex[i]?.normalized || '';
-            if (!normalized) continue;
-
-            let score = 0;
-            let startCh = 0;
-            let endCh = raw.length;
-            let method = '';
-
-            if (normalized === normalizedNode) {
-                score = 150;
-                method = 'L0-exact';
-            } else if (normalized.includes(normalizedNode)) {
-                const lengthRatio = normalizedNode.length / Math.max(1, normalized.length);
-                score = 100 + Math.floor(Math.max(0, Math.min(1, lengthRatio)) * 30);
-                method = 'L1-contains';
-            } else if (normalizedNode.includes(normalized) && normalized.length >= 20) {
-                score = 86;
-                method = 'L2-reverse-contains';
-            } else if (longestLine && normalized.includes(longestLine) && longestLine.length >= 12) {
-                score = 80;
-                method = 'L3-longest-line';
-            } else if (keyPhrase && normalized.includes(keyPhrase)) {
-                score = 72;
-                method = 'L4-key-phrase';
-            }
-
-            if (score <= 0) continue;
-            if (isShortNode && method !== 'L0-exact') {
-                score = Math.min(score, 80);
-            }
-
-            const rawRange = this.findRawRangeInLine(raw, rawNodeText);
-            if (rawRange) {
-                startCh = rawRange.startCh;
-                endCh = rawRange.endCh;
-                score += 12;
-            }
-
-            if (anchorLine !== null) {
-                const distance = Math.abs(i - anchorLine);
-                if (distance <= 30) score += 30;
-                else if (distance <= 60) score += 20;
-                else if (distance <= 120) score += 8;
-            }
-
-            if (/^#{1,6}\s+/.test(rawNodeText.trim())) {
-                const heading = rawNodeText.trim().replace(/^#{1,6}\s+/, '').toLowerCase();
-                const lineHeading = (raw.match(/^\s*>*\s*#{1,6}\s+(.*)$/)?.[1] || '').toLowerCase();
-                if (lineHeading.includes(heading) || heading.includes(lineHeading)) {
-                    score += 14;
-                }
-            }
-
-            candidates.push({ line: i, startCh, endCh, score, method });
-        }
-
-        if (candidates.length === 0) return null;
-
-        candidates.sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
-            if (anchorLine !== null) {
-                return Math.abs(a.line - anchorLine) - Math.abs(b.line - anchorLine);
-            }
-            return a.line - b.line;
-        });
-
-        return candidates[0] || null;
+        return matchNodeToSourceWithFormatting(node, sourceLines, lineIndex, anchorLine);
     }
 
     private isReliableMatch(candidate: LineCandidate, normalizedLength: number, hasAnchor: boolean): boolean {
-        if (normalizedLength < 4) return false;
-        if (candidate.method === 'L0-exact') return true;
-
-        if (candidate.method === 'L1-contains') {
-            return normalizedLength >= 6 && candidate.score >= (hasAnchor ? 100 : 108);
-        }
-
-        if (candidate.method === 'L3-longest-line') {
-            return candidate.score >= (hasAnchor ? 104 : 112);
-        }
-
-        return candidate.score >= (hasAnchor ? 112 : 120);
+        return isReliableFromLinkMatch(candidate, normalizedLength, hasAnchor);
     }
 
     private findRawRangeInLine(rawLine: string, rawNodeText: string): { startCh: number; endCh: number } | null {
