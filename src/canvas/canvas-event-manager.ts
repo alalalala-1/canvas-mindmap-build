@@ -369,13 +369,13 @@ export class CanvasEventManager {
             if (isCanvasNativeInsertGestureTarget(targetEl)) {
                 if (this.isNativeInsertSessionActive()) {
                     this.touchNativeInsertSession(targetEl);
-                    log(
+                    logVerbose(
                         `[Event] NativeInsertClickObserved: trace=${this.activeNativeInsertSession?.traceId || 'none'}, ` +
                         `target=${this.describeEventTarget(targetEl)}, chain=${this.describeEventTargetChain(targetEl)}, ` +
                         `flags=${this.describePointerEventState(event)}, selection=${this.describeCanvasSelection()}`
                     );
                 } else {
-                    log(
+                    logVerbose(
                         `[Event] NativeInsertClickPostSession: target=${this.describeEventTarget(targetEl)}, ` +
                         `chain=${this.describeEventTargetChain(targetEl)}, flags=${this.describePointerEventState(event)}, ` +
                         `selection=${this.describeCanvasSelection()}`
@@ -386,7 +386,7 @@ export class CanvasEventManager {
             }
 
             if (this.isNativeInsertSessionActive()) {
-                log(
+                logVerbose(
                     `[Event] NativeInsertClickIgnored: target=${this.describeEventTarget(targetEl)}, ` +
                     `chain=${this.describeEventTargetChain(targetEl)}`
                 );
@@ -560,14 +560,14 @@ export class CanvasEventManager {
             }
 
             if (this.isTouchLikePointer(pointerType) && nodeEl) {
-                log(
+                logVerbose(
                     `[Event] DragPointerDown: node=${nodeId || 'unknown'}, pointer=${pointerType}, ` +
                     `selected=${wasSelectedBeforeDown}, blocker=${this.isContentBlockerTarget(event.target)}, ` +
                     `target=${this.describeEventTarget(event.target)}, ` +
                     `chain=${this.describeEventTargetChain(event.target)}, owners=${this.getTouchDragScrollOwners(nodeEl).length}`
                 );
             } else if (this.isTouchLikePointer(pointerType) && this.isCanvasSurfaceInteractionTarget(event.target)) {
-                log(
+                logVerbose(
                     `[Event] CanvasSurfacePointerDown: pointer=${pointerType}, kind=${pointerTargetKind}, ` +
                     `nativeInsertCandidate=${event.target instanceof Element && isCanvasNativeInsertGestureTarget(event.target)}, ` +
                     `selection=${startSelection}, target=${this.describeEventTarget(event.target)}, ` +
@@ -618,12 +618,12 @@ export class CanvasEventManager {
                 this.clearPenLongPress(event.pointerId);
                 if (this.isTouchLikePointer(gesture.pointerType)) {
                     if (gesture.nodeId) {
-                        log(
+                        logVerbose(
                             `[Event] DragPointerMove: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
                             `dx=${dx.toFixed(1)}, dy=${dy.toFixed(1)}, threshold=${moveThreshold}`
                         );
                     } else if (this.isCanvasSurfaceInteractionTarget(event.target)) {
-                        log(
+                        logVerbose(
                             `[Event] CanvasSurfacePointerMove: pointer=${gesture.pointerType}, kind=${gesture.targetKind}, ` +
                             `dx=${dx.toFixed(1)}, dy=${dy.toFixed(1)}, threshold=${moveThreshold}, ` +
                             `selection=${this.describeCanvasSelection()}, target=${this.describeEventTarget(event.target)}, ` +
@@ -690,12 +690,12 @@ export class CanvasEventManager {
                 if (this.isTouchLikePointer(gesture.pointerType)) {
                     const duration = finishedAt - gesture.at;
                     if (gesture.nodeId) {
-                        log(
+                        logVerbose(
                             `[Event] DragPointerEnd: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
                             `moved=${gesture.moved}, duration=${duration}ms, nodeMoveSeen=${this.activeTouchDragSawCanvasNodeMove}`
                         );
                         if (gesture.moved && !this.activeTouchDragSawCanvasNodeMove) {
-                            log(
+                            logVerbose(
                                 `[Event] DragPointerNoCanvasMove: node=${gesture.nodeId || 'unknown'}, pointer=${gesture.pointerType}, ` +
                                 `reason=no-canvas-node-move, blocker=${this.isContentBlockerTarget(event.target)}, ` +
                                 `target=${this.describeEventTarget(event.target)}, ` +
@@ -703,7 +703,7 @@ export class CanvasEventManager {
                             );
                         }
                     } else if (this.isCanvasSurfaceInteractionTarget(event.target)) {
-                        log(
+                        logVerbose(
                             `[Event] CanvasSurfacePointerEnd: pointer=${gesture.pointerType}, kind=${gesture.targetKind}, ` +
                             `moved=${gesture.moved}, duration=${duration}ms, selectionStart=${gesture.startSelection}, ` +
                             `selectionEnd=${this.describeCanvasSelection()}, startTarget=${gesture.startTarget}, ` +
@@ -743,7 +743,7 @@ export class CanvasEventManager {
             && this.suppressFromLinkNodeId
             && this.suppressFromLinkNodeId === nodeId
         ) {
-            log(`[Event] fromLink click suppressed: reason=${this.suppressFromLinkClickReason || 'recent-gesture'}, node=${nodeId || 'unknown'}`);
+            logVerbose(`[Event] fromLink click suppressed: reason=${this.suppressFromLinkClickReason || 'recent-gesture'}, node=${nodeId || 'unknown'}`);
             return true;
         }
 
@@ -755,26 +755,26 @@ export class CanvasEventManager {
         const pointerType = lastGesture.pointerType;
         if (pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE) {
             if (lastGesture.moved) {
-                log(`[Event] fromLink click suppressed: reason=touch-moved, node=${nodeId || 'unknown'}`);
+                logVerbose(`[Event] fromLink click suppressed: reason=touch-moved, node=${nodeId || 'unknown'}`);
                 return true;
             }
 
             if (!lastGesture.wasSelectedBeforeDown) {
-                log(`[Event] fromLink click suppressed: reason=touch-first-tap-select, node=${nodeId || 'unknown'}`);
+                logVerbose(`[Event] fromLink click suppressed: reason=touch-first-tap-select, node=${nodeId || 'unknown'}`);
                 return true;
             }
 
-            log(`[Event] fromLink click suppressed: reason=touch-tap-reserved-for-drag, node=${nodeId || 'unknown'}`);
+            logVerbose(`[Event] fromLink click suppressed: reason=touch-tap-reserved-for-drag, node=${nodeId || 'unknown'}`);
             return true;
         }
 
         if (pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE) {
             if (lastGesture.moved) {
-                log(`[Event] fromLink click suppressed: reason=pen-moved, node=${nodeId || 'unknown'}`);
+                logVerbose(`[Event] fromLink click suppressed: reason=pen-moved, node=${nodeId || 'unknown'}`);
                 return true;
             }
 
-            log(`[Event] fromLink click suppressed: reason=pen-short-tap-select-only, node=${nodeId || 'unknown'}`);
+            logVerbose(`[Event] fromLink click suppressed: reason=pen-short-tap-select-only, node=${nodeId || 'unknown'}`);
             return true;
         }
 
@@ -889,7 +889,7 @@ export class CanvasEventManager {
         }
 
         if (previousNodeId !== nodeId || previousCanvasFilePath !== canvasFilePath) {
-            log(
+            logVerbose(
                 `[Event] RememberNodeContext: reason=${reason}, node=${nodeId}, ` +
                 `canvasFile=${canvasFilePath || 'none'}, prevNode=${previousNodeId || 'none'}, ` +
                 `prevCanvasFile=${previousCanvasFilePath || 'none'}`
@@ -905,7 +905,7 @@ export class CanvasEventManager {
         const clearedState = clearCanvasEdgeSelection(canvas);
         if (!clearedState.cleared) return;
 
-        log(
+        logVerbose(
             `[Event] ClearStaleEdgeSelection: reason=${reason}, ` +
             `edges=${clearedState.clearedEdgeIds.join('|') || 'none'}, domCleared=${clearedState.domClearedCount}, ` +
             `selection=${this.describeCanvasSelection()}`
@@ -933,7 +933,7 @@ export class CanvasEventManager {
         if (this.shouldSuppressSideEffectsForNativeInsert()) {
             this.deferredMeasureNodeIds.add(nodeId);
             this.scheduleDeferredPostInsertMaintenance(`${reason}:${nodeId}`);
-            log(`[Event] NativeInsertDeferredTrustedHeight: node=${nodeId}, reason=${reason}`);
+            logVerbose(`[Event] NativeInsertDeferredTrustedHeight: node=${nodeId}, reason=${reason}`);
             return;
         }
 
@@ -1610,7 +1610,7 @@ export class CanvasEventManager {
             `engine=${this.describeNativeInsertEngineState()}`
         );
         if (placeholderSeen) {
-            log(`[Event] NativeInsertPlaceholderSeen: trace=${traceId}, pointer=${pointerId}, via=session-start`);
+            logVerbose(`[Event] NativeInsertPlaceholderSeen: trace=${traceId}, pointer=${pointerId}, via=session-start`);
         }
     }
 
@@ -1626,7 +1626,7 @@ export class CanvasEventManager {
         if (!session.placeholderSeen && target.closest('.canvas-node-placeholder')) {
             session.placeholderSeen = true;
             session.placeholderAddedCount += 1;
-            log(
+            logVerbose(
                 `[Event] NativeInsertPlaceholderSeen: trace=${session.traceId}, pointer=${session.pointerId}, ` +
                 `target=${this.describeEventTarget(target)}, chain=${this.describeEventTargetChain(target)}, ` +
                 `targetStyle=${this.describeComputedStyleSnapshot(target)}`
@@ -1653,12 +1653,12 @@ export class CanvasEventManager {
         if (session) {
             session.nodeCreateSeen = true;
             this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, Date.now() + 900);
-            log(`[Event] NativeInsertNodeCreateSeen: trace=${session.traceId}, pointer=${session.pointerId}, node=${nodeId}`);
+            logVerbose(`[Event] NativeInsertNodeCreateSeen: trace=${session.traceId}, pointer=${session.pointerId}, node=${nodeId}`);
             return;
         }
 
         if (Date.now() < this.nativeInsertSideEffectsSuppressUntil) {
-            log(`[Event] NativeInsertNodeCreateSeenRecent: node=${nodeId}`);
+            logVerbose(`[Event] NativeInsertNodeCreateSeenRecent: node=${nodeId}`);
         }
     }
 
@@ -1737,11 +1737,11 @@ export class CanvasEventManager {
             if (activeCanvas) {
                 const hiddenCount = this.canvasManager.reapplyCurrentCollapseVisibility(activeCanvas, `native-insert-post:${reason}`);
                 if (hiddenCount > 0) {
-                    log(`[Event] NativeInsertPostMaintenanceVisibility: hidden=${hiddenCount}, reason=${reason}`);
+                    logVerbose(`[Event] NativeInsertPostMaintenanceVisibility: hidden=${hiddenCount}, reason=${reason}`);
                 }
                 const updated = this.canvasManager.syncScrollableStateForMountedNodes();
                 if (updated > 0) {
-                    log(`[Event] NativeInsertPostMaintenanceScrollSync: updated=${updated}, reason=${reason}`);
+                    logVerbose(`[Event] NativeInsertPostMaintenanceScrollSync: updated=${updated}, reason=${reason}`);
                 }
             }
 
@@ -1778,7 +1778,7 @@ export class CanvasEventManager {
 
     private markOpenProtectionWindow(reason: string): void {
         this.nodeMountedOpenProtectionUntil = Date.now() + this.nodeMountedOpenProtectionMs;
-        log(`[Event] OpenStabilizeProtectWindow: reason=${reason}, holdMs=${this.nodeMountedOpenProtectionMs}`);
+        logVerbose(`[Event] OpenStabilizeProtectWindow: reason=${reason}, holdMs=${this.nodeMountedOpenProtectionMs}`);
     }
 
     private scheduleNodeMountedBatchFlush(delayMs: number, reason: string): void {
@@ -1874,7 +1874,7 @@ export class CanvasEventManager {
         const key = `${dedupScope}:${filePath || 'unknown'}`;
         const now = Date.now();
         if (this.lastOpenStabilizeKickKey === key && now - this.lastOpenStabilizeKickAt < 600) {
-            log(`[Event] OpenStabilizeDedup: skip duplicate trigger, source=${source}, file=${filePath || 'unknown'}`);
+            logVerbose(`[Event] OpenStabilizeDedup: skip duplicate trigger, source=${source}, file=${filePath || 'unknown'}`);
             return;
         }
 
@@ -1933,26 +1933,25 @@ export class CanvasEventManager {
         if (!this.hasSuspiciousDeleteModalFocusContext()) return false;
 
         const before = this.describeDeleteModalFocusContext();
-        const workspaceRecord = this.app.workspace as unknown as {
-            activeEditor?: { editor?: unknown } | null;
-        };
-
+        const activeBefore = this.describeEventTarget(document.activeElement);
+        let blurred = false;
         try {
-            workspaceRecord.activeEditor = null;
-        } catch {
-            try {
-                delete workspaceRecord.activeEditor;
-            } catch {
-                // ignore assignment/delete failures on Obsidian internals
+            const activeElement = document.activeElement;
+            if (activeElement instanceof HTMLElement && activeElement !== document.body) {
+                activeElement.blur();
+                blurred = document.activeElement !== activeElement;
             }
+        } catch {
+            // ignore blur failures on platform internals
         }
 
         const after = this.describeDeleteModalFocusContext();
-        log(
+        logVerbose(
             `[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
-            `focusBefore=${before}, focusAfter=${after}`
+            `focusBefore=${before}, focusAfter=${after}, activeBefore=${activeBefore}, ` +
+            `activeAfter=${this.describeEventTarget(document.activeElement)}, blurred=${blurred}`
         );
-        return before !== after;
+        return blurred;
     }
 
     private async runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {
@@ -2423,7 +2422,7 @@ export class CanvasEventManager {
                         if (this.shouldSuppressSideEffectsForNativeInsert()) {
                             this.deferredAdjustNodeIds.add(nodeId);
                             this.scheduleDeferredPostInsertMaintenance(`node-create:${nodeId}`);
-                            log(`[Event] NativeInsertDeferredAdjustNodeHeight: node=${nodeId}`);
+                            logVerbose(`[Event] NativeInsertDeferredAdjustNodeHeight: node=${nodeId}`);
                         } else {
                             log(`[Event] Canvas:NodeCreate 调用 scheduleNodeHeightAdjustment: ${nodeId}`);
                             this.canvasManager.scheduleNodeHeightAdjustment(
@@ -2491,6 +2490,7 @@ export class CanvasEventManager {
         this.mutationObserver = new MutationObserver((mutations) => {
             let shouldCheckButtons = false;
             let mountedNodeCount = 0;
+            const mountedNodeIds = new Set<string>();
             const nativeInsertSession = this.activeNativeInsertSession;
             for (const mutation of mutations) {
                 if (mutation.type === 'childList') {
@@ -2500,7 +2500,7 @@ export class CanvasEventManager {
                             if (addedPlaceholders.length > 0) {
                                 nativeInsertSession.placeholderSeen = true;
                                 nativeInsertSession.placeholderAddedCount += addedPlaceholders.length;
-                                log(
+                                logVerbose(
                                     `[Event] NativeInsertPlaceholderMutation: trace=${nativeInsertSession.traceId}, action=added, ` +
                                     `count=${addedPlaceholders.length}, samples=${this.describeMutationSamples(addedPlaceholders)}`
                                 );
@@ -2509,7 +2509,7 @@ export class CanvasEventManager {
                             const addedCanvasNodes = this.collectMutationElementsByClass(addedNode, 'canvas-node');
                             if (addedCanvasNodes.length > 0) {
                                 nativeInsertSession.domNodeAddedCount += addedCanvasNodes.length;
-                                log(
+                                logVerbose(
                                     `[Event] NativeInsertDomNodeMutation: trace=${nativeInsertSession.traceId}, action=added, ` +
                                     `count=${addedCanvasNodes.length}, samples=${this.describeMutationSamples(addedCanvasNodes)}`
                                 );
@@ -2520,7 +2520,7 @@ export class CanvasEventManager {
                             const removedPlaceholders = this.collectMutationElementsByClass(removedNode, 'canvas-node-placeholder');
                             if (removedPlaceholders.length > 0) {
                                 nativeInsertSession.placeholderRemovedCount += removedPlaceholders.length;
-                                log(
+                                logVerbose(
                                     `[Event] NativeInsertPlaceholderMutation: trace=${nativeInsertSession.traceId}, action=removed, ` +
                                     `count=${removedPlaceholders.length}, samples=${this.describeMutationSamples(removedPlaceholders)}`
                                 );
@@ -2529,7 +2529,7 @@ export class CanvasEventManager {
                             const removedCanvasNodes = this.collectMutationElementsByClass(removedNode, 'canvas-node');
                             if (removedCanvasNodes.length > 0) {
                                 nativeInsertSession.domNodeRemovedCount += removedCanvasNodes.length;
-                                log(
+                                logVerbose(
                                     `[Event] NativeInsertDomNodeMutation: trace=${nativeInsertSession.traceId}, action=removed, ` +
                                     `count=${removedCanvasNodes.length}, samples=${this.describeMutationSamples(removedCanvasNodes)}`
                                 );
@@ -2541,6 +2541,10 @@ export class CanvasEventManager {
                         if (node instanceof HTMLElement && node.classList.contains('canvas-node')) {
                             shouldCheckButtons = true;
                             mountedNodeCount++;
+                            const mountedNodeId = this.extractNodeIdFromElement(node);
+                            if (mountedNodeId) {
+                                mountedNodeIds.add(mountedNodeId);
+                            }
                         }
                     }
                 }
@@ -2548,10 +2552,20 @@ export class CanvasEventManager {
 
             if (shouldCheckButtons) {
                 if (this.shouldSuppressSideEffectsForNativeInsert()) {
-                    log(`[Event] NativeInsertSuppressedSideEffects: reason=node-mounted, mountedNodeCount=${mountedNodeCount}`);
+                    for (const mountedNodeId of mountedNodeIds) {
+                        this.deferredAdjustNodeIds.add(mountedNodeId);
+                    }
+                    logVerbose(`[Event] NativeInsertSuppressedSideEffects: reason=node-mounted, mountedNodeCount=${mountedNodeCount}`);
                     this.scheduleDeferredPostInsertMaintenance(`node-mounted:${mountedNodeCount}`);
                 } else {
                     void this.canvasManager.checkAndAddCollapseButtons();
+                    for (const mountedNodeId of mountedNodeIds) {
+                        this.canvasManager.scheduleNodeHeightAdjustment(
+                            mountedNodeId,
+                            CONSTANTS.TIMING.SCROLL_DELAY,
+                            'node-mounted-visible'
+                        );
+                    }
                     const activeCanvasView = getCanvasView(this.app);
                     const activeCanvas = activeCanvasView ? this.getCanvasFromView(activeCanvasView) : null;
                     if (activeCanvas) {

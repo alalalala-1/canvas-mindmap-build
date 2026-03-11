@@ -299,7 +299,7 @@ export class EdgeGeometryService {
         }
 
         if (lines.length > 0) {
-            log(`[Layout] OffsetRuleOrigin: samples=${lines.length}, ctx=${contextId || 'none'}\n${lines.join('\n')}`);
+            logVerbose(`[Layout] OffsetRuleOrigin: samples=${lines.length}, ctx=${contextId || 'none'}\n${lines.join('\n')}`);
         }
     }
 
@@ -1066,7 +1066,7 @@ export class EdgeGeometryService {
         const vpEl = document.querySelector('.canvas-wrapper') ?? document.querySelector('.canvas-viewport');
         const vpRect = vpEl?.getBoundingClientRect();
         const vpStr = vpRect ? `${vpRect.width.toFixed(0)}x${vpRect.height.toFixed(0)}` : 'n/a';
-        log(`[Diag-${tag}] Canvas: zoom=${zoom.toFixed(2)}, vp=${vpStr}, canvasTf="${canvasTf.slice(0, 60)}", ctx=${contextId ?? 'none'}`);
+        logVerbose(`[Diag-${tag}] Canvas: zoom=${zoom.toFixed(2)}, vp=${vpStr}, canvasTf="${canvasTf.slice(0, 60)}", ctx=${contextId ?? 'none'}`);
 
         // 找视口可见节点（DOM offsetHeight > 0）
         const visibleNodes: Array<{ id: string; node: CanvasNodeLike }> = [];
@@ -1110,9 +1110,9 @@ export class EdgeGeometryService {
             }
         }
 
-        log(`[Diag-${tag}] Heights(${allNodes.size}): fH≠mH=${fNeM}, mH≠bH=${mNeB}, dH≠mH=${bNeD}, allMatch=${allMatch}, domZero=${domZero}`);
+        logVerbose(`[Diag-${tag}] Heights(${allNodes.size}): fH≠mH=${fNeM}, mH≠bH=${mNeB}, dH≠mH=${bNeD}, allMatch=${allMatch}, domZero=${domZero}`);
         if (lines.length > 0) {
-            log(`[Diag-${tag}] ProblemNodes(${lines.length}):\n${lines.join('\n')}`);
+            logVerbose(`[Diag-${tag}] ProblemNodes(${lines.length}):\n${lines.join('\n')}`);
         }
 
         // 边锚点误差（只检查连接到视口可见节点的边，最多10条）
@@ -1159,9 +1159,9 @@ export class EdgeGeometryService {
         }
 
         if (edgeLines.length > 0) {
-            log(`[Diag-${tag}] VpEdges(${vpEdges.length}):\n${edgeLines.join('\n')}`);
+            logVerbose(`[Diag-${tag}] VpEdges(${vpEdges.length}):\n${edgeLines.join('\n')}`);
         } else {
-            log(`[Diag-${tag}] VpEdges: vpVisible=${visibleNodes.length}, connected edges=0 (all virtualized?)`);
+            logVerbose(`[Diag-${tag}] VpEdges: vpVisible=${visibleNodes.length}, connected edges=0 (all virtualized?)`);
         }
 
         // =====================================================================
@@ -1275,7 +1275,7 @@ export class EdgeGeometryService {
             }
         };
 
-        log(`[Diag-${tag}-Visual] CanvasTransform: containerRect=${containerStr}, ` +
+        logVerbose(`[Diag-${tag}-Visual] CanvasTransform: containerRect=${containerStr}, ` +
             `cssTf="${canvasCssTransform.slice(0, 80)}", parsedScale=${parsedScale.toFixed(4)}, ` +
             `parsedTx=${parsedTx.toFixed(1)}, parsedTy=${parsedTy.toFixed(1)}, ctx=${ctxStr}`);
 
@@ -1324,7 +1324,7 @@ export class EdgeGeometryService {
             );
         }
         if (nodeLines.length > 0) {
-            log(`[Diag-${tag}-Visual] NodeScreenPos:\n${nodeLines.join('\n')}`);
+            logVerbose(`[Diag-${tag}-Visual] NodeScreenPos:\n${nodeLines.join('\n')}`);
         }
 
         // --- 3. 前3条可见边：边 SVG 路径真实屏幕端点 vs 节点锚点真实屏幕位置 ---
@@ -1447,9 +1447,9 @@ export class EdgeGeometryService {
             );
         }
         if (edgeVisualLines.length > 0) {
-            log(`[Diag-${tag}-Visual] EdgeScreenPos(★关键):\n${edgeVisualLines.join('\n')}`);
+            logVerbose(`[Diag-${tag}-Visual] EdgeScreenPos(★关键):\n${edgeVisualLines.join('\n')}`);
         } else {
-            log(`[Diag-${tag}-Visual] EdgeScreenPos: 无两端均可见的边可采样`);
+            logVerbose(`[Diag-${tag}-Visual] EdgeScreenPos: 无两端均可见的边可采样`);
         }
     }
 
@@ -1524,13 +1524,13 @@ export class EdgeGeometryService {
         // 按 |delta| 降序（最大差异在前，virtualized=-1 放最后）
         nodeRows.sort((a, b) => b.absDelta - a.absDelta);
 
-        log(`[DiagFull-${tag}] NodeSnapshot: total=${allNodes.size}, match(≤2)=${matchCount}, mismatch(5-20)=${mismatch5}, mismatch(>20)=${mismatch20}, virt=${virtCount}, ctx=${ctxStr}`);
+        logVerbose(`[DiagFull-${tag}] NodeSnapshot: total=${allNodes.size}, match(≤2)=${matchCount}, mismatch(5-20)=${mismatch5}, mismatch(>20)=${mismatch20}, virt=${virtCount}, ctx=${ctxStr}`);
 
         const mismatchRows = nodeRows.filter(r => r.absDelta > 5);
         if (mismatchRows.length > 0) {
-            log(`[DiagFull-${tag}] NodeMismatch(${mismatchRows.length} nodes |delta|>5px, desc):\n${mismatchRows.slice(0, 30).map(r => r.line).join('\n')}`);
+            logVerbose(`[DiagFull-${tag}] NodeMismatch(${mismatchRows.length} nodes |delta|>5px, desc):\n${mismatchRows.slice(0, 30).map(r => r.line).join('\n')}`);
         } else {
-            log(`[DiagFull-${tag}] NodeMismatch: 无节点 |delta| > 5px ✓`);
+            logVerbose(`[DiagFull-${tag}] NodeMismatch: 无节点 |delta| > 5px ✓`);
         }
 
         // === 边全量快照 ===
@@ -1584,11 +1584,11 @@ export class EdgeGeometryService {
 
         edgeRows.sort((a, b) => b.maxErr - a.maxErr);
 
-        log(`[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`);
+        logVerbose(`[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`);
         if (edgeRows.length > 0) {
-            log(`[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`);
+            logVerbose(`[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`);
         } else {
-            log(`[DiagFull-${tag}] EdgeBad: 无边 err > 8px ✓`);
+            logVerbose(`[DiagFull-${tag}] EdgeBad: 无边 err > 8px ✓`);
         }
     }
 

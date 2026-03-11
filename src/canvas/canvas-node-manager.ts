@@ -7,7 +7,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { NodeTypeService } from './services/node-type-service';
 import { NodeHeightService } from './services/node-height-service';
 import { EditTextModal } from '../ui/edit-modal';
-import { log } from '../utils/logger';
+import { log, logVerbose } from '../utils/logger';
 import { CONSTANTS } from '../constants';
 import {
     estimateTextNodeHeight,
@@ -378,15 +378,15 @@ export class CanvasNodeManager {
                             CONSTANTS.TIMING.RETRY_DELAY,
                             `dom-not-ready#${nextRetryCount}`
                         );
-                        log(
+                        logVerbose(
                             `[Node] HeightAdjustRetryScheduled: node=${nodeId}, ` +
                             `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready`
                         );
                     } else {
                         this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
-                        log(
+                        logVerbose(
                             `[Node] HeightAdjustRetryExhausted: node=${nodeId}, ` +
-                            `retries=${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready`
+                            `retries=${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready, next=wait-for-node-mounted-visible`
                         );
                     }
                 } else {

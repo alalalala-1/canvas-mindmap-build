@@ -371,17 +371,21 @@ export class NodeDeletionService {
         const suspicious = activeViewType === 'canvas' && !!activeEditorInfo && !activeEditorInfo.editor;
         if (!suspicious) return;
 
+        const activeBefore = document.activeElement;
+        let blurred = false;
         try {
-            workspaceRecord.activeEditor = null;
-        } catch {
-            try {
-                delete workspaceRecord.activeEditor;
-            } catch {
-                // ignore assignment/delete failures on Obsidian internals
+            if (activeBefore instanceof HTMLElement && activeBefore !== document.body) {
+                activeBefore.blur();
+                blurred = document.activeElement !== activeBefore;
             }
+        } catch {
+            // ignore blur failures on platform internals
         }
 
-        log(`[Delete] 清理可疑 focus 上下文: source=${source}, node=${nodeId}, activeView=${activeViewType}`);
+        log(
+            `[Delete] 清理可疑 focus 上下文(非侵入): source=${source}, node=${nodeId}, ` +
+            `activeView=${activeViewType}, blurred=${blurred}`
+        );
     }
 
     private clearPluginInteractionContext(source: DeletePlan['source'], nodeId: string, canvasFilePath: string): void {

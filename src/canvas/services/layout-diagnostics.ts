@@ -1,4 +1,4 @@
-import { log } from '../../utils/logger';
+import { logVerbose } from '../../utils/logger';
 
 /**
  * 布局诊断统计器
@@ -73,38 +73,38 @@ export class LayoutDiagnostics {
         
         if (heights && heights.count > 0) {
             const avgHeight = heights.sum / heights.count;
-            log(`[LayoutData] 高度统计 count=${visibleCount}, min=${this.get('heightMin').toFixed(1)}, max=${this.get('heightMax').toFixed(1)}, avg=${avgHeight.toFixed(1)}, zero=${this.get('zeroHeightCount')}, dom覆盖=${this.get('domApplied')}, 无元素=${this.get('domMissing')}, 隐藏=${this.get('domHidden')}, 0高=${this.get('domZero')}`);
+            logVerbose(`[LayoutData] 高度统计 count=${visibleCount}, min=${this.get('heightMin').toFixed(1)}, max=${this.get('heightMax').toFixed(1)}, avg=${avgHeight.toFixed(1)}, zero=${this.get('zeroHeightCount')}, dom覆盖=${this.get('domApplied')}, 无元素=${this.get('domMissing')}, 隐藏=${this.get('domHidden')}, 0高=${this.get('domZero')}`);
         }
         
-        log(`[LayoutData] 高度来源 file=${this.get('dataFromFile')}, memory=${this.get('dataFromMemory')}, missing=${this.get('dataMissing')}, trusted=${this.get('trustedUsed')}, sigMatch=${this.get('sigMatched')}`);
+        logVerbose(`[LayoutData] 高度来源 file=${this.get('dataFromFile')}, memory=${this.get('dataFromMemory')}, missing=${this.get('dataMissing')}, trusted=${this.get('trustedUsed')}, sigMatch=${this.get('sigMatched')}`);
         
         if (this.get('trustedUsed') > 0) {
-            log(`[LayoutData] trustedHeight样例: ${this.getSamples('trusted').join('|')}`);
+            logVerbose(`[LayoutData] trustedHeight样例: ${this.getSamples('trusted').join('|')}`);
         }
         if (this.hasSamples('sigMatched')) {
-            log(`[LayoutData] trusted签名匹配样例: ${this.getSamples('sigMatched').join('|')}`);
+            logVerbose(`[LayoutData] trusted签名匹配样例: ${this.getSamples('sigMatched').join('|')}`);
         }
         if (this.hasSamples('sigMismatch')) {
-            log(`[LayoutData] trusted签名不匹配样例: ${this.getSamples('sigMismatch').join('|')}`);
+            logVerbose(`[LayoutData] trusted签名不匹配样例: ${this.getSamples('sigMismatch').join('|')}`);
         }
         if (this.hasSamples('filePreferred')) {
-            log(`[LayoutData] 文件高度优先样例: ${this.getSamples('filePreferred').join('|')}`);
+            logVerbose(`[LayoutData] 文件高度优先样例: ${this.getSamples('filePreferred').join('|')}`);
         }
         if (this.get('domDiff') > 0) {
             const avgDiff = this.get('domDiffSum') / this.get('domDiff');
-            log(`[LayoutData] DOM高度差异 count=${this.get('domDiff')}, max=${this.get('domDiffMax').toFixed(1)}, avg=${avgDiff.toFixed(1)}, sample=${this.getSamples('domDiff').join('|')}`);
+            logVerbose(`[LayoutData] DOM高度差异 count=${this.get('domDiff')}, max=${this.get('domDiffMax').toFixed(1)}, avg=${avgDiff.toFixed(1)}, sample=${this.getSamples('domDiff').join('|')}`);
         }
         if (this.get('domZero') > 0) {
-            log(`[LayoutData] DOM高度为0 count=${this.get('domZero')}, sample=${this.getSamples('domZero').join('|')}`);
+            logVerbose(`[LayoutData] DOM高度为0 count=${this.get('domZero')}, sample=${this.getSamples('domZero').join('|')}`);
             if (this.hasSamples('domZeroDetail')) {
-                log(`[LayoutData] DOM高度为0详情 file=${canvasFilePath || 'unknown'}, sample=${this.getSamples('domZeroDetail').join('|')}`);
+                logVerbose(`[LayoutData] DOM高度为0详情 file=${canvasFilePath || 'unknown'}, sample=${this.getSamples('domZeroDetail').join('|')}`);
             }
         }
         if (this.get('domHidden') > 0) {
-            log(`[LayoutData] DOM隐藏 sample=${this.getSamples('domHidden').join('|')}`);
+            logVerbose(`[LayoutData] DOM隐藏 sample=${this.getSamples('domHidden').join('|')}`);
         }
         if (this.get('domMissing') > 0) {
-            log(`[LayoutData] DOM缺失 sample=${this.getSamples('domMissing').join('|')}`);
+            logVerbose(`[LayoutData] DOM缺失 sample=${this.getSamples('domMissing').join('|')}`);
         }
     }
 

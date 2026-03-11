@@ -1,7 +1,7 @@
 import { App } from 'obsidian';
 import { CanvasFileService } from './canvas-file-service';
 import { VisibilityService } from './visibility-service';
-import { log } from '../../utils/logger';
+import { log, logVerbose } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import {
     estimateTextNodeHeight,
@@ -173,7 +173,7 @@ export class LayoutDataProvider {
         // [置信度分层日志] 清晰展示高度来源分布
         const reliableCount = fromDomMounted + fromTrusted + fromFile;
         const unreliableCount = fromMemoryVirtualized + fromEstimate;
-        log(
+        logVerbose(
             `[LayoutData] HeightSource: domMounted=${fromDomMounted}, trusted=${fromTrusted}, file=${fromFile}, ` +
             `memoryVirtualized=${fromMemoryVirtualized}, estimate=${fromEstimate} | ` +
             `reliable=${reliableCount}, unreliable=${unreliableCount} | ` +
@@ -459,7 +459,7 @@ export class LayoutDataProvider {
         }
 
         if (floatingNodes.size > 0) {
-            log(`[LayoutData] 浮动: ${floatingNodes.size}`);
+            logVerbose(`[LayoutData] 浮动: ${floatingNodes.size}`);
         }
 
         return floatingNodes;

@@ -65,10 +65,10 @@ export class FromLinkRepairService {
         const sourceContent = await this.app.vault.read(sourceFile);
         const sourceLines = sourceContent.split('\n');
 
-        log(`[FromLinkRepair] sourceHint=${sourcePathHint || 'none'}, resolved=${sourceFile.path}, lines=${sourceLines.length}, totalNodes=${allNodes.length}, targetNodes=${targetNodes.length}`);
+        logVerbose(`[FromLinkRepair] sourceHint=${sourcePathHint || 'none'}, resolved=${sourceFile.path}, lines=${sourceLines.length}, totalNodes=${allNodes.length}, targetNodes=${targetNodes.length}`);
         const sampleNodes = targetNodes.slice(0, 3).map((n) => `${n.id || 'unknown'}:${this.normalizeForMatch((n.text || '').slice(0, 80))}`);
         if (sampleNodes.length > 0) {
-            log(`[FromLinkRepair] sampleTargets=${sampleNodes.join(' | ')}`);
+            logVerbose(`[FromLinkRepair] sampleTargets=${sampleNodes.join(' | ')}`);
         }
 
         const parentMap = this.buildParentMap(canvasData.edges || []);
@@ -188,7 +188,7 @@ export class FromLinkRepairService {
         this.applyUnmatchedStyleToRuntime(unmatchedIds);
 
         if (pathFixes.size > 0) {
-            log(`[FromLinkRepair] pathFixed=${pathFixes.size}`);
+            logVerbose(`[FromLinkRepair] pathFixed=${pathFixes.size}`);
         }
         if (repairedSamples.length > 0) {
             logVerbose(`[FromLinkRepair] repairedSamples=${repairedSamples.join(' | ')}`);
@@ -341,7 +341,7 @@ export class FromLinkRepairService {
 
         scored.sort((a, b) => b.score - a.score);
         const topLog = scored.slice(0, 3).map((s) => `${s.file.path}(score=${s.score},samples=${s.matchedSamples},lines=${s.lines})`).join(' | ');
-        log(`[FromLinkRepair] resolve candidates top=${topLog || 'none'}`);
+        logVerbose(`[FromLinkRepair] resolve candidates top=${topLog || 'none'}`);
 
         return scored[0]?.file || null;
     }
