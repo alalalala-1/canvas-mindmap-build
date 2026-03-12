@@ -6,6 +6,7 @@ import { log } from '../../utils/logger';
 import { estimateTextNodeHeight, getCanvasView } from '../../utils/canvas-utils';
 import { generateTextSignature } from '../../utils/height-utils';
 import { CONSTANTS } from '../../constants';
+import { requestCanvasSave } from '../adapters/canvas-runtime-adapter';
 
 export class NodeHeightService {
     private static readonly RENDERED_CACHE_MAX_SIZE = 200;
@@ -784,9 +785,7 @@ export class NodeHeightService {
                 if (typeof nodeWithRender.render === 'function') {
                     nodeWithRender.render();
                 }
-                if (typeof canvas.requestSave === 'function') {
-                    canvas.requestSave();
-                }
+                requestCanvasSave(canvas);
             }
         }
     }

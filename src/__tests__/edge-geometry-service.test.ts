@@ -57,6 +57,55 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 		});
 	});
 
+	it('should mark post-reload diagnostic summaries as refresh pending', () => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: true });
+		clearRecentLogs();
+		const service = new EdgeGeometryService();
+
+		service.emitDiagnosticPhaseSummary({
+			phase: 'transient-post-reload',
+			tag: 'post-reload',
+			anomalyStats: {
+				visible: 4,
+				anomalous: 0,
+				topOnly: 0,
+				leftOnly: 0,
+				topAndLeft: 0,
+				insetTopLeft: 0,
+				softInsetOnly: 0,
+			},
+			gapSummary: {
+				allEdges: 3,
+				bothVisibleEdges: 1,
+				oneSideVisibleEdges: 1,
+				bothVirtualizedEdges: 1,
+				sampledEdges: 1,
+				badEdges: 1,
+				residualBadEdges: 1,
+				avgGap: 9,
+				maxGap: 9,
+				avgResidualGap: 9,
+				maxResidualGap: 9,
+				badGapThresholdPx: 8,
+				stubCompensationPx: 3.5,
+				canvasScale: 1,
+				topBadSample: 'edge-1',
+				topResidualBadSample: 'edge-1',
+				topBadDecompose: 'none',
+				topDriftNodes: 'none',
+				positionBuckets: 'abs=1,rel=0,other=0',
+				sample: 'edge-1',
+			},
+		});
+
+		const latest = getRecentLogs().at(-1);
+		expect(latest?.data).toMatchObject({
+			refreshPending: true,
+			expectedRecovery: 'edge-refresh-pass',
+			geometryState: 'refresh-pending',
+		});
+	});
+
 	it('should classify visibility buckets into screen risk tiers', () => {
 		const service = new EdgeGeometryService() as unknown as {
 			classifyEdgeVisibilityBucket: (fromState: 'visible' | 'zero' | 'missing', toState: 'visible' | 'zero' | 'missing') => string;

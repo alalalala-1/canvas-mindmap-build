@@ -15,6 +15,7 @@ import { getEdgesFromCanvas, getNodeIdFromEdgeEndpoint, isRecord } from '../../u
 import { CONSTANTS } from '../../constants';
 import { Platform } from 'obsidian';
 import type { DiagnosticPhase, LogLevel } from '../../utils/logging/types';
+import { requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
 
 
 export interface EdgeGeomDiagnostics {
@@ -73,7 +74,25 @@ type NodeDomVisibilityState = 'visible' | 'zero' | 'missing';
 type EdgeVisibilityBucket = 'both-visible' | 'one-side-visible' | 'virtualized-involved';
 type EdgeScreenRisk = 'high' | 'medium' | 'low';
 
+type DiagnosticPendingHint = {
+    refreshPending: boolean;
+    expectedRecovery: string;
+    geometryState: string;
+};
+
 export class EdgeGeometryService {
+    private getDiagnosticPendingHint(phase: DiagnosticPhase, tag: string): DiagnosticPendingHint | null {
+        if (phase === 'transient-post-reload' || tag === 'post-reload') {
+            return {
+                refreshPending: true,
+                expectedRecovery: 'edge-refresh-pass',
+                geometryState: 'refresh-pending'
+            };
+        }
+
+        return null;
+    }
+
     private getNodeDomVisibilityState(node: CanvasNodeLike | undefined): NodeDomVisibilityState {
         if (!node) return 'missing';
         const nodeEl = (node).nodeEl;
@@ -154,6 +173,7 @@ export class EdgeGeometryService {
             ? Number((options.gapSummary.sampledEdges / options.gapSummary.bothVisibleEdges).toFixed(3))
             : 1;
         const coverageNote = this.buildCoverageNote(options.gapSummary);
+        const pendingHint = this.getDiagnosticPendingHint(options.phase, options.tag);
         const classification = classifyDiagnosticPhase(options.phase);
         const finalBad = classification.isFinal && (hasAnomaly || hasBadEdges);
         const level = resolveDiagnosticLogLevel({
@@ -194,6 +214,9 @@ export class EdgeGeometryService {
                 hasPartialObservation,
                 visibilityCoverageRatio,
                 coverageNote,
+                refreshPending: pendingHint?.refreshPending ?? false,
+                expectedRecovery: pendingHint?.expectedRecovery ?? 'none',
+                geometryState: pendingHint?.geometryState ?? 'stable',
                 ...(options.extra || {})
             }
         });
@@ -1003,9 +1026,7 @@ export class EdgeGeometryService {
 
         // Canvas 引擎会在 requestUpdate() 后自动刷新 SVG 路径（含7px stub + bezier曲线）
         // forceApplySVGPathFromBezier 已移除：该方法只写bezier部分，缺少stub，是不完整的
-        if (typeof (canvas).requestUpdate === 'function') {
-            (canvas).requestUpdate();
-        }
+        requestCanvasUpdate(canvas);
 
         for (const edge of edges) {
             if (edge.id) {
@@ -1085,9 +1106,7 @@ export class EdgeGeometryService {
 
         // Canvas 引擎在 requestUpdate() 后会自动构造完整 SVG 路径（含7px stub + bezier曲线）
         // 不再手动写 SVG path（forceApplySVGPathFromBezier 已从 pass2 移除）
-        if (typeof (canvas).requestUpdate === 'function') {
-            (canvas).requestUpdate();
-        }
+        requestCanvasUpdate(canvas);
 
         for (const edge of edges) {
             if (edge.id) {
@@ -1177,9 +1196,7 @@ export class EdgeGeometryService {
             }
 
             // Canvas 引擎在 requestUpdate() 后自动渲染完整路径，不再手动写 SVG path
-            if (typeof (canvas).requestUpdate === 'function') {
-                (canvas).requestUpdate();
-            }
+            requestCanvasUpdate(canvas);
 
             log(`[Layout] EdgeRefreshV3(pass3): rendered=${pass3Rendered}/${edges.length}, bezierChanged=${bezierChanged}, delay=${delay}ms, ctx=${contextId || 'none'}`);
         }, delay);
@@ -1304,11 +1321,19 @@ export class EdgeGeometryService {
             const expFStr = `(${expFrom.x.toFixed(0)},${expFrom.y.toFixed(0)})`;
             const expTStr = `(${expTo.x.toFixed(0)},${expTo.y.toFixed(0)})`;
 
+            const fromDomState = this.getNodeDomVisibilityState(fromNode);
+            const toDomState = this.getNodeDomVisibilityState(toNode);
+            const visibilityBucket = this.classifyEdgeVisibilityBucket(fromDomState, toDomState);
+            const screenRisk = this.deriveEdgeScreenRisk(visibilityBucket);
             const errSummary = hasEndpointData
                 ? `${errF.toFixed(1)}/${errT.toFixed(1)}`
                 : 'n/a';
-            const status = hasEndpointData ? (ok ? '✓' : '✗') : 'deferred';
-            edgeLines.push(`  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errSummary} ${status}`);
+            const status = hasEndpointData ? (ok ? 'ok' : 'bad') : 'deferred';
+            edgeLines.push(
+                `  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} ` +
+                `bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errSummary} ` +
+                `status=${status},scope=${visibilityBucket},screenRisk=${screenRisk}`
+            );
         }
 
         if (edgeLines.length > 0) {
@@ -1774,10 +1799,18 @@ export class EdgeGeometryService {
             `[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, ` +
             `bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`
         );
+        const pendingHint = this.getDiagnosticPendingHint(
+            tag === 'post-reload' ? 'transient-post-reload' : 'final',
+            tag
+        );
+        const pendingHintSuffix = pendingHint
+            ? `, refreshPending=${pendingHint.refreshPending}, expectedRecovery=${pendingHint.expectedRecovery}, geometryState=${pendingHint.geometryState}`
+            : '';
+
         if (edgeNoDataRows.length > 0) {
             logVerbose(
                 `[DiagFull-${tag}] EdgeDeferred(${edgeNoDataRows.length} noData/deferred, ` +
-                `buckets=${this.formatVisibilityBucketCounts(edgeDeferredByBucket)}, desc):\n${edgeNoDataRows.join('\n')}`
+                `buckets=${this.formatVisibilityBucketCounts(edgeDeferredByBucket)}${pendingHintSuffix}, desc):\n${edgeNoDataRows.join('\n')}`
             );
         } else {
             logVerbose(`[DiagFull-${tag}] EdgeDeferred: 无 noData/deferred 边 ✓`);
@@ -1785,7 +1818,7 @@ export class EdgeGeometryService {
         if (edgeRows.length > 0) {
             logVerbose(
                 `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
-                `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`
+                `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}${pendingHintSuffix}, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`
             );
         } else {
             logVerbose(`[DiagFull-${tag}] EdgeBad: 无边 err > 8px ✓`);

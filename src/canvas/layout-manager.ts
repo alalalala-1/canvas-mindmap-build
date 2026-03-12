@@ -21,6 +21,7 @@ import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
 import { CollapseToggleService } from './services/collapse-toggle-service';
 import { EdgeGeometryService, EdgeScreenGapSummary, OffsetAnomalyStats, OffsetCleanupOptions } from './services/edge-geometry-service';
+import { requestCanvasUpdate } from './adapters/canvas-runtime-adapter';
 
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
@@ -537,9 +538,7 @@ export class LayoutManager {
                     edgePass2 = refreshResult.pass2;
                 }
 
-                if (typeof (pulseCanvas).requestUpdate === 'function') {
-                    (pulseCanvas).requestUpdate();
-                }
+                requestCanvasUpdate(pulseCanvas);
 
                 const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapAfter = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
@@ -1458,7 +1457,7 @@ export class LayoutManager {
                 arrangeId
             );
             if (calibratedDomHeights > 0) {
-                freshCanvas.requestUpdate?.();
+                requestCanvasUpdate(freshCanvas);
                 await this.waitForNextFrame(60);
             }
 
@@ -1609,9 +1608,7 @@ export class LayoutManager {
                 )
                 : Promise.resolve();
 
-            if (typeof (freshCanvas).requestUpdate === 'function') {
-                (freshCanvas).requestUpdate();
-            }
+            requestCanvasUpdate(freshCanvas);
 
             const rehiddenAfterFinalUpdate = this.reapplyCurrentCollapseVisibility(
                 freshCanvas,

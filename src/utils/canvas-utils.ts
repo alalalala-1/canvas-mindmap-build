@@ -1,6 +1,12 @@
 import { App, ItemView, View } from 'obsidian';
 import { CONSTANTS } from '../constants';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasSelectionEntry, EdgeEndpoint, FloatingNodeRecord } from '../canvas/types';
+import { requestCanvasSave, requestCanvasUpdate } from '../canvas/adapters/canvas-runtime-adapter';
+import {
+    clearAllSelectionState,
+    clearEdgeSelectionState,
+    getPrimarySelectedEdgeFromState,
+} from '../canvas/adapters/canvas-selection-adapter';
 
 type CanvasDataNode = {
     id: string;
@@ -836,10 +842,8 @@ export function reloadCanvas(canvas: CanvasLike): void {
     const canvasWithReload = canvas as CanvasLike & { reload?: () => void };
     if (typeof canvasWithReload.reload === 'function') {
         canvasWithReload.reload();
-    } else if (typeof canvas.requestUpdate === 'function') {
-        canvas.requestUpdate();
-    } else if (canvas.requestSave) {
-        canvas.requestSave();
+    } else if (!requestCanvasUpdate(canvas)) {
+        requestCanvasSave(canvas);
     }
 }
 
@@ -854,13 +858,11 @@ export function getSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
         return edgesInCanvas.some(candidate => isSameCanvasEdge(candidate, edge));
     };
 
-    if (isPresentInCanvas(canvas.selectedEdge)) {
-        return canvas.selectedEdge;
-    }
+    const selectedEdge = getPrimarySelectedEdgeFromState(canvas);
+    if (isPresentInCanvas(selectedEdge)) return selectedEdge;
 
-    if (canvas.selectedEdges && canvas.selectedEdges.length > 0) {
-        const selectedEdge = canvas.selectedEdges.find(edge => isPresentInCanvas(edge));
-        if (selectedEdge) return selectedEdge;
+    for (const edge of getDirectSelectedEdges(canvas)) {
+        if (isPresentInCanvas(edge)) return edge;
     }
     
     if (canvas.edges) {
@@ -901,14 +903,13 @@ export function clearCanvasEdgeSelection(canvas: CanvasLike): {
 
     if (canvas.selection instanceof Set && canvas.selection.size > 0) {
         for (const entry of Array.from(canvas.selection)) {
-            if (!isCanvasEdgeLike(entry)) continue;
-            rememberEdge(entry);
-            canvas.selection.delete(entry);
+            if (isCanvasEdgeLike(entry)) {
+                rememberEdge(entry);
+            }
         }
     }
 
-    delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike }).selectedEdge;
-    (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+    clearEdgeSelectionState(canvas);
 
     for (const edge of getEdgesFromCanvas(canvas)) {
         const hadSelectedClass = !!(
@@ -965,7 +966,6 @@ export function clearCanvasSelection(canvas: CanvasLike): {
                 rememberEdge(entry);
             }
         }
-        canvas.selection.clear();
     }
 
     for (const node of canvas.selectedNodes || []) {
@@ -976,9 +976,7 @@ export function clearCanvasSelection(canvas: CanvasLike): {
         rememberEdge(edge);
     }
 
-    (canvas as CanvasLike & { selectedNodes?: CanvasNodeLike[] }).selectedNodes = [];
-    delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike }).selectedEdge;
-    (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+    clearAllSelectionState(canvas);
 
     for (const node of getNodesFromCanvas(canvas)) {
         const hadSelectedClass = !!(

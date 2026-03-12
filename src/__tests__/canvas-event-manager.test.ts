@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { CanvasEventManager } from '../canvas/canvas-event-manager';
+import { clearRecentLogs, getRecentLogs, updateLoggerConfig } from '../utils/logger';
 
 class MockClassList {
 	private classes: Set<string>;
@@ -124,6 +125,8 @@ describe('CanvasEventManager native insert gating', () => {
 	let placeholderPresent = false;
 
 	beforeEach(() => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: false });
+		clearRecentLogs();
 		placeholderPresent = false;
 		(globalThis as Record<string, unknown>).Element = MockElement;
 		(globalThis as Record<string, unknown>).HTMLElement = MockElement;
@@ -154,6 +157,8 @@ describe('CanvasEventManager native insert gating', () => {
 				reason: string;
 				targetKind: string;
 			};
+			activeNativeInsertSession: unknown;
+			nativeInsertSideEffectsSuppressUntil: number;
 		};
 		const target = createWrapperTarget({ childClasses: ['canvas-node-connection-point'] });
 
@@ -165,6 +170,8 @@ describe('CanvasEventManager native insert gating', () => {
 			reason: 'edge-connect',
 			targetKind: 'edge-connect',
 		});
+		expect(manager.activeNativeInsertSession).toBeNull();
+		expect(manager.nativeInsertSideEffectsSuppressUntil).toBe(0);
 	});
 
 	it('should reject idle wrapper mouse click as empty-wrapper-idle', () => {
@@ -271,5 +278,34 @@ describe('CanvasEventManager native insert gating', () => {
 			reason: 'wrapper-active',
 			targetKind: 'wrapper:is-dragging',
 		});
+	});
+
+	it('should log generic canvas engine events when addNode runs outside native insert session', () => {
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => null,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			installNativeInsertEngineDiagnostics: (canvas: { addNode: () => string }) => void;
+		};
+		const canvas = {
+			addNode: () => 'created-node',
+		};
+
+		manager.installNativeInsertEngineDiagnostics(canvas);
+		canvas.addNode();
+
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('CanvasEngineCall: trace=none, source=command-or-external, method=addNode'))).toBe(true);
+		expect(messages.some(message => message.includes('CanvasEngineReturn: trace=none, source=command-or-external, method=addNode'))).toBe(true);
+		expect(messages.some(message => message.includes('NativeInsertEngineCall'))).toBe(false);
 	});
 });

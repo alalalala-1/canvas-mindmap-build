@@ -6,6 +6,8 @@ import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
 import { getCanvasView, getCurrentCanvasFilePath, getEdgeFromNodeId, getEdgeToNodeId, getSelectedEdge } from '../../utils/canvas-utils';
 import { CanvasLike, CanvasEdgeLike, ICanvasManager, CanvasViewLike } from '../types';
+import { requestCanvasSave, requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
+import { clearEdgeSelectionState, setSingleSelectedEdgeState } from '../adapters/canvas-selection-adapter';
 
 export class EdgeDeletionService {
     private app: App;
@@ -193,19 +195,14 @@ export class EdgeDeletionService {
             }
 
             if (typeof canvasAny.removeSelection === 'function') {
-                const selection = canvas.selection as Set<unknown> | undefined;
-                if (selection) {
-                    selection.clear();
-                    selection.add(edge);
-                }
-                (canvas as { selectedEdge?: CanvasEdgeLike }).selectedEdge = edge;
+                setSingleSelectedEdgeState(canvas, edge, { clearSelection: true });
                 canvasAny.removeSelection();
                 log(`[EdgeDelete] 使用 canvas.removeSelection`);
                 return true;
             }
 
             // 模拟 Delete 键
-            (canvas as { selectedEdge?: CanvasEdgeLike }).selectedEdge = edge;
+            setSingleSelectedEdgeState(canvas, edge);
             const canvasEl = document.querySelector('.canvas-wrapper') || document.querySelector('.canvas');
             if (canvasEl) {
                 const deleteEvent = new KeyboardEvent('keydown', {
@@ -241,15 +238,7 @@ export class EdgeDeletionService {
                 if (canvas.edges instanceof Map && canvas.edges.has(edgeId)) {
                     canvas.edges.delete(edgeId);
                 }
-                if (canvas.selectedEdge === edge) {
-                    (canvas as { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = null;
-                }
-                if (canvas.selectedEdges) {
-                    const index = canvas.selectedEdges.indexOf(edge);
-                    if (index > -1) {
-                        canvas.selectedEdges.splice(index, 1);
-                    }
-                }
+                clearEdgeSelectionState(canvas, edge);
 
                 this.removeEdgeDomElements(edge);
             }
@@ -265,12 +254,10 @@ export class EdgeDeletionService {
             // [修复] 关键步骤：强制 Canvas 重新渲染
             // 如果不调用 requestUpdate，Canvas 可能会缓存旧的边数据，
             // 下次渲染时重新创建已删除边的 DOM 元素
-            if (typeof canvas.requestUpdate === 'function') {
+            if (requestCanvasUpdate(canvas)) {
                 log(`[EdgeDelete] 触发 canvas.requestUpdate() 强制重新渲染`);
-                canvas.requestUpdate();
-            } else if (typeof canvas.requestSave === 'function') {
+            } else if (requestCanvasSave(canvas)) {
                 log(`[EdgeDelete] 触发 canvas.requestSave() 保存状态`);
-                canvas.requestSave();
             }
         } catch (err) {
             log(`[EdgeDelete] 兜底清理失败`, err);

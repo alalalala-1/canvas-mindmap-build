@@ -17,6 +17,7 @@ import {
 } from '../utils/canvas-utils';
 import { generateTextSignature } from '../utils/height-utils';
 import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
+import { requestCanvasSave, requestCanvasUpdate } from './adapters/canvas-runtime-adapter';
 
 /** 高度调整的统计上下文 */
 interface HeightAdjustmentStats {
@@ -641,8 +642,8 @@ export class CanvasNodeManager {
             }
 
             // 统一请求保存（由 Obsidian 决定何时写入）
-            if (!options?.suppressRequestSave && changed && typeof canvas.requestSave === 'function') {
-                canvas.requestSave();
+            if (!options?.suppressRequestSave && changed) {
+                requestCanvasSave(canvas);
             }
 
             const scrollabilityUpdated = this.syncScrollableStateForMountedNodes();
@@ -947,9 +948,7 @@ export class CanvasNodeManager {
                 nodeWithRender.render();
             }
             this.updateNodeScrollability(node);
-            if (typeof canvas.requestSave === 'function') {
-                canvas.requestSave();
-            }
+            requestCanvasSave(canvas);
         }
     }
 
@@ -1083,8 +1082,8 @@ export class CanvasNodeManager {
             }
             
             // 请求 Canvas 保存（由 Obsidian 决定何时写入文件）
-            if (!options?.suppressRequestSave && canvas && typeof canvas.requestSave === 'function') {
-                canvas.requestSave();
+            if (!options?.suppressRequestSave && canvas) {
+                requestCanvasSave(canvas);
             }
             
             // 同时在节点 data 中更新元数据（内存中）
@@ -1472,8 +1471,8 @@ export class CanvasNodeManager {
                 }
             }
         }
-        if (!suppressRequestSave && typeof canvas.requestSave === 'function') canvas.requestSave();
-        if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
+        if (!suppressRequestSave) requestCanvasSave(canvas);
+        requestCanvasUpdate(canvas);
     }
 
     /** 输出高度调整统计日志 */

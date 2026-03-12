@@ -36,6 +36,14 @@ import {
 } from '../utils/canvas-utils';
 import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike, PluginWithLastClicked } from './types';
 import { VisibilityService } from './services/visibility-service';
+import { requestCanvasUpdate, setActiveLeafSafe } from './adapters/canvas-runtime-adapter';
+import {
+    clearEdgeSelectionState,
+    clearNodeSelectionState,
+    getPrimarySelectedEdgeFromState,
+    getSelectedEdgeCountFromState,
+    setSingleSelectedEdgeState,
+} from './adapters/canvas-selection-adapter';
 
 type FromLinkInfo = {
     file: string;
@@ -1189,18 +1197,11 @@ export class CanvasEventManager {
     }
 
     private getDirectSelectedEdge(canvas: CanvasLike): CanvasEdgeLike | null {
-        if (canvas.selectedEdge) return canvas.selectedEdge;
-        if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges[0] || null;
-        }
-        return null;
+        return getPrimarySelectedEdgeFromState(canvas);
     }
 
     private getDirectSelectedEdgeCount(canvas: CanvasLike): number {
-        if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
-            return canvas.selectedEdges.length;
-        }
-        return canvas.selectedEdge ? 1 : 0;
+        return getSelectedEdgeCountFromState(canvas);
     }
 
     private getDirectSelectedNodeCount(canvas: CanvasLike): number {
@@ -1208,22 +1209,15 @@ export class CanvasEventManager {
     }
 
     private clearDirectNodeSelectionState(canvas: CanvasLike): void {
-        if (canvas.selection instanceof Set) {
-            canvas.selection.clear();
-        }
-        if (Array.isArray(canvas.selectedNodes)) {
-            canvas.selectedNodes = [];
-        }
+        clearNodeSelectionState(canvas);
     }
 
     private clearDirectEdgeSelectionState(canvas: CanvasLike): void {
-        delete (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike | null }).selectedEdge;
-        (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [];
+        clearEdgeSelectionState(canvas);
     }
 
     private syncSelectedEdgeState(canvas: CanvasLike, edge: CanvasEdgeLike): void {
-        (canvas as CanvasLike & { selectedEdge?: CanvasEdgeLike | null }).selectedEdge = edge;
-        (canvas as CanvasLike & { selectedEdges?: CanvasEdgeLike[] }).selectedEdges = [edge];
+        setSingleSelectedEdgeState(canvas, edge);
     }
 
     private clearSelectionFallbackDomClasses(root: ParentNode | null | undefined, selector: string): number {
@@ -1484,20 +1478,24 @@ export class CanvasEventManager {
 
             const wrapped = (...args: unknown[]) => {
                 const traceId = this.activeNativeInsertSession?.traceId || 'none';
+                const source = this.activeNativeInsertSession ? 'native-insert-session' : 'command-or-external';
+                const callEvent = this.activeNativeInsertSession ? 'NativeInsertEngineCall' : 'CanvasEngineCall';
+                const returnEvent = this.activeNativeInsertSession ? 'NativeInsertEngineReturn' : 'CanvasEngineReturn';
+                const errorEvent = this.activeNativeInsertSession ? 'NativeInsertEngineError' : 'CanvasEngineError';
                 log(
-                    `[Event] NativeInsertEngineCall: trace=${traceId}, method=${methodName}, ` +
+                    `[Event] ${callEvent}: trace=${traceId}, source=${source}, method=${methodName}, ` +
                     `selection=${this.describeCanvasSelection()}, args=${args.map(arg => this.summarizeNativeInsertArg(arg)).join(';') || 'none'}`
                 );
                 try {
                     const result = (original as (...invokeArgs: unknown[]) => unknown).apply(canvasRecord, args);
                     log(
-                        `[Event] NativeInsertEngineReturn: trace=${traceId}, method=${methodName}, ` +
+                        `[Event] ${returnEvent}: trace=${traceId}, source=${source}, method=${methodName}, ` +
                         `result=${this.summarizeNativeInsertArg(result)}, selection=${this.describeCanvasSelection()}`
                     );
                     return result;
                 } catch (error) {
                     log(
-                        `[Event] NativeInsertEngineError: trace=${traceId}, method=${methodName}, ` +
+                        `[Event] ${errorEvent}: trace=${traceId}, source=${source}, method=${methodName}, ` +
                         `error=${String(error)}, selection=${this.describeCanvasSelection()}`
                     );
                     throw error;
@@ -2094,16 +2092,9 @@ export class CanvasEventManager {
 
         const activeCanvasView = getCanvasView(this.app);
         const activeCanvasLeaf = (activeCanvasView as { leaf?: unknown } | null)?.leaf;
-        if (activeCanvasLeaf && typeof this.app.workspace.setActiveLeaf === 'function') {
-            try {
-                (this.app.workspace.setActiveLeaf as (leaf: unknown, options?: { focus?: boolean }) => unknown)(
-                    activeCanvasLeaf,
-                    { focus: true }
-                );
-                focusedCanvasLeaf = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() === 'canvas';
-            } catch {
-                focusedCanvasLeaf = false;
-            }
+        if (activeCanvasLeaf) {
+            focusedCanvasLeaf = setActiveLeafSafe(this.app, activeCanvasLeaf, { focus: true })
+                && this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() === 'canvas';
         }
 
         const focusAfterLeafSync = this.describeDeleteModalFocusContext();
@@ -2385,7 +2376,7 @@ export class CanvasEventManager {
                 mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
                 await mdLeaf.openFile(sourceFile);
             } else {
-                this.app.workspace.setActiveLeaf(mdLeaf, { focus: true });
+                setActiveLeafSafe(this.app, mdLeaf, { focus: true });
             }
 
             const view = mdLeaf.view as MarkdownViewLike;
@@ -3236,9 +3227,7 @@ export class CanvasEventManager {
                 }
             }
 
-            if (typeof (canvas).requestUpdate === 'function') {
-                (canvas).requestUpdate();
-            }
+            requestCanvasUpdate(canvas);
 
             await this.waitForEngineFrame(passInterval);
 
@@ -3312,9 +3301,9 @@ export class CanvasEventManager {
         const c = canvas;
         if (typeof c.requestUpdate !== 'function') return;
 
-        c.requestUpdate();
+        requestCanvasUpdate(c);
         requestAnimationFrame(() => {
-            c.requestUpdate?.();
+            requestCanvasUpdate(c);
             log(`[ViewportFix] EngineRefresh: reason=${reason}`);
         });
     }

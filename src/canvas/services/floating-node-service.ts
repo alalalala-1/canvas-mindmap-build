@@ -9,6 +9,7 @@ import { CanvasMindmapBuildSettings } from '../../settings/types';
 import { CanvasLike, CanvasEdgeLike, CanvasNodeLike, ICanvasManager } from '../types';
 import { getNodeFromCanvas, getEdgesFromCanvas, getEdgeToNodeId as getEdgeToNodeIdUtil, getEdgeFromNodeId as getEdgeFromNodeIdUtil } from '../../utils/canvas-utils';
 import { isRecord, getStringProp } from '../../utils/type-guards';
+import { requestCanvasSave } from '../adapters/canvas-runtime-adapter';
 
 export class FloatingNodeService {
     private canvasFileService: CanvasFileService;
@@ -252,8 +253,8 @@ export class FloatingNodeService {
             }
 
             // 删边时跳过 requestSave，避免将 Canvas 内部缓存的旧边数据写回文件
-            if (!skipCanvasSave && typeof this.canvas.requestSave === 'function') {
-                this.canvas.requestSave();
+            if (!skipCanvasSave) {
+                requestCanvasSave(this.canvas);
             } else if (skipCanvasSave) {
                 log(`[FloatingNode] 跳过 requestSave（删边模式）`);
             }
@@ -302,15 +303,13 @@ export class FloatingNodeService {
                 delete node.data.isSubtreeNode;
             }
         }
-        if (requestSave && typeof this.canvas.requestSave === 'function') {
+        if (requestSave) {
             if (delay > 0) {
                 setTimeout(() => {
-                    if (typeof this.canvas?.requestSave === 'function') {
-                        this.canvas.requestSave();
-                    }
+                    requestCanvasSave(this.canvas);
                 }, delay);
             } else {
-                this.canvas.requestSave();
+                requestCanvasSave(this.canvas);
             }
         }
     }
@@ -358,7 +357,7 @@ export class FloatingNodeService {
     private async executeClearFloating(
         nodesToClear: string[],
         persistToFile: boolean,
-        requestCanvasSave: boolean = true
+        shouldRequestCanvasSave: boolean = true
     ): Promise<boolean> {
         if (!this.currentCanvasFilePath || nodesToClear.length === 0) {
             return false;
@@ -380,7 +379,7 @@ export class FloatingNodeService {
         // 2. 文件操作在后台异步执行，不阻塞调用者
         if (persistToFile) {
             // 使用 void 标记明确表示不等待，让文件操作在后台执行
-            void this.executeFilePersistence(primaryNodeId, nodesToClear, requestCanvasSave);
+            void this.executeFilePersistence(primaryNodeId, nodesToClear, shouldRequestCanvasSave);
         }
 
         return true;
@@ -392,18 +391,16 @@ export class FloatingNodeService {
     private async executeFilePersistence(
         primaryNodeId: string,
         nodesToClear: string[],
-        requestCanvasSave: boolean
+        shouldRequestCanvasSave: boolean
     ): Promise<void> {
         try {
             const persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
             log(`[FloatingNode] 后台文件持久化完成: ${primaryNodeId}, success=${persistSuccess}`);
 
-            if (requestCanvasSave && this.canvas && typeof this.canvas.requestSave === 'function') {
+            if (shouldRequestCanvasSave) {
                 // 延迟调用 requestSave，确保边数据已写入
                 setTimeout(() => {
-                    if (typeof this.canvas?.requestSave === 'function') {
-                        this.canvas.requestSave();
-                    }
+                    requestCanvasSave(this.canvas);
                 }, CONSTANTS.TIMING.RETRY_DELAY);
             }
         } catch (err) {
@@ -417,10 +414,10 @@ export class FloatingNodeService {
     private executeClearFloatingAsync(
         nodesToClear: string[],
         persistToFile: boolean,
-        requestCanvasSave: boolean = true
+        shouldRequestCanvasSave: boolean = true
     ): void {
         // 使用 void 操作符确保异步执行不阻塞调用者
-        void this.executeClearFloating(nodesToClear, persistToFile, requestCanvasSave);
+        void this.executeClearFloating(nodesToClear, persistToFile, shouldRequestCanvasSave);
     }
 
     private async isEdgePersistedInFile(toNodeId: string, edgeId?: string): Promise<boolean> {

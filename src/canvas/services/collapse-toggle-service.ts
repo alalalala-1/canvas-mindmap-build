@@ -17,6 +17,7 @@ import {
     parseFloatingNodeInfo
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
+import { requestCanvasSave, requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
 
 export class CollapseToggleService {
     constructor(
@@ -166,8 +167,8 @@ export class CollapseToggleService {
         this.applyVisibilityToNodes(nodes, hiddenNodeIds);
         this.applyVisibilityToEdges(domEdges, hiddenNodeIds);
 
-        if (options?.requestUpdate !== false && typeof canvas.requestUpdate === 'function') {
-            canvas.requestUpdate();
+        if (options?.requestUpdate !== false) {
+            requestCanvasUpdate(canvas);
         }
 
         log(
@@ -223,8 +224,8 @@ export class CollapseToggleService {
 
             const updatedCount = this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
 
-            if (typeof canvas.requestUpdate === 'function') canvas.requestUpdate();
-            if (canvas.requestSave) canvas.requestSave();
+            requestCanvasUpdate(canvas);
+            requestCanvasSave(canvas);
 
             log(`[Layout] Toggle: 更新了 ${updatedCount} 个节点`);
         } catch (err) {
