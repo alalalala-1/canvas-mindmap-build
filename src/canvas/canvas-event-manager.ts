@@ -123,6 +123,11 @@ type NativeInsertPendingCommit = {
     endedAt: number;
     engineAttempted: boolean;
     lastPointerDetail: number;
+    clickDetail?: number;
+    clickClassified?: boolean;
+    commitEligibleAt?: number;
+    awaitingClickClassification?: boolean;
+    evidenceFlags?: string[];
 };
 
 type CanvasGraphSnapshot = {
@@ -185,10 +190,11 @@ export class CanvasEventManager {
     private nativeInsertCommitInFlight: boolean = false;
     private lastNativeInsertCommitTraceId: string | null = null;
     private lastNativeInsertCommitAt: number = 0;
-    private lastNativeInsertCommitWaitTraceId: string | null = null;
+    private lastNativeInsertCommitWaitKey: string | null = null;
     private nativeInsertTraceTimeouts: Map<string, Set<number>> = new Map();
     private nativeInsertTraceRafs: Map<string, Set<number>> = new Map();
     private nativeInsertSettledTraceAt: Map<string, number> = new Map();
+    private nativeInsertProbePhasesByTrace: Map<string, Set<string>> = new Map();
     private nativeInsertSideEffectsSuppressUntil: number = 0;
     private deferredPostInsertMaintenanceTimeoutId: number | null = null;
     private deferredMeasureNodeIds: Set<string> = new Set();
@@ -204,6 +210,7 @@ export class CanvasEventManager {
     private readonly edgeSelectionFallbackSlowLogThresholdMs: number = 12;
     private readonly edgeSelectionFallbackDedupWindowMs: number = 120;
     private readonly openEntryDedupWindowMs: number = 1500;
+    private readonly nativeInsertMouseClickClassificationWindowMs: number = 520;
     private readonly touchDragScrollOwnerSelectors: string[] = [
         '.canvas-node-content',
         '.canvas-node-content .markdown-preview-view',
@@ -452,6 +459,16 @@ export class CanvasEventManager {
                         return;
                     }
 
+                    if (pendingCommit.pointerType === 'mouse') {
+                        pendingCommit.clickDetail = Math.max(pendingCommit.clickDetail || 0, event.detail || 1);
+                        logVerbose(
+                            `[Event] NativeInsertClickObservedPending: trace=${pendingCommit.traceId}, ` +
+                            `detail=${pendingCommit.clickDetail}, eligibleIn=${Math.max(0, (pendingCommit.commitEligibleAt ?? 0) - Date.now())}ms, ` +
+                            `target=${this.describeEventTarget(targetEl)}, chain=${this.describeEventTargetChain(targetEl)}`
+                        );
+                        return;
+                    }
+
                     void this.flushPendingNativeInsertCommit('click-post-session');
                     this.scheduleNativeInsertSelectionProbe(pendingCommit.traceId, 'click-post-session');
                 }
@@ -515,6 +532,19 @@ export class CanvasEventManager {
         };
 
         this.plugin.registerDomEvent(document, 'click', handleNodeClick, { capture: true });
+        this.plugin.registerDomEvent(document, 'dblclick', (event: MouseEvent) => {
+            const targetEl = event.target as HTMLElement;
+            if (!targetEl || !isCanvasNativeInsertGestureTarget(targetEl)) return;
+
+            const rejected = this.rejectPendingNativeInsertCommit('dblclick-post-session', 'multi-click', event.detail || 2);
+            if (!rejected) {
+                logVerbose(
+                    `[Event] NativeInsertClickIgnored: reason=multi-click, ` +
+                    `target=${this.describeEventTarget(targetEl)}, chain=${this.describeEventTargetChain(targetEl)}, ` +
+                    `flags=${this.describePointerEventState(event)}`
+                );
+            }
+        }, { capture: true });
     }
 
     private setupInteractionTracker(): void {
@@ -1560,10 +1590,48 @@ export class CanvasEventManager {
 
     private markNativeInsertTraceSettled(traceId: string): void {
         this.nativeInsertSettledTraceAt.set(traceId, Date.now());
-        if (this.lastNativeInsertCommitWaitTraceId === traceId) {
-            this.lastNativeInsertCommitWaitTraceId = null;
+        if (this.lastNativeInsertCommitWaitKey?.startsWith(`${traceId}|`)) {
+            this.lastNativeInsertCommitWaitKey = null;
         }
         this.pruneSettledNativeInsertTraces();
+    }
+
+    private logNativeInsertCommitWait(traceId: string, trigger: string, reason: string): void {
+        const waitKey = `${traceId}|${reason}`;
+        if (this.lastNativeInsertCommitWaitKey === waitKey) return;
+        logVerbose(`[Event] NativeInsertCommitWait: trace=${traceId}, trigger=${trigger}, reason=${reason}`);
+        this.lastNativeInsertCommitWaitKey = waitKey;
+    }
+
+    private collectNativeInsertEvidence(input: {
+        session: Pick<NativeInsertSession, 'pointerType' | 'startReason' | 'targetKind' | 'placeholderSeen' | 'placeholderAddedCount' | 'wrapperDragSeen'>;
+        placeholderDelta: number;
+    }): string[] {
+        const flags = new Set<string>();
+        const { session, placeholderDelta } = input;
+
+        if (session.targetKind === 'placeholder') flags.add('placeholder-target');
+        if (session.placeholderSeen) flags.add('placeholder-seen');
+        if ((session.placeholderAddedCount || 0) > 0) flags.add('placeholder-mutation');
+        if (placeholderDelta > 0) flags.add('placeholder-delta');
+        if (session.wrapperDragSeen) flags.add('wrapper-drag');
+        if (session.startReason === 'wrapper-active') flags.add('wrapper-active');
+        if (session.startReason === 'wrapper-placeholder-present') flags.add('wrapper-placeholder-present');
+        if (this.isTouchLikePointer(session.pointerType) && session.startReason === 'wrapper-touch-like') {
+            flags.add('touch-like-wrapper');
+        }
+
+        return Array.from(flags);
+    }
+
+    private registerNativeInsertProbePhase(traceId: string, phase: 'raf' | 'timeout-120'): boolean {
+        const phaseSet = this.nativeInsertProbePhasesByTrace.get(traceId) ?? new Set<string>();
+        if (phaseSet.has(phase)) {
+            return false;
+        }
+        phaseSet.add(phase);
+        this.nativeInsertProbePhasesByTrace.set(traceId, phaseSet);
+        return true;
     }
 
     private registerNativeInsertTimeout(traceId: string, timeoutId: number): void {
@@ -1596,6 +1664,8 @@ export class CanvasEventManager {
             }
             this.nativeInsertTraceRafs.delete(traceId);
         }
+
+        this.nativeInsertProbePhasesByTrace.delete(traceId);
 
         if (markSettled) {
             this.markNativeInsertTraceSettled(traceId);
@@ -1665,23 +1735,23 @@ export class CanvasEventManager {
     }
 
     private scheduleNativeInsertSelectionProbe(traceId: string, reason: string): void {
-        const timeout0 = window.setTimeout(() => {
-            if (this.isNativeInsertTraceSettled(traceId)) return;
-            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-0, selection=${this.describeCanvasSelection()}`);
-        }, 0);
-        this.registerNativeInsertTimeout(traceId, timeout0);
+        if (this.registerNativeInsertProbePhase(traceId, 'raf')) {
+            const rafId = requestAnimationFrame(() => {
+                if (this.isNativeInsertTraceSettled(traceId)) return;
+                logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:raf, selection=${this.describeCanvasSelection()}`);
+            });
+            this.registerNativeInsertRaf(traceId, rafId);
+        }
 
-        const rafId = requestAnimationFrame(() => {
-            if (this.isNativeInsertTraceSettled(traceId)) return;
-            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:raf, selection=${this.describeCanvasSelection()}`);
-        });
-        this.registerNativeInsertRaf(traceId, rafId);
-
-        const timeout120 = window.setTimeout(() => {
-            if (this.isNativeInsertTraceSettled(traceId)) return;
-            logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-120, selection=${this.describeCanvasSelection()}`);
-        }, 120);
-        this.registerNativeInsertTimeout(traceId, timeout120);
+        if (this.registerNativeInsertProbePhase(traceId, 'timeout-120')) {
+            const timeout120 = window.setTimeout(() => {
+                if (this.isNativeInsertTraceSettled(traceId)) return;
+                if (this.pendingNativeInsertCommit?.traceId !== traceId) return;
+                if (this.nativeInsertCommitInFlight) return;
+                logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-120, selection=${this.describeCanvasSelection()}`);
+            }, 120);
+            this.registerNativeInsertTimeout(traceId, timeout120);
+        }
     }
 
     private collectMutationElementsByClass(node: Node, className: string): HTMLElement[] {
@@ -1765,7 +1835,7 @@ export class CanvasEventManager {
     }
 
     private shouldCommitNativeInsertSession(input: {
-        session: Pick<NativeInsertSession, 'traceId' | 'targetKind' | 'startReason' | 'nodeCreateSeen' | 'anchorNodeId'>;
+        session: Pick<NativeInsertSession, 'traceId' | 'pointerType' | 'targetKind' | 'startReason' | 'nodeCreateSeen' | 'anchorNodeId' | 'placeholderSeen' | 'placeholderAddedCount' | 'wrapperDragSeen'>;
         nodeDelta: number;
         placeholderDelta: number;
         endReason: string;
@@ -1810,6 +1880,18 @@ export class CanvasEventManager {
             return {
                 allow: false,
                 reason: `unsupported-target:${input.session.targetKind}`
+            };
+        }
+
+        const evidenceFlags = this.collectNativeInsertEvidence({
+            session: input.session,
+            placeholderDelta: input.placeholderDelta,
+        });
+
+        if (evidenceFlags.length === 0) {
+            return {
+                allow: false,
+                reason: 'insufficient-evidence'
             };
         }
 
@@ -1860,6 +1942,10 @@ export class CanvasEventManager {
         endReason: string,
         pointerDetail: number
     ): boolean {
+        const evidenceFlags = this.collectNativeInsertEvidence({
+            session,
+            placeholderDelta,
+        });
         const decision = this.shouldCommitNativeInsertSession({
             session,
             nodeDelta,
@@ -1881,6 +1967,8 @@ export class CanvasEventManager {
 
         this.nativeInsertSettledTraceAt.delete(session.traceId);
         this.clearNativeInsertScheduledWork(session.traceId, false);
+        const awaitingClickClassification = session.pointerType === 'mouse';
+        const commitEligibleAt = Date.now() + (awaitingClickClassification ? this.nativeInsertMouseClickClassificationWindowMs : 0);
 
         this.pendingNativeInsertCommit = {
             traceId: session.traceId,
@@ -1896,13 +1984,28 @@ export class CanvasEventManager {
             endedAt: Date.now(),
             engineAttempted: false,
             lastPointerDetail: pointerDetail,
+            clickDetail: 0,
+            clickClassified: false,
+            commitEligibleAt,
+            awaitingClickClassification,
+            evidenceFlags,
         };
 
         log(
             `[Event] NativeInsertCommitQueued: trace=${session.traceId}, reason=${decision.reason}, ` +
             `target=${session.targetKind}, anchor=${session.anchorNodeId || 'none'}, ` +
-            `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}, detail=${pointerDetail}`
+            `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}, detail=${pointerDetail}, ` +
+            `awaitClick=${awaitingClickClassification}, evidence=${evidenceFlags.join('|') || 'none'}`
         );
+
+        if (awaitingClickClassification) {
+            logVerbose(
+                `[Event] NativeInsertCommitDeferred: trace=${session.traceId}, reason=await-click-classification, ` +
+                `waitMs=${this.nativeInsertMouseClickClassificationWindowMs}, evidence=${evidenceFlags.join('|') || 'none'}`
+            );
+            this.queueNativeInsertCommitFlush(session.traceId, 'session-end:mouse-classify-timeout', this.nativeInsertMouseClickClassificationWindowMs);
+            return true;
+        }
 
         this.queueNativeInsertCommitFlush(session.traceId, 'session-end:timeout-0', 0);
         this.queueNativeInsertCommitRaf(session.traceId, 'session-end:raf');
@@ -1914,16 +2017,37 @@ export class CanvasEventManager {
         const candidate = this.pendingNativeInsertCommit;
         if (!candidate) return;
 
-        if (trigger === 'click-post-session' && candidate.lastPointerDetail >= 2) {
-            this.rejectPendingNativeInsertCommit(trigger, 'multi-click', candidate.lastPointerDetail);
+        const combinedClickDetail = Math.max(candidate.lastPointerDetail || 0, candidate.clickDetail || 0);
+
+        if ((trigger === 'click-post-session' || trigger === 'dblclick-post-session') && combinedClickDetail >= 2) {
+            this.rejectPendingNativeInsertCommit(trigger, 'multi-click', combinedClickDetail);
             return;
         }
 
-        if (this.nativeInsertCommitInFlight) {
-            if (this.lastNativeInsertCommitWaitTraceId !== candidate.traceId) {
-                logVerbose(`[Event] NativeInsertCommitWait: trace=${candidate.traceId}, trigger=${trigger}, reason=in-flight`);
-                this.lastNativeInsertCommitWaitTraceId = candidate.traceId;
+        if (candidate.pointerType === 'mouse') {
+            const commitEligibleAt = candidate.commitEligibleAt ?? candidate.endedAt;
+            if (combinedClickDetail >= 2) {
+                this.rejectPendingNativeInsertCommit(trigger, 'multi-click', combinedClickDetail);
+                return;
             }
+
+            if (!candidate.clickClassified) {
+                if (Date.now() < commitEligibleAt) {
+                    this.logNativeInsertCommitWait(candidate.traceId, trigger, 'await-click-classification');
+                    return;
+                }
+
+                candidate.clickClassified = true;
+                candidate.clickDetail = Math.max(candidate.clickDetail || 0, combinedClickDetail, 1);
+                logVerbose(
+                    `[Event] NativeInsertClickClassified: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                    `detail=${candidate.clickDetail}, evidence=${candidate.evidenceFlags?.join('|') || 'none'}`
+                );
+            }
+        }
+
+        if (this.nativeInsertCommitInFlight) {
+            this.logNativeInsertCommitWait(candidate.traceId, trigger, 'in-flight');
             return;
         }
 
@@ -1969,6 +2093,7 @@ export class CanvasEventManager {
         }
 
         this.nativeInsertCommitInFlight = true;
+        this.clearNativeInsertScheduledWork(candidate.traceId, false);
         try {
             log(
                 `[Event] NativeInsertCommitStart: trace=${candidate.traceId}, trigger=${trigger}, ` +
@@ -1988,6 +2113,7 @@ export class CanvasEventManager {
                 parentNodeIdHint: candidate.anchorNodeId,
                 suppressSuccessNotice: true,
                 skipFromLink: true,
+                verifiedNativeInsert: true,
             });
 
             const refreshedCanvasView = getCanvasView(this.app);
@@ -2013,6 +2139,8 @@ export class CanvasEventManager {
             if (trigger === 'click-post-session' || ageMs > 1200) {
                 this.pendingNativeInsertCommit = null;
                 this.clearNativeInsertScheduledWork(candidate.traceId, true);
+            } else if (this.pendingNativeInsertCommit?.traceId === candidate.traceId) {
+                this.queueNativeInsertCommitFlush(candidate.traceId, `${trigger}:retry-timeout-120`, 120);
             }
         } finally {
             this.nativeInsertCommitInFlight = false;
@@ -2275,7 +2403,10 @@ export class CanvasEventManager {
         const commitQueued = this.stageNativeInsertCommit(session, nodeDelta, placeholderDelta, reason, pointerDetail);
 
         if (commitQueued) {
-            this.scheduleNativeInsertSelectionProbe(session.traceId, reason);
+            const pendingCommit = this.pendingNativeInsertCommit;
+            if (!pendingCommit?.awaitingClickClassification) {
+                this.scheduleNativeInsertSelectionProbe(session.traceId, reason);
+            }
         }
 
         this.activeNativeInsertSession = null;
@@ -3793,6 +3924,7 @@ export class CanvasEventManager {
         }
         this.nativeInsertTraceRafs.clear();
         this.nativeInsertSettledTraceAt.clear();
+        this.nativeInsertProbePhasesByTrace.clear();
         while (this.nativeInsertEngineRestoreFns.length > 0) {
             const restore = this.nativeInsertEngineRestoreFns.pop();
             try {

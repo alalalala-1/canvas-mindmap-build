@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeLayout } from '../canvas/layout';
-import { getArrangeNoOpFollowUpDecision } from '../canvas/layout-manager';
+import {
+	getArrangeNoOpFastPathDecision,
+	getArrangeNoOpFollowUpDecision,
+	getOpenStabilizeHealthySkipDecision,
+} from '../canvas/layout-manager';
 import { CanvasArrangerSettings, CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../canvas/types';
 
 const SETTINGS: CanvasArrangerSettings = {
@@ -119,4 +123,77 @@ describe('LayoutManager no-op follow-up decision', () => {
             reason: 'severe-visual-gap-risk',
         });
     });
+
+	it('should use no-op fast path only when predictedChanged=0 and file is unchanged', () => {
+		expect(getArrangeNoOpFastPathDecision(0, false, false)).toEqual({
+			useFastPath: true,
+			followUp: {
+				finishImmediately: true,
+				scheduleOpenStabilization: false,
+				reason: 'stable-no-op',
+			},
+			reason: 'stable-no-op',
+		});
+
+		expect(getArrangeNoOpFastPathDecision(0, true, false)).toEqual({
+			useFastPath: false,
+			followUp: {
+				finishImmediately: true,
+				scheduleOpenStabilization: false,
+				reason: 'stable-no-op',
+			},
+			reason: 'file-changed',
+		});
+
+		expect(getArrangeNoOpFastPathDecision(1, false, false)).toEqual({
+			useFastPath: false,
+			followUp: {
+				finishImmediately: true,
+				scheduleOpenStabilization: false,
+				reason: 'stable-no-op',
+			},
+			reason: 'predicted-changed',
+		});
+	});
+
+	it('should skip repeated healthy open-entry stabilization when graph is unchanged', () => {
+		const now = 5000;
+		expect(getOpenStabilizeHealthySkipDecision({
+			isOpenEntrySource: true,
+			isResumeSource: false,
+			now,
+			windowMs: 4000,
+			snapshot: {
+				finishedAt: 2000,
+				nodeCount: 12,
+				edgeCount: 11,
+				source: 'active-leaf-change',
+			},
+			nodeCount: 12,
+			edgeCount: 11,
+		})).toEqual({
+			skip: true,
+			reason: 'healthy-cache-hit',
+			ageMs: 3000,
+		});
+
+		expect(getOpenStabilizeHealthySkipDecision({
+			isOpenEntrySource: true,
+			isResumeSource: false,
+			now,
+			windowMs: 4000,
+			snapshot: {
+				finishedAt: 2000,
+				nodeCount: 12,
+				edgeCount: 11,
+				source: 'active-leaf-change',
+			},
+			nodeCount: 13,
+			edgeCount: 11,
+		})).toEqual({
+			skip: false,
+			reason: 'graph-changed',
+			ageMs: 3000,
+		});
+	});
 });

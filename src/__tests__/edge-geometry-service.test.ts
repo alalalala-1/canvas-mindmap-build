@@ -198,6 +198,42 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 		]);
 	});
 
+	it('should suppress final healthy visual-only details when rows are ok or deferred only', () => {
+		const service = new EdgeGeometryService() as unknown as {
+			getDiagnosticDetailDumpPlan: (
+				pendingHint: { refreshPending: boolean; expectedRecovery: string; geometryState: string } | null,
+				detailRows: Array<{
+					line: string;
+					visibilityBucket: 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+					screenRisk: 'high' | 'medium' | 'low';
+					status: 'ok' | 'bad' | 'deferred';
+				}>
+			) => {
+				mode: 'full' | 'summary-only' | 'focused';
+				rowsToLog: Array<{ line: string }>;
+				suppressedCount: number;
+				actionableCount: number;
+				reason: string;
+			};
+		};
+
+		const plan = service.getDiagnosticDetailDumpPlan(
+			null,
+			[
+				{ line: 'edge-a', visibilityBucket: 'both-visible', screenRisk: 'high', status: 'ok' },
+				{ line: 'edge-b', visibilityBucket: 'virtualized-involved', screenRisk: 'low', status: 'deferred' },
+			],
+		);
+
+		expect(plan).toMatchObject({
+			mode: 'summary-only',
+			rowsToLog: [],
+			suppressedCount: 2,
+			actionableCount: 0,
+			reason: 'healthy-non-bad-details-only',
+		});
+	});
+
 	it('should assess gap observation confidence for low-confidence and trusted coverage cases', () => {
 		const service = new EdgeGeometryService();
 

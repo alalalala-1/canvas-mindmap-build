@@ -523,6 +523,7 @@ export class FloatingNodeService {
             }
 
             log(`[FloatingNode] 目标节点 ${toNodeId} 是浮动节点，正在清除状态...`);
+            log(`[FloatingStateCleanup] reason=reconnected, nodes=${toNodeId}, persistToFile=${shouldPersistToFile}`);
             // 异步执行清除，不阻塞连线操作
             this.executeClearFloatingAsync([toNodeId], shouldPersistToFile, false);
         }
@@ -623,6 +624,7 @@ export class FloatingNodeService {
         const validFloatingNodes: string[] = [];
         const invalidFloatingNodes: string[] = [];
         const connectedFloatingNodes: string[] = [];
+        const recentConnectedSkipped: string[] = [];
 
         // 1. 检查状态文件中的浮动节点
         for (const nodeId of floatingNodes.keys()) {
@@ -631,6 +633,7 @@ export class FloatingNodeService {
                 // 如果节点刚被连接过，跳过处理，不加入任何列表
                 if (this.shouldSkipStyleApply(nodeId)) {
                     log(`[FloatingNode] 跳过刚连接的节点: ${nodeId}`);
+                    recentConnectedSkipped.push(nodeId);
                     continue;
                 }
                 // 检查节点是否真的有入边
@@ -665,6 +668,7 @@ export class FloatingNodeService {
                     // 如果节点刚被连接过，跳过处理
                     if (this.shouldSkipStyleApply(nodeId)) {
                         log(`[FloatingNode] 跳过刚连接的节点: ${nodeId}`);
+                        recentConnectedSkipped.push(nodeId);
                         continue;
                     }
                     if (!this.hasIncomingEdge(nodeId, edges)) {
@@ -676,6 +680,12 @@ export class FloatingNodeService {
                     }
                 }
             }
+        }
+
+        this.primeFloatingStateCleanup(connectedFloatingNodes, 'connected');
+        this.primeFloatingStateCleanup(invalidFloatingNodes, 'missing-node');
+        if (recentConnectedSkipped.length > 0) {
+            log(`[FloatingStateCleanup] reason=recent-connected-skip, count=${recentConnectedSkipped.length}, nodes=${recentConnectedSkipped.join('|')}`);
         }
 
 
@@ -701,6 +711,21 @@ export class FloatingNodeService {
             log(`[FloatingNode] 清理无效浮动节点: ${invalidFloatingNodes.join(', ')}`);
             void this.cleanupInvalidFloatingNodes(invalidFloatingNodes);
         }
+    }
+
+    private primeFloatingStateCleanup(nodeIds: string[], reason: 'connected' | 'missing-node'): void {
+        if (!this.currentCanvasFilePath || nodeIds.length === 0) return;
+
+        this.removeFloatingNodeIds(nodeIds);
+        this.clearFloatingStyles(nodeIds);
+        this.clearFloatingMemory(this.currentCanvasFilePath, nodeIds);
+        this.clearFloatingCanvasData(nodeIds, false);
+        for (const nodeId of nodeIds) {
+            this.recentConnectedNodes.delete(nodeId);
+            this.clearEdgeWatch(nodeId);
+        }
+
+        log(`[FloatingStateCleanup] reason=${reason}, count=${nodeIds.length}, nodes=${nodeIds.join('|')}`);
     }
 
     /**

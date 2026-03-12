@@ -83,7 +83,13 @@ class MockElement {
 
 function createManager(): CanvasEventManager {
 	const plugin = {} as never;
-	const app = {} as never;
+	const app = {
+		workspace: {
+			getActiveViewOfType: () => null,
+			getLeavesOfType: () => [],
+			activeEditor: null,
+		},
+	} as never;
 	const settings = {} as never;
 	const collapseStateManager = {} as never;
 	const canvasManager = {
@@ -122,6 +128,7 @@ describe('CanvasEventManager native insert gating', () => {
 	const originalElement = globalThis.Element;
 	const originalHTMLElement = globalThis.HTMLElement;
 	const originalDocument = globalThis.document;
+	const originalWindow = (globalThis as Record<string, unknown>).window;
 	let placeholderPresent = false;
 
 	beforeEach(() => {
@@ -141,12 +148,14 @@ describe('CanvasEventManager native insert gating', () => {
 			activeElement: null,
 			body: null,
 		} as unknown as Document;
+		(globalThis as Record<string, unknown>).window = globalThis as unknown as Window & typeof globalThis;
 	});
 
 	afterEach(() => {
 		(globalThis as Record<string, unknown>).Element = originalElement;
 		(globalThis as Record<string, unknown>).HTMLElement = originalHTMLElement;
 		(globalThis as Record<string, unknown>).document = originalDocument;
+		(globalThis as Record<string, unknown>).window = originalWindow;
 	});
 
 	it('should reject edge connect gesture before native insert session starts', () => {
@@ -285,10 +294,14 @@ describe('CanvasEventManager native insert gating', () => {
 			shouldCommitNativeInsertSession: (input: {
 				session: {
 					traceId: string;
+					pointerType?: string;
 					targetKind: string;
 					startReason: string;
 					nodeCreateSeen: boolean;
 					anchorNodeId: string | null;
+					placeholderSeen?: boolean;
+					placeholderAddedCount?: number;
+					wrapperDragSeen?: boolean;
 				};
 				nodeDelta: number;
 				placeholderDelta: number;
@@ -300,10 +313,14 @@ describe('CanvasEventManager native insert gating', () => {
 		const result = manager.shouldCommitNativeInsertSession({
 			session: {
 				traceId: 'ni-test',
+				pointerType: 'touch',
 				targetKind: 'node-content',
 				startReason: 'node-content',
 				nodeCreateSeen: false,
 				anchorNodeId: 'parent-1',
+				placeholderSeen: true,
+				placeholderAddedCount: 1,
+				wrapperDragSeen: false,
 			},
 			nodeDelta: 0,
 			placeholderDelta: 0,
@@ -317,15 +334,62 @@ describe('CanvasEventManager native insert gating', () => {
 		});
 	});
 
+	it('should reject native insert fallback when evidence is insufficient', () => {
+		const manager = createManager() as unknown as {
+			shouldCommitNativeInsertSession: (input: {
+				session: {
+					traceId: string;
+					pointerType?: string;
+					targetKind: string;
+					startReason: string;
+					nodeCreateSeen: boolean;
+					anchorNodeId: string | null;
+					placeholderSeen?: boolean;
+					placeholderAddedCount?: number;
+					wrapperDragSeen?: boolean;
+				};
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				pointerDetail: number;
+			}) => { allow: boolean; reason: string };
+		};
+
+		expect(manager.shouldCommitNativeInsertSession({
+			session: {
+				traceId: 'ni-no-evidence',
+				pointerType: 'mouse',
+				targetKind: 'node-content',
+				startReason: 'node-content',
+				nodeCreateSeen: false,
+				anchorNodeId: 'parent-1',
+				placeholderSeen: false,
+				placeholderAddedCount: 0,
+				wrapperDragSeen: false,
+			},
+			nodeDelta: 0,
+			placeholderDelta: 0,
+			endReason: 'pointerup',
+			pointerDetail: 1,
+		})).toEqual({
+			allow: false,
+			reason: 'insufficient-evidence',
+		});
+	});
+
 	it('should skip native insert fallback when node creation already happened or gesture was cancelled', () => {
 		const manager = createManager() as unknown as {
 			shouldCommitNativeInsertSession: (input: {
 				session: {
 					traceId: string;
+					pointerType?: string;
 					targetKind: string;
 					startReason: string;
 					nodeCreateSeen: boolean;
 					anchorNodeId: string | null;
+					placeholderSeen?: boolean;
+					placeholderAddedCount?: number;
+					wrapperDragSeen?: boolean;
 				};
 				nodeDelta: number;
 				placeholderDelta: number;
@@ -337,10 +401,14 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.shouldCommitNativeInsertSession({
 			session: {
 				traceId: 'ni-created',
+				pointerType: 'touch',
 				targetKind: 'node-content',
 				startReason: 'node-content',
 				nodeCreateSeen: true,
 				anchorNodeId: 'parent-1',
+				placeholderSeen: true,
+				placeholderAddedCount: 1,
+				wrapperDragSeen: false,
 			},
 			nodeDelta: 1,
 			placeholderDelta: 0,
@@ -354,10 +422,14 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.shouldCommitNativeInsertSession({
 			session: {
 				traceId: 'ni-cancel',
+				pointerType: 'touch',
 				targetKind: 'wrapper',
 				startReason: 'wrapper-active',
 				nodeCreateSeen: false,
 				anchorNodeId: null,
+				placeholderSeen: false,
+				placeholderAddedCount: 0,
+				wrapperDragSeen: true,
 			},
 			nodeDelta: 0,
 			placeholderDelta: 0,
@@ -374,10 +446,14 @@ describe('CanvasEventManager native insert gating', () => {
 			shouldCommitNativeInsertSession: (input: {
 				session: {
 					traceId: string;
+					pointerType?: string;
 					targetKind: string;
 					startReason: string;
 					nodeCreateSeen: boolean;
 					anchorNodeId: string | null;
+					placeholderSeen?: boolean;
+					placeholderAddedCount?: number;
+					wrapperDragSeen?: boolean;
 				};
 				nodeDelta: number;
 				placeholderDelta: number;
@@ -389,10 +465,14 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.shouldCommitNativeInsertSession({
 			session: {
 				traceId: 'ni-double-click',
+				pointerType: 'mouse',
 				targetKind: 'node-content',
 				startReason: 'node-content',
 				nodeCreateSeen: false,
 				anchorNodeId: 'parent-1',
+				placeholderSeen: true,
+				placeholderAddedCount: 1,
+				wrapperDragSeen: false,
 			},
 			nodeDelta: 0,
 			placeholderDelta: 0,
@@ -507,6 +587,7 @@ describe('CanvasEventManager native insert gating', () => {
 			parentNodeIdHint: 'parent-1',
 			suppressSuccessNotice: true,
 			skipFromLink: true,
+			verifiedNativeInsert: true,
 		});
 		expect(createTextNode).not.toHaveBeenCalled();
 		expect(manager.pendingNativeInsertCommit).toBeNull();
@@ -641,6 +722,151 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.pendingNativeInsertCommit).toBeNull();
 		const messages = getRecentLogs().map(entry => entry.message);
 		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-double-click') && message.includes('reason=multi-click'))).toBe(true);
+	});
+
+	it('should wait for mouse click classification before fallback commit becomes eligible', async () => {
+		const addNodeToCanvas = vi.fn(async () => undefined);
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => null,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+				lastPointerDetail: number;
+				clickDetail?: number;
+				clickClassified?: boolean;
+				commitEligibleAt?: number;
+				awaitingClickClassification?: boolean;
+				evidenceFlags?: string[];
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-mouse-wait',
+			pointerType: 'mouse',
+			startReason: 'wrapper-active',
+			targetKind: 'wrapper:is-dragging',
+			anchorNodeId: 'parent-1',
+			initialNodeCount: 0,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 1,
+			endReason: 'pointerup',
+			endedAt: Date.now(),
+			engineAttempted: false,
+			lastPointerDetail: 1,
+			clickDetail: 1,
+			clickClassified: false,
+			commitEligibleAt: Date.now() + 1000,
+			awaitingClickClassification: true,
+			evidenceFlags: ['wrapper-active', 'placeholder-delta'],
+		};
+
+		await manager.flushPendingNativeInsertCommit('session-end:mouse-classify-timeout');
+
+		expect(addNodeToCanvas).not.toHaveBeenCalled();
+		expect(manager.pendingNativeInsertCommit).not.toBeNull();
+	});
+
+	it('should dedup native insert selection probes per trace and only keep raf + timeout-120', async () => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: true });
+		clearRecentLogs();
+		vi.useFakeTimers();
+		const originalRaf = globalThis.requestAnimationFrame;
+		const originalCancelRaf = globalThis.cancelAnimationFrame;
+		let rafIdSeq = 0;
+		const rafCallbacks = new Map<number, FrameRequestCallback>();
+		(globalThis as Record<string, unknown>).requestAnimationFrame = ((cb: FrameRequestCallback) => {
+			const id = ++rafIdSeq;
+			rafCallbacks.set(id, cb);
+			return id;
+		}) as unknown as typeof requestAnimationFrame;
+		(globalThis as Record<string, unknown>).cancelAnimationFrame = ((id: number) => {
+			rafCallbacks.delete(id);
+		}) as unknown as typeof cancelAnimationFrame;
+
+		try {
+			const manager = createManager() as unknown as {
+				pendingNativeInsertCommit: {
+					traceId: string;
+					pointerType: string;
+					startReason: string;
+					targetKind: string;
+					anchorNodeId: string | null;
+					initialNodeCount: number;
+					initialPlaceholderCount: number;
+					nodeDelta: number;
+					placeholderDelta: number;
+					endReason: string;
+					endedAt: number;
+					engineAttempted: boolean;
+					lastPointerDetail: number;
+				} | null;
+				scheduleNativeInsertSelectionProbe: (traceId: string, reason: string) => void;
+			};
+
+			manager.pendingNativeInsertCommit = {
+				traceId: 'ni-probe',
+				pointerType: 'touch',
+				startReason: 'wrapper-touch-like',
+				targetKind: 'wrapper',
+				anchorNodeId: 'parent-1',
+				initialNodeCount: 0,
+				initialPlaceholderCount: 0,
+				nodeDelta: 0,
+				placeholderDelta: 0,
+				endReason: 'pointerup',
+				endedAt: Date.now(),
+				engineAttempted: false,
+				lastPointerDetail: 1,
+			};
+
+			manager.scheduleNativeInsertSelectionProbe('ni-probe', 'session-end');
+			manager.scheduleNativeInsertSelectionProbe('ni-probe', 'click-post-session');
+
+			for (const [id, cb] of Array.from(rafCallbacks.entries())) {
+				rafCallbacks.delete(id);
+				cb(0);
+			}
+			await vi.runOnlyPendingTimersAsync();
+
+			const probeMessages = getRecentLogs()
+				.map(entry => entry.message)
+				.filter(message => message.includes('NativeInsertSelectionProbe: trace=ni-probe'));
+
+			expect(probeMessages).toHaveLength(2);
+			expect(probeMessages.some(message => message.includes('phase=session-end:raf'))).toBe(true);
+			expect(probeMessages.some(message => message.includes('timeout-120'))).toBe(true);
+			expect(probeMessages.some(message => message.includes('timeout-0'))).toBe(false);
+			const clickPostMessages = probeMessages.filter(message => message.includes('click-post-session'));
+			expect(clickPostMessages).toHaveLength(0);
+		} finally {
+			(globalThis as Record<string, unknown>).requestAnimationFrame = originalRaf;
+			(globalThis as Record<string, unknown>).cancelAnimationFrame = originalCancelRaf;
+			vi.useRealTimers();
+		}
 	});
 
 	it('should dedup open-entry stabilization across active-leaf-change and file-open for same file', () => {

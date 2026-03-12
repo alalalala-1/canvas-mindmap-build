@@ -173,6 +173,8 @@ export type AddNodeToCanvasOptions = {
     parentNodeIdHint?: string | null;
     suppressSuccessNotice?: boolean;
     skipFromLink?: boolean;
+    allowBlankNode?: boolean;
+    verifiedNativeInsert?: boolean;
 };
 
 

@@ -51,6 +51,20 @@ export class NodeCreationService {
 
     async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<void> {
         const requestSource = options?.source || 'command';
+        const trimmedContent = content.trim();
+
+        if (
+            requestSource === 'native-insert'
+            && trimmedContent.length === 0
+            && !options?.allowBlankNode
+            && !options?.verifiedNativeInsert
+        ) {
+            log(
+                `[Create] AddNodeRejected: requestSource=${requestSource}, reason=unverified-empty-native-insert, ` +
+                `parentHint=${options?.parentNodeIdHint || 'none'}`
+            );
+            return;
+        }
 
         if (!sourceFile && requestSource !== 'native-insert') {
             new Notice('未选择文件');
@@ -69,7 +83,6 @@ export class NodeCreationService {
         const canvasFilePath = canvasPathResolution.path;
         const canvasFilePathSource = canvasPathResolution.source;
 
-        const trimmedContent = content.trim();
         log(
             `[Create] AddNodeStart: requestSource=${requestSource}, sourceFile=${sourceFile?.path || 'none'}, selectionLength=${content.length}, ` +
             `trimmedLength=${trimmedContent.length}, preview=${JSON.stringify(trimmedContent.slice(0, 80))}, ` +

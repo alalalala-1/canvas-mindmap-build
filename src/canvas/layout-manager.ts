@@ -29,6 +29,31 @@ export type ArrangeNoOpFollowUpDecision = {
     reason: 'stable-no-op' | 'severe-visual-gap-risk';
 };
 
+export type ArrangeNoOpFastPathDecision = {
+    useFastPath: boolean;
+    followUp: ArrangeNoOpFollowUpDecision;
+    reason: 'predicted-changed' | 'file-changed' | 'stable-no-op' | 'severe-visual-gap-risk';
+};
+
+export type HealthyOpenStabilizeSnapshot = {
+    finishedAt: number;
+    nodeCount: number;
+    edgeCount: number;
+    source: string;
+};
+
+export type HealthyOpenStabilizeSkipDecision = {
+    skip: boolean;
+    reason:
+        | 'not-open-entry-source'
+        | 'resume-source'
+        | 'no-history'
+        | 'expired'
+        | 'graph-changed'
+        | 'healthy-cache-hit';
+    ageMs: number;
+};
+
 export function getArrangeNoOpFollowUpDecision(severeVisualRisk: boolean): ArrangeNoOpFollowUpDecision {
     if (severeVisualRisk) {
         return {
@@ -43,6 +68,68 @@ export function getArrangeNoOpFollowUpDecision(severeVisualRisk: boolean): Arran
         scheduleOpenStabilization: false,
         reason: 'stable-no-op'
     };
+}
+
+export function getArrangeNoOpFastPathDecision(
+    predictedChangedCount: number,
+    fileChanged: boolean,
+    severeVisualRisk: boolean
+): ArrangeNoOpFastPathDecision {
+    const followUp = getArrangeNoOpFollowUpDecision(severeVisualRisk);
+    if (predictedChangedCount !== 0) {
+        return {
+            useFastPath: false,
+            followUp,
+            reason: 'predicted-changed'
+        };
+    }
+
+    if (fileChanged) {
+        return {
+            useFastPath: false,
+            followUp,
+            reason: 'file-changed'
+        };
+    }
+
+    return {
+        useFastPath: followUp.finishImmediately,
+        followUp,
+        reason: followUp.reason
+    };
+}
+
+export function getOpenStabilizeHealthySkipDecision(input: {
+    isOpenEntrySource: boolean;
+    isResumeSource: boolean;
+    now: number;
+    windowMs: number;
+    snapshot?: HealthyOpenStabilizeSnapshot | null;
+    nodeCount: number;
+    edgeCount: number;
+}): HealthyOpenStabilizeSkipDecision {
+    if (!input.isOpenEntrySource) {
+        return { skip: false, reason: 'not-open-entry-source', ageMs: 0 };
+    }
+
+    if (input.isResumeSource) {
+        return { skip: false, reason: 'resume-source', ageMs: 0 };
+    }
+
+    if (!input.snapshot) {
+        return { skip: false, reason: 'no-history', ageMs: 0 };
+    }
+
+    const ageMs = Math.max(0, input.now - input.snapshot.finishedAt);
+    if (ageMs > input.windowMs) {
+        return { skip: false, reason: 'expired', ageMs };
+    }
+
+    if (input.snapshot.nodeCount !== input.nodeCount || input.snapshot.edgeCount !== input.edgeCount) {
+        return { skip: false, reason: 'graph-changed', ageMs };
+    }
+
+    return { skip: true, reason: 'healthy-cache-hit', ageMs };
 }
 
 /**
@@ -81,6 +168,8 @@ export class LayoutManager {
     private readonly openStabilizeStableMaxGapPx: number = 4;
     private readonly openStabilizeResumeMax: number = 2;
     private openStabilizeResumeCountByBaseSource: Map<string, number> = new Map();
+    private readonly healthyOpenStabilizeWindowMs: number = 4000;
+    private recentHealthyOpenStabilizeByFilePath: Map<string, HealthyOpenStabilizeSnapshot> = new Map();
 
     constructor(
         plugin: Plugin,
@@ -177,6 +266,59 @@ export class LayoutManager {
 
     private shouldForceHeavyOnFirstPulse(source: string): boolean {
         return this.isOpenEntryStabilizeSource(source);
+    }
+
+    private pruneRecentHealthyOpenStabilizeSnapshots(now: number = Date.now()): void {
+        for (const [filePath, snapshot] of this.recentHealthyOpenStabilizeByFilePath.entries()) {
+            if (now - snapshot.finishedAt > this.healthyOpenStabilizeWindowMs) {
+                this.recentHealthyOpenStabilizeByFilePath.delete(filePath);
+            }
+        }
+    }
+
+    private shouldSkipHealthyOpenStabilize(
+        source: string,
+        filePath: string | null,
+        nodeCount: number,
+        edgeCount: number
+    ): HealthyOpenStabilizeSkipDecision {
+        const now = Date.now();
+        this.pruneRecentHealthyOpenStabilizeSnapshots(now);
+        return getOpenStabilizeHealthySkipDecision({
+            isOpenEntrySource: this.isOpenEntryStabilizeSource(source),
+            isResumeSource: this.isOpenStabilizeResumeSource(source),
+            now,
+            windowMs: this.healthyOpenStabilizeWindowMs,
+            snapshot: filePath ? (this.recentHealthyOpenStabilizeByFilePath.get(filePath) ?? null) : null,
+            nodeCount,
+            edgeCount,
+        });
+    }
+
+    private rememberHealthyOpenStabilize(
+        filePath: string | null,
+        nodeCount: number,
+        edgeCount: number,
+        source: string,
+        contextId?: string
+    ): void {
+        if (!filePath) return;
+        this.pruneRecentHealthyOpenStabilizeSnapshots();
+        this.recentHealthyOpenStabilizeByFilePath.set(filePath, {
+            finishedAt: Date.now(),
+            nodeCount,
+            edgeCount,
+            source,
+        });
+        logVerbose(
+            `[Layout] OpenStabilizeHealthyMark: source=${source}, file=${filePath}, ` +
+            `nodes=${nodeCount}, edges=${edgeCount}, ctx=${contextId || 'none'}`
+        );
+    }
+
+    private forgetHealthyOpenStabilize(filePath: string | null): void {
+        if (!filePath) return;
+        this.recentHealthyOpenStabilizeByFilePath.delete(filePath);
     }
 
     private isOpenEntryStabilizeSource(source: string): boolean {
@@ -373,6 +515,10 @@ export class LayoutManager {
 
         this.isOpenStabilizing = true;
         const stabilizeId = `openfix-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+        let finalHealthyFilePath: string | null = null;
+        let finalHealthyNodeCount = 0;
+        let finalHealthyEdgeCount = 0;
+        let finalHealthy = false;
 
         try {
             const initialView = getCanvasView(this.app);
@@ -396,6 +542,22 @@ export class LayoutManager {
                 return;
             }
 
+            finalHealthyFilePath = pulseCanvas.file?.path || getCurrentCanvasFilePath(this.app) || null;
+            const healthySkipDecision = this.shouldSkipHealthyOpenStabilize(
+                source,
+                finalHealthyFilePath,
+                pulseNodes.size,
+                this.getCanvasEdges(pulseCanvas).length
+            );
+            if (healthySkipDecision.skip) {
+                log(
+                    `[Layout] OpenStabilizeHealthySkip: source=${source}, file=${finalHealthyFilePath || 'unknown'}, ` +
+                    `ageMs=${healthySkipDecision.ageMs}, nodeCount=${pulseNodes.size}, ` +
+                    `edgeCount=${this.getCanvasEdges(pulseCanvas).length}, ctx=${stabilizeId}`
+                );
+                return;
+            }
+
             log(`[Layout] OpenStabilizeStart: source=${source}, pulses=${this.openStabilizePulseDelays.length}, nodes=${pulseNodes.size}, ctx=${stabilizeId}`);
             if (this.shouldLogVerboseCanvasDiagnostics()) {
                 this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-pre-style-truth', stabilizeId);
@@ -403,6 +565,8 @@ export class LayoutManager {
 
             let prevVisibleNodeCount = 0;
             let stableStreak = 0;
+            let latestAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
+            let latestGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
 
             for (let i = 0; i < this.openStabilizePulseDelays.length; i++) {
                 const pulseNo = i + 1;
@@ -580,6 +744,8 @@ export class LayoutManager {
 
                 const anomalyAfterStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapAfter = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
+                latestAnomalyStats = anomalyAfterStats;
+                latestGapSummary = gapAfter;
                 const blockerEval = this.getOpenStabilizeBlockers(
                     anomalyAfterStats,
                     gapAfter,
@@ -613,6 +779,10 @@ export class LayoutManager {
                 this.edgeGeometryService.logNodeStyleTruth(pulseNodes, 'open-final-style-truth', stabilizeId);
             }
 
+            finalHealthyNodeCount = pulseNodes.size;
+            finalHealthyEdgeCount = this.getCanvasEdges(pulseCanvas).length;
+            finalHealthy = this.isHealthyOpenStabilizeContext(latestAnomalyStats, latestGapSummary);
+
             window.setTimeout(() => {
                 const finalView = getCanvasView(this.app);
                 const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? pulseCanvas) : pulseCanvas;
@@ -636,6 +806,17 @@ export class LayoutManager {
         } catch (err) {
             handleError(err, { context: 'OpenStabilize', message: '画布打开后自愈失败', showNotice: false });
         } finally {
+            if (finalHealthy) {
+                this.rememberHealthyOpenStabilize(
+                    finalHealthyFilePath,
+                    finalHealthyNodeCount,
+                    finalHealthyEdgeCount,
+                    source,
+                    stabilizeId
+                );
+            } else {
+                this.forgetHealthyOpenStabilize(finalHealthyFilePath);
+            }
             this.isOpenStabilizing = false;
             if (this.pendingOpenStabilizeSource) {
                 const pending = this.pendingOpenStabilizeSource;
@@ -1443,28 +1624,34 @@ export class LayoutManager {
             // [No-Op 快路径] 当 arrange 预测无节点位移且文件层也无任何实际改动时，
             // 直接跳过 leaf.openFile 重载与后续重型链路，避免无意义视觉跳动。
             // 若当前没有严重视觉风险，则直接视为成功终态，不再默认补一次 open stabilization。
+            const noOpFastPathDecision = getArrangeNoOpFastPathDecision(
+                predictedChangedCount,
+                success,
+                this.edgeGeometryService.hasSevereVisualGapRisk(
+                    this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes)
+                )
+            );
+
+            if (noOpFastPathDecision.useFastPath) {
+                const noOpGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
+                log(
+                    `[Layout] ArrangeNoOpFastPath: predictedChanged=0, fileChanged=false, ` +
+                    `skipLeafReload=true, postArrangeStabilize=${noOpFastPathDecision.followUp.scheduleOpenStabilization}, ` +
+                    `reason=${noOpFastPathDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                );
+                if (noOpFastPathDecision.followUp.scheduleOpenStabilization) {
+                    this.scheduleOpenStabilization('arrange-no-op');
+                }
+                new Notice('布局完成！无节点变化');
+                log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=no-op-fast-path, ctx=${arrangeId}`);
+                return;
+            }
+
             if (predictedChangedCount === 0 && !success) {
                 const noOpGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
-                const severeVisualRisk = this.edgeGeometryService.hasSevereVisualGapRisk(noOpGapSummary);
-                const noOpDecision = getArrangeNoOpFollowUpDecision(severeVisualRisk);
-
-                if (noOpDecision.finishImmediately) {
-                    log(
-                        `[Layout] ArrangeNoOpFastPath: predictedChanged=0, fileChanged=false, ` +
-                        `skipLeafReload=true, postArrangeStabilize=${noOpDecision.scheduleOpenStabilization}, ` +
-                        `reason=${noOpDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
-                    );
-                    if (noOpDecision.scheduleOpenStabilization) {
-                        this.scheduleOpenStabilization('arrange-no-op');
-                    }
-                    new Notice('布局完成！无节点变化');
-                    log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=no-op-fast-path, ctx=${arrangeId}`);
-                    return;
-                }
-
                 log(
                     `[Layout] ArrangeNoOpFastPathBlocked: predictedChanged=0, fileChanged=false, ` +
-                    `reason=${noOpDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                    `reason=${noOpFastPathDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
                 );
             }
 

@@ -109,7 +109,11 @@ type DiagnosticDetailDumpPlan = {
     rowsToLog: DiagnosticDetailRow[];
     suppressedCount: number;
     actionableCount: number;
-    reason: 'none' | 'refresh-pending-no-actionable-both-visible' | 'refresh-pending-focused-both-visible-bad';
+    reason:
+        | 'none'
+        | 'refresh-pending-no-actionable-both-visible'
+        | 'refresh-pending-focused-both-visible-bad'
+        | 'healthy-non-bad-details-only';
 };
 
 export class EdgeGeometryService {
@@ -223,8 +227,19 @@ export class EdgeGeometryService {
         detailRows: DiagnosticDetailRow[]
     ): DiagnosticDetailDumpPlan {
         const actionableRows = detailRows.filter((row) => row.visibilityBucket === 'both-visible' && row.status === 'bad');
+        const badRows = detailRows.filter((row) => row.status === 'bad');
 
         if (!pendingHint?.refreshPending || detailRows.length === 0) {
+            if (!pendingHint?.refreshPending && detailRows.length > 0 && badRows.length === 0) {
+                return {
+                    mode: 'summary-only',
+                    rowsToLog: [],
+                    suppressedCount: detailRows.length,
+                    actionableCount: 0,
+                    reason: 'healthy-non-bad-details-only',
+                };
+            }
+
             return {
                 mode: 'full',
                 rowsToLog: detailRows,
