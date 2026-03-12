@@ -17,7 +17,7 @@ import {
 
 import { VisibilityService } from './services/visibility-service';
 import { LayoutDataProvider } from './services/layout-data-provider';
-import { ICanvasManager, CanvasViewLike, CanvasNodeLike, CanvasLike } from './types';
+import { AddNodeToCanvasOptions, ICanvasManager, CanvasViewLike, CanvasNodeLike, CanvasLike } from './types';
 
 export class CanvasManager implements ICanvasManager {
     private plugin: Plugin;
@@ -131,8 +131,8 @@ export class CanvasManager implements ICanvasManager {
         this.layoutManager.scheduleOpenStabilization(source);
     }
 
-    public async addNodeToCanvas(content: string, sourceFile: TFile | null) {
-        await this.nodeManager.addNodeToCanvas(content, sourceFile);
+    public async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions) {
+        await this.nodeManager.addNodeToCanvas(content, sourceFile, options);
     }
 
     public scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {

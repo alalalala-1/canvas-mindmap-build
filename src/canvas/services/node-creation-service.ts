@@ -6,7 +6,7 @@ import { NodePositionCalculator } from '../utils/node-position-calculator';
 import { describeCanvasSelectionState, generateRandomId, getCanvasView, getDirectSelectedNodes } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
 import { CONSTANTS } from '../../constants';
-import { CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager, EditorWithSelection, CanvasViewLike, PluginWithLastClicked } from '../types';
+import { AddNodeToCanvasOptions, CanvasNodeLike, CanvasEdgeLike, CanvasDataLike, ICanvasManager, EditorWithSelection, CanvasViewLike, PluginWithLastClicked } from '../types';
 
 type ParentNodeResolution = {
     parentNode: CanvasNodeLike | null;
@@ -49,8 +49,10 @@ export class NodeCreationService {
         this.canvasManager = canvasManager;
     }
 
-    async addNodeToCanvas(content: string, sourceFile: TFile | null): Promise<void> {
-        if (!sourceFile) {
+    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<void> {
+        const requestSource = options?.source || 'command';
+
+        if (!sourceFile && requestSource !== 'native-insert') {
             new Notice('未选择文件');
             return;
         }
@@ -69,8 +71,9 @@ export class NodeCreationService {
 
         const trimmedContent = content.trim();
         log(
-            `[Create] AddNodeStart: sourceFile=${sourceFile.path}, selectionLength=${content.length}, ` +
+            `[Create] AddNodeStart: requestSource=${requestSource}, sourceFile=${sourceFile?.path || 'none'}, selectionLength=${content.length}, ` +
             `trimmedLength=${trimmedContent.length}, preview=${JSON.stringify(trimmedContent.slice(0, 80))}, ` +
+            `parentHint=${options?.parentNodeIdHint || 'none'}, ` +
             `lastClickedNodeId=${pluginContext.lastClickedNodeId || 'none'}, ` +
             `lastClickedCanvasFilePath=${contextCanvasFilePath || 'none'}, ` +
             `openCanvasFilePath=${openCanvasFilePath || 'none'}, settingsCanvasFilePath=${settingsCanvasFilePath || 'none'}, ` +
@@ -92,7 +95,7 @@ export class NodeCreationService {
 
         log(
             `[Create] AddNodeIntent: request=${createRequestId}, node=${newNodeId}, edge=${newEdgeId}, ` +
-            `targetCanvas=${canvasFilePath}, sourceFile=${sourceFile.path}`
+            `targetCanvas=${canvasFilePath}, sourceFile=${sourceFile?.path || 'none'}, requestSource=${requestSource}`
         );
 
         const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
@@ -108,9 +111,9 @@ export class NodeCreationService {
             const edgeEvent = isPreflight ? 'EdgePlanned' : 'EdgeCreated';
 
             const existingNode = canvasData.nodes.find(node => node.id === newNodeId);
-            const newNode = existingNode || this.createNodeData(content, sourceFile, newNodeId);
+            const newNode = existingNode || this.createNodeData(content, sourceFile, newNodeId, options);
 
-            const parentResolution = this.findParentNodeForNewNode(canvasData, canvasFilePath);
+            const parentResolution = this.findParentNodeForNewNode(canvasData, canvasFilePath, options?.parentNodeIdHint);
             const parentNode = parentResolution.parentNode;
             lastParentResolutionSummary = `phase=${phase},source=${parentResolution.source},parent=${parentNode?.id || 'none'},detail=${parentResolution.detail}`;
 
@@ -200,10 +203,12 @@ export class NodeCreationService {
 
         log(`[Create] AddNodeDone: request=${createRequestId}, node=${newNodeId}, edge=${newEdgeId}, targetCanvas=${canvasFilePath}`);
 
-        new Notice('节点已成功添加到 canvas');
+        if (!options?.suppressSuccessNotice) {
+            new Notice('节点已成功添加到 canvas');
+        }
     }
 
-    private createNodeData(content: string, sourceFile: TFile, nodeId: string): CanvasNodeLike {
+    private createNodeData(content: string, sourceFile: TFile | null, nodeId: string, options?: AddNodeToCanvasOptions): CanvasNodeLike {
         const newNode: CanvasNodeLike = { id: nodeId };
         const trimmedContent = content.trim();
 
@@ -237,7 +242,9 @@ export class NodeCreationService {
             }
         }
 
-        this.addFromLink(newNode, sourceFile);
+        if (sourceFile && !options?.skipFromLink) {
+            this.addFromLink(newNode, sourceFile);
+        }
 
         return newNode;
     }
@@ -323,12 +330,25 @@ export class NodeCreationService {
         }
     }
 
-    private findParentNodeForNewNode(canvasData: CanvasDataLike, targetCanvasFilePath: string): ParentNodeResolution {
+    private findParentNodeForNewNode(canvasData: CanvasDataLike, targetCanvasFilePath: string, parentNodeIdHint?: string | null): ParentNodeResolution {
         const nodes = canvasData.nodes || [];
         const edges = canvasData.edges || [];
         const history = canvasData.canvasMindmapBuildHistory || [];
         if (nodes.length === 0) {
             return { parentNode: null, source: 'none', detail: 'canvas-empty' };
+        }
+
+        if (parentNodeIdHint) {
+            const hintedNode = nodes.find(node => node.id === parentNodeIdHint) || null;
+            if (hintedNode) {
+                return {
+                    parentNode: hintedNode,
+                    source: 'explicit-hint',
+                    detail: `node=${parentNodeIdHint}`
+                };
+            }
+
+            log(`[Create] 父节点 hint 未命中目标 canvas: hint=${parentNodeIdHint}, targetCanvas=${targetCanvasFilePath}`);
         }
 
         const pluginContext = this.plugin as PluginWithLastClicked;

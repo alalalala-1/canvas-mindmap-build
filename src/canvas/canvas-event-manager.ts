@@ -92,6 +92,7 @@ type NativeInsertSession = {
     lastSeenAt: number;
     traceId: string;
     targetKind: string;
+    anchorNodeId: string | null;
     startTarget: string;
     startChain: string;
     startSelection: string;
@@ -106,6 +107,21 @@ type NativeInsertSession = {
     placeholderRemovedCount: number;
     domNodeAddedCount: number;
     domNodeRemovedCount: number;
+};
+
+type NativeInsertPendingCommit = {
+    traceId: string;
+    pointerType: string;
+    startReason: string;
+    targetKind: string;
+    anchorNodeId: string | null;
+    initialNodeCount: number;
+    initialPlaceholderCount: number;
+    nodeDelta: number;
+    placeholderDelta: number;
+    endReason: string;
+    endedAt: number;
+    engineAttempted: boolean;
 };
 
 export class CanvasEventManager {
@@ -159,6 +175,10 @@ export class CanvasEventManager {
     private activeTouchDragScrollOwnerSnapshots: TouchDragScrollOwnerSnapshot[] = [];
     private activePenLongPress: PenLongPressSnapshot | null = null;
     private activeNativeInsertSession: NativeInsertSession | null = null;
+    private pendingNativeInsertCommit: NativeInsertPendingCommit | null = null;
+    private nativeInsertCommitInFlight: boolean = false;
+    private lastNativeInsertCommitTraceId: string | null = null;
+    private lastNativeInsertCommitAt: number = 0;
     private nativeInsertSideEffectsSuppressUntil: number = 0;
     private deferredPostInsertMaintenanceTimeoutId: number | null = null;
     private deferredMeasureNodeIds: Set<string> = new Set();
@@ -399,6 +419,7 @@ export class CanvasEventManager {
                         `chain=${this.describeEventTargetChain(targetEl)}, flags=${this.describePointerEventState(event)}, ` +
                         `selection=${this.describeCanvasSelection()}`
                     );
+                    void this.flushPendingNativeInsertCommit('click-post-session');
                     this.scheduleNativeInsertSelectionProbe('click-post-session', 'click');
                 }
                 return;
@@ -1389,6 +1410,24 @@ export class CanvasEventManager {
         return `ni-${Date.now().toString(36)}-${pointerId.toString(36)}`;
     }
 
+    private resolveNativeInsertAnchorNodeId(target: EventTarget | null): string | null {
+        if (target instanceof Element) {
+            const nodeEl = findCanvasNodeElementFromTarget(target);
+            if (nodeEl) {
+                const nodeId = this.extractNodeIdFromElement(nodeEl);
+                if (nodeId) return nodeId;
+            }
+        }
+
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
+        const selectedNodeId = canvas ? getSelectedNodeFromCanvas(canvas)?.id || null : null;
+        if (selectedNodeId) return selectedNodeId;
+
+        const pluginContext = this.plugin as PluginWithLastClicked;
+        return pluginContext.lastClickedNodeId || null;
+    }
+
     private describePointerEventState(event: MouseEvent | PointerEvent): string {
         const detail = typeof event.detail === 'number' ? event.detail : 'n/a';
         const button = typeof event.button === 'number' ? event.button : 'n/a';
@@ -1603,6 +1642,184 @@ export class CanvasEventManager {
         return typeof pointerId === 'number' ? session.pointerId === pointerId : true;
     }
 
+    private shouldCommitNativeInsertSession(input: {
+        session: Pick<NativeInsertSession, 'traceId' | 'targetKind' | 'startReason' | 'nodeCreateSeen' | 'anchorNodeId'>;
+        nodeDelta: number;
+        placeholderDelta: number;
+        endReason: string;
+    }): {
+        allow: boolean;
+        reason: string;
+    } {
+        if (input.endReason === 'pointercancel') {
+            return {
+                allow: false,
+                reason: 'pointer-cancelled'
+            };
+        }
+
+        if (input.session.nodeCreateSeen) {
+            return {
+                allow: false,
+                reason: 'node-create-observed'
+            };
+        }
+
+        if (input.nodeDelta > 0) {
+            return {
+                allow: false,
+                reason: `node-delta:${input.nodeDelta}`
+            };
+        }
+
+        const actionableTarget = input.session.targetKind === 'placeholder'
+            || input.session.targetKind.startsWith('node-content')
+            || input.session.targetKind.startsWith('wrapper');
+
+        if (!actionableTarget) {
+            return {
+                allow: false,
+                reason: `unsupported-target:${input.session.targetKind}`
+            };
+        }
+
+        return {
+            allow: true,
+            reason: input.session.anchorNodeId
+                ? 'missing-native-create-with-anchor'
+                : 'missing-native-create-no-anchor'
+        };
+    }
+
+    private queueNativeInsertCommitFlush(trigger: string, delayMs: number): void {
+        window.setTimeout(() => {
+            void this.flushPendingNativeInsertCommit(trigger);
+        }, Math.max(0, delayMs));
+    }
+
+    private queueNativeInsertCommitRaf(trigger: string): void {
+        requestAnimationFrame(() => {
+            void this.flushPendingNativeInsertCommit(trigger);
+        });
+    }
+
+    private stageNativeInsertCommit(
+        session: NativeInsertSession,
+        nodeDelta: number,
+        placeholderDelta: number,
+        endReason: string
+    ): void {
+        const decision = this.shouldCommitNativeInsertSession({
+            session,
+            nodeDelta,
+            placeholderDelta,
+            endReason,
+        });
+
+        if (!decision.allow) {
+            logVerbose(
+                `[Event] NativeInsertCommitSkipped: trace=${session.traceId}, reason=${decision.reason}, ` +
+                `target=${session.targetKind}, anchor=${session.anchorNodeId || 'none'}, ` +
+                `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}`
+            );
+            this.pendingNativeInsertCommit = null;
+            return;
+        }
+
+        this.pendingNativeInsertCommit = {
+            traceId: session.traceId,
+            pointerType: session.pointerType,
+            startReason: session.startReason,
+            targetKind: session.targetKind,
+            anchorNodeId: session.anchorNodeId,
+            initialNodeCount: session.initialNodeCount,
+            initialPlaceholderCount: session.initialPlaceholderCount,
+            nodeDelta,
+            placeholderDelta,
+            endReason,
+            endedAt: Date.now(),
+            engineAttempted: false,
+        };
+
+        log(
+            `[Event] NativeInsertCommitQueued: trace=${session.traceId}, reason=${decision.reason}, ` +
+            `target=${session.targetKind}, anchor=${session.anchorNodeId || 'none'}, ` +
+            `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}`
+        );
+
+        this.queueNativeInsertCommitFlush('session-end:timeout-0', 0);
+        this.queueNativeInsertCommitRaf('session-end:raf');
+        this.queueNativeInsertCommitFlush('session-end:timeout-120', 120);
+    }
+
+    private async flushPendingNativeInsertCommit(trigger: string): Promise<void> {
+        const candidate = this.pendingNativeInsertCommit;
+        if (!candidate) return;
+
+        if (this.nativeInsertCommitInFlight) {
+            logVerbose(`[Event] NativeInsertCommitWait: trace=${candidate.traceId}, trigger=${trigger}, reason=in-flight`);
+            return;
+        }
+
+        if (
+            this.lastNativeInsertCommitTraceId === candidate.traceId
+            && Date.now() - this.lastNativeInsertCommitAt < 1500
+        ) {
+            this.pendingNativeInsertCommit = null;
+            return;
+        }
+
+        const ageMs = Date.now() - candidate.endedAt;
+        const canvasView = getCanvasView(this.app);
+        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
+
+        if (!canvas) {
+            if (ageMs > 1200) {
+                log(`[Event] NativeInsertCommitExpired: trace=${candidate.traceId}, trigger=${trigger}, reason=no-canvas, age=${ageMs}ms`);
+                this.pendingNativeInsertCommit = null;
+            }
+            return;
+        }
+
+        const currentNodeCount = getNodesFromCanvas(canvas).length;
+        if (currentNodeCount > candidate.initialNodeCount) {
+            log(
+                `[Event] NativeInsertCommitResolved: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                `reason=node-count-increased, initial=${candidate.initialNodeCount}, current=${currentNodeCount}`
+            );
+            this.pendingNativeInsertCommit = null;
+            return;
+        }
+
+        this.nativeInsertCommitInFlight = true;
+        try {
+            log(
+                `[Event] NativeInsertCommitFallback: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                `anchor=${candidate.anchorNodeId || 'none'}, engineAttempted=false, runtimeCreate=disabled, age=${ageMs}ms`
+            );
+            await this.canvasManager.addNodeToCanvas('', null, {
+                source: 'native-insert',
+                parentNodeIdHint: candidate.anchorNodeId,
+                suppressSuccessNotice: true,
+                skipFromLink: true,
+            });
+            this.pendingNativeInsertCommit = null;
+            this.lastNativeInsertCommitTraceId = candidate.traceId;
+            this.lastNativeInsertCommitAt = Date.now();
+            log(
+                `[Event] NativeInsertCommitDone: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                `mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}`
+            );
+        } catch (error) {
+            log(`[Event] NativeInsertCommitError: trace=${candidate.traceId}, trigger=${trigger}, error=${String(error)}`);
+            if (trigger === 'click-post-session' || ageMs > 1200) {
+                this.pendingNativeInsertCommit = null;
+            }
+        } finally {
+            this.nativeInsertCommitInFlight = false;
+        }
+    }
+
     private evaluateNativeInsertSessionStart(pointerType: string, target: EventTarget | null): {
         candidate: boolean;
         allow: boolean;
@@ -1722,6 +1939,7 @@ export class CanvasEventManager {
         const wrapperEl = this.getCanvasWrapperElement(target);
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
+        const anchorNodeId = this.resolveNativeInsertAnchorNodeId(target);
         this.installNativeInsertEngineDiagnostics(canvas);
         const initialNodeCount = canvas ? getNodesFromCanvas(canvas).length : 0;
         const initialPlaceholderCount = document.querySelectorAll('.canvas-node-placeholder').length;
@@ -1734,6 +1952,7 @@ export class CanvasEventManager {
             lastSeenAt: now,
             traceId,
             targetKind: this.describeNativeInsertTargetKind(target),
+            anchorNodeId,
             startTarget: this.describeEventTarget(target),
             startChain: this.describeEventTargetChain(target),
             startSelection,
@@ -1749,11 +1968,14 @@ export class CanvasEventManager {
             domNodeAddedCount: 0,
             domNodeRemovedCount: 0
         };
+        if (anchorNodeId && canvasView) {
+            this.rememberNodeInteractionContext(anchorNodeId, 'native-insert-start', canvasView);
+        }
         this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, now + 1200);
         log(
             `[Event] NativeInsertSessionStart: trace=${traceId}, pointer=${pointerId}, pointerType=${pointerType}, ` +
             `startReason=${startReason}, ` +
-            `target=${this.activeNativeInsertSession.targetKind}, eventTarget=${this.describeEventTarget(target)}, ` +
+            `target=${this.activeNativeInsertSession.targetKind}, anchor=${anchorNodeId || 'none'}, eventTarget=${this.describeEventTarget(target)}, ` +
             `chain=${this.describeEventTargetChain(target)}, flags=${this.describePointerEventState(event)}, ` +
             `wrapperStyle=${this.activeNativeInsertSession.initialWrapperStyle}, selection=${startSelection}, ` +
             `engine=${this.describeNativeInsertEngineState()}`
@@ -1828,6 +2050,7 @@ export class CanvasEventManager {
         log(
             `[Event] NativeInsertSessionEnd: trace=${session.traceId}, pointer=${pointerId}, pointerType=${session.pointerType}, ` +
             `duration=${duration}ms, startReason=${session.startReason}, target=${session.targetKind}, wrapperDrag=${session.wrapperDragSeen}, ` +
+            `anchor=${session.anchorNodeId || 'none'}, ` +
             `placeholder=${session.placeholderSeen}, nodeCreate=${session.nodeCreateSeen}, ` +
             `placeholderAdds=${session.placeholderAddedCount}, placeholderRemoves=${session.placeholderRemovedCount}, ` +
             `domNodeAdds=${session.domNodeAddedCount}, domNodeRemoves=${session.domNodeRemovedCount}, ` +
@@ -1841,12 +2064,15 @@ export class CanvasEventManager {
                 `[Event] NativeInsertDiagnostics: trace=${session.traceId}, downDefaultPrevented=${session.downDefaultPrevented}, ` +
                 `startTarget=${session.startTarget}, startChain=${session.startChain}, ` +
                 `startWrapperStyle=${session.initialWrapperStyle}, endTarget=${this.describeEventTarget(target)}, ` +
+                `anchor=${session.anchorNodeId || 'none'}, ` +
                 `endChain=${this.describeEventTargetChain(target)}, endTargetStyle=${this.describeComputedStyleSnapshot(target instanceof Element ? target : null)}, ` +
                 `endWrapperStyle=${this.describeComputedStyleSnapshot(wrapperEl)}, placeholdersNow=${finalPlaceholderCount}, ` +
                 `activeElement=${this.describeEventTarget(document.activeElement)}, selection=${endSelection}, ` +
                 `engine=${this.describeNativeInsertEngineState()}`
             );
         }
+
+        this.stageNativeInsertCommit(session, nodeDelta, placeholderDelta, reason);
 
         this.scheduleNativeInsertSelectionProbe(session.traceId, reason);
 

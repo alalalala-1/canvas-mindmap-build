@@ -166,6 +166,15 @@ export function getBooleanProp(obj: unknown, key: string): boolean | undefined {
     return typeof val === 'boolean' ? val : undefined;
 }
 
+export type CanvasAddNodeSource = 'command' | 'native-insert';
+
+export type AddNodeToCanvasOptions = {
+    source?: CanvasAddNodeSource;
+    parentNodeIdHint?: string | null;
+    suppressSuccessNotice?: boolean;
+    skipFromLink?: boolean;
+};
+
 
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): void;
@@ -324,6 +333,10 @@ export type CanvasLike = {
     file?: { path?: string };
     requestUpdate?: () => void;
     requestSave?: () => void;
+    createTextNode?: (payload: Record<string, unknown>) => unknown;
+    addNode?: (payload: Record<string, unknown>) => unknown;
+    createNode?: (payload: Record<string, unknown>) => unknown;
+    insertNode?: (payload: Record<string, unknown>) => unknown;
     selection?: Set<CanvasSelectionEntry>;
     selectedNodes?: CanvasNodeLike[];
     selectedEdge?: CanvasEdgeLike;

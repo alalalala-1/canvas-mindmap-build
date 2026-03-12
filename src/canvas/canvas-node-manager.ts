@@ -16,7 +16,7 @@ import {
     resolveArrangedTextWidth
 } from '../utils/canvas-utils';
 import { generateTextSignature } from '../utils/height-utils';
-import { CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
+import { AddNodeToCanvasOptions, CanvasLike, CanvasNodeLike, ICanvasManager, CanvasViewLike, HeightMeta } from './types';
 import { requestCanvasSave, requestCanvasUpdate } from './adapters/canvas-runtime-adapter';
 
 /** 高度调整的统计上下文 */
@@ -309,8 +309,8 @@ export class CanvasNodeManager {
         this.nodeDeletionService.setCanvasManager(canvasManager);
     }
 
-    async addNodeToCanvas(content: string, sourceFile: TFile | null): Promise<void> {
-        return this.nodeCreationService.addNodeToCanvas(content, sourceFile);
+    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<void> {
+        return this.nodeCreationService.addNodeToCanvas(content, sourceFile, options);
     }
 
     notifyNodeMountedVisible(nodeId: string, reason: string = 'runtime-mounted-visible'): void {

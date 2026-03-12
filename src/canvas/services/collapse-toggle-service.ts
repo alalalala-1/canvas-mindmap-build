@@ -17,7 +17,7 @@ import {
     parseFloatingNodeInfo
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
-import { requestCanvasSave, requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
+import { getCanvasRuntimeSafety, requestCanvasSave, requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
 
 export class CollapseToggleService {
     constructor(
@@ -154,7 +154,14 @@ export class CollapseToggleService {
     reapplyCurrentCollapseVisibility(
         canvas: CanvasLike,
         options?: { requestUpdate?: boolean; reason?: string }
-    ): { hiddenNodeCount: number; nodeCount: number; edgeCount: number } {
+    ): {
+        hiddenNodeCount: number;
+        nodeCount: number;
+        edgeCount: number;
+        runtimeSafe: boolean;
+        runtimeUnsafeReason: string | null;
+        requestUpdateApplied: boolean;
+    } {
         const nodes = this.getCanvasNodes(canvas);
         const runtimeEdges = this.getCanvasEdges(canvas);
         const relationEdges = Array.isArray(canvas.fileData?.edges) && canvas.fileData.edges.length > 0
@@ -163,12 +170,22 @@ export class CollapseToggleService {
         const domEdges = runtimeEdges.length > 0 ? runtimeEdges : relationEdges;
         const canvasData = (canvas.fileData || canvas) as CanvasDataLike;
         const hiddenNodeIds = this.collectHiddenNodeIds(nodes, relationEdges, canvasData);
+        const runtimeSafety = getCanvasRuntimeSafety(canvas);
 
         this.applyVisibilityToNodes(nodes, hiddenNodeIds);
         this.applyVisibilityToEdges(domEdges, hiddenNodeIds);
 
+        let requestUpdateApplied = false;
         if (options?.requestUpdate !== false) {
-            requestCanvasUpdate(canvas);
+            if (runtimeSafety.safe) {
+                requestUpdateApplied = requestCanvasUpdate(canvas);
+            } else {
+                log(
+                    `[Layout] ReapplyCollapseVisibilitySkipUpdate: reason=${runtimeSafety.reason || 'unknown'}, ` +
+                    `hidden=${hiddenNodeIds.size}, nodes=${nodes.size}, edges=${domEdges.length}, ` +
+                    `reapplyReason=${options?.reason || 'unknown'}`
+                );
+            }
         }
 
         log(
@@ -179,7 +196,10 @@ export class CollapseToggleService {
         return {
             hiddenNodeCount: hiddenNodeIds.size,
             nodeCount: nodes.size,
-            edgeCount: domEdges.length
+            edgeCount: domEdges.length,
+            runtimeSafe: runtimeSafety.safe,
+            runtimeUnsafeReason: runtimeSafety.reason,
+            requestUpdateApplied
         };
     }
 
@@ -223,11 +243,24 @@ export class CollapseToggleService {
             const { offsetX, offsetY } = this.calculateAnchorOffset(nodeId, nodes, newLayout);
 
             const updatedCount = this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
+            const runtimeSafety = getCanvasRuntimeSafety(canvas);
+            let updateApplied = false;
+            let saveApplied = false;
 
-            requestCanvasUpdate(canvas);
-            requestCanvasSave(canvas);
+            if (runtimeSafety.safe) {
+                updateApplied = requestCanvasUpdate(canvas);
+                saveApplied = requestCanvasSave(canvas);
+            } else {
+                log(
+                    `[Layout] TogglePersistSkipped: node=${nodeId}, collapsing=${isCollapsing}, ` +
+                    `reason=${runtimeSafety.reason || 'unknown'}, updated=${updatedCount}`
+                );
+            }
 
-            log(`[Layout] Toggle: 更新了 ${updatedCount} 个节点`);
+            log(
+                `[Layout] Toggle: 更新了 ${updatedCount} 个节点, ` +
+                `updateApplied=${updateApplied}, saveApplied=${saveApplied}, runtimeSafe=${runtimeSafety.safe}`
+            );
         } catch (err) {
             handleError(err, { context: 'Layout', message: 'Toggle 失败', showNotice: false });
         }
