@@ -72,6 +72,16 @@ interface TrustedMeasureCollector {
     samples: string[];
 }
 
+type HeightAdjustWaitReason = 'mounted' | 'visible';
+
+type HeightAdjustState = {
+    nodeId: string;
+    retryCount: number;
+    awaiting: HeightAdjustWaitReason;
+    lastReason: string;
+    lastSource: string | null;
+};
+
 function createTrustedMeasureCollector(): TrustedMeasureCollector {
     return {
         total: 0,
@@ -127,10 +137,12 @@ export class CanvasNodeManager {
     private readonly trustedSuspectDeltaPx: number = 20;
     private readonly maxNodeHeightAdjustRetries: number = 3;
     private readonly queuedNodeHeightAdjustDelayMs: number = CONSTANTS.TIMING.SCROLL_DELAY;
+    private readonly parkedNodeHeightAdjustMaxAgeMs: number = 15000;
     private nodeHeightAdjustInFlight: Set<string> = new Set();
     private nodeHeightAdjustQueued: Set<string> = new Set();
     private nodeHeightAdjustRetryCountByNodeId: Map<string, number> = new Map();
     private nodeHeightAdjustTimeoutByNodeId: Map<string, number> = new Map();
+    private parkedNodeHeightAdjustByNodeId: Map<string, { awaiting: HeightAdjustWaitReason; parkedAt: number; lastReason: string }> = new Map();
 
     constructor(
         app: App,
@@ -300,8 +312,43 @@ export class CanvasNodeManager {
         return this.nodeCreationService.addNodeToCanvas(content, sourceFile);
     }
 
+    notifyNodeMountedVisible(nodeId: string, reason: string = 'runtime-mounted-visible'): void {
+        if (!nodeId) return;
+
+        const parkedState = this.parkedNodeHeightAdjustByNodeId.get(nodeId);
+        if (!parkedState) {
+            this.scheduleNodeHeightAdjustment(nodeId, CONSTANTS.TIMING.SCROLL_DELAY, reason);
+            return;
+        }
+
+        this.parkedNodeHeightAdjustByNodeId.delete(nodeId);
+        this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+        logVerbose(
+            `[Node] HeightAdjustResumed: node=${nodeId}, parkedAwaiting=${parkedState.awaiting}, ` +
+            `parkedReason=${parkedState.lastReason}, resumeReason=${reason}`
+        );
+        this.scheduleNodeHeightAdjustment(nodeId, CONSTANTS.TIMING.SCROLL_DELAY, reason);
+    }
+
     scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {
         if (!nodeId) return;
+
+        const parkedState = this.parkedNodeHeightAdjustByNodeId.get(nodeId);
+        if (parkedState) {
+            const parkedAge = Date.now() - parkedState.parkedAt;
+            const shouldResume = parkedState.awaiting === 'mounted'
+                ? reason.includes('mounted') || reason.includes('visible') || reason.includes('post-open')
+                : reason.includes('visible') || reason.includes('viewport') || reason.includes('post-open') || reason.includes('arrange');
+            if (!shouldResume && parkedAge < this.parkedNodeHeightAdjustMaxAgeMs) {
+                logVerbose(
+                    `[Node] HeightAdjustStillParked: node=${nodeId}, awaiting=${parkedState.awaiting}, ` +
+                    `parkedReason=${parkedState.lastReason}, incomingReason=${reason}, ageMs=${parkedAge}`
+                );
+                return;
+            }
+
+            this.parkedNodeHeightAdjustByNodeId.delete(nodeId);
+        }
 
         const normalizedDelay = Math.max(0, delayMs);
         const existingTimerId = this.nodeHeightAdjustTimeoutByNodeId.get(nodeId);
@@ -368,32 +415,43 @@ export class CanvasNodeManager {
                 this.nodeHeightService.syncMemoryNodeHeight(nodeId, newHeightValue);
 
                 const nodeData = this.nodeHeightService.getCanvasNodeElement(nodeId);
-                const shouldRetry = !!nodeData && (!nodeData.nodeEl || nodeData.nodeEl.clientHeight === 0);
-                if (shouldRetry) {
+                const retryState = this.resolveHeightAdjustRetryState(nodeId, nodeData, newHeightValue);
+                if (retryState) {
                     const nextRetryCount = (this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0) + 1;
                     if (nextRetryCount <= this.maxNodeHeightAdjustRetries) {
                         this.nodeHeightAdjustRetryCountByNodeId.set(nodeId, nextRetryCount);
                         this.scheduleNodeHeightAdjustment(
                             nodeId,
-                            CONSTANTS.TIMING.RETRY_DELAY,
-                            `dom-not-ready#${nextRetryCount}`
+                            retryState.awaiting === 'mounted'
+                                ? CONSTANTS.TIMING.RETRY_DELAY_SHORT
+                                : CONSTANTS.TIMING.RETRY_DELAY,
+                            `${retryState.awaiting === 'mounted' ? 'dom-not-mounted' : 'dom-not-visible'}#${nextRetryCount}`
                         );
                         logVerbose(
                             `[Node] HeightAdjustRetryScheduled: node=${nodeId}, ` +
-                            `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready`
+                            `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
+                            `awaiting=${retryState.awaiting}, source=${retryState.lastSource || 'unknown'}`
                         );
                     } else {
                         this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+                        this.parkedNodeHeightAdjustByNodeId.set(nodeId, {
+                            awaiting: retryState.awaiting,
+                            parkedAt: Date.now(),
+                            lastReason: retryState.lastReason,
+                        });
                         logVerbose(
                             `[Node] HeightAdjustRetryExhausted: node=${nodeId}, ` +
-                            `retries=${this.maxNodeHeightAdjustRetries}, reason=dom-not-ready, next=wait-for-node-mounted-visible`
+                            `retries=${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
+                            `awaiting=${retryState.awaiting}, next=wait-for-node-mounted-visible`
                         );
                     }
                 } else {
                     this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+                    this.parkedNodeHeightAdjustByNodeId.delete(nodeId);
                 }
             } else {
                 this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+                this.parkedNodeHeightAdjustByNodeId.delete(nodeId);
             }
         } catch (err) {
             log(`[Node] 调整高度失败: ${nodeId}`, err);
@@ -413,6 +471,52 @@ export class CanvasNodeManager {
         this.nodeHeightAdjustQueued.clear();
         this.nodeHeightAdjustInFlight.clear();
         this.nodeHeightAdjustRetryCountByNodeId.clear();
+        this.parkedNodeHeightAdjustByNodeId.clear();
+    }
+
+    private resolveHeightAdjustRetryState(
+        nodeId: string,
+        nodeData: CanvasNodeLike | undefined,
+        newHeightValue: number
+    ): HeightAdjustState | null {
+        if (!nodeData) return null;
+
+        if (!nodeData.nodeEl) {
+            return {
+                nodeId,
+                retryCount: this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0,
+                awaiting: 'mounted',
+                lastReason: 'node-el-missing',
+                lastSource: 'missing-dom',
+            };
+        }
+
+        if (this.isNodeVirtualized(nodeData.nodeEl)) {
+            return {
+                nodeId,
+                retryCount: this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0,
+                awaiting: 'visible',
+                lastReason: 'node-virtualized-zero-sized',
+                lastSource: 'zero-sized',
+            };
+        }
+
+        const effectiveHeight = Math.max(
+            nodeData.nodeEl.clientHeight || 0,
+            nodeData.nodeEl.offsetHeight || 0,
+            Math.round(nodeData.nodeEl.getBoundingClientRect().height || 0)
+        );
+        if (effectiveHeight <= 0 && newHeightValue > 0) {
+            return {
+                nodeId,
+                retryCount: this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0,
+                awaiting: 'visible',
+                lastReason: 'node-height-unapplied',
+                lastSource: 'dom-zero-after-sync',
+            };
+        }
+
+        return null;
     }
 
     async adjustAllTextNodeHeights(options?: { skipMountedTextNodes?: boolean; suppressRequestSave?: boolean }): Promise<number> {

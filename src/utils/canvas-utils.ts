@@ -171,11 +171,27 @@ function isCanvasEdgeInteractionTarget(targetEl: Element): boolean {
         return true;
     }
 
-    return targetEl instanceof SVGElement && !!targetEl.closest('svg.canvas-edges');
+    return typeof SVGElement !== 'undefined'
+        && targetEl instanceof SVGElement
+        && !!targetEl.closest('svg.canvas-edges');
 }
 
 function isCanvasControlInteractionTarget(targetEl: Element): boolean {
     return !!targetEl.closest('.canvas-control-item, .canvas-menu, .canvas-menu-container, .clickable-icon');
+}
+
+const canvasEdgeConnectTargetSelectors = [
+    '.canvas-node-connection-point',
+    '.canvas-node-connection-handle',
+    '.canvas-node-connection-point-hitbox',
+    '.canvas-node-connection-point-label',
+    '.canvas-edge-handle',
+    '[data-connection-point]',
+    '[data-canvas-connection-point]'
+].join(', ');
+
+export function isCanvasEdgeConnectGestureTarget(targetEl: Element): boolean {
+    return !!targetEl.closest(canvasEdgeConnectTargetSelectors);
 }
 
 export function isCanvasNativeInsertGestureTarget(targetEl: Element): boolean {
@@ -183,11 +199,24 @@ export function isCanvasNativeInsertGestureTarget(targetEl: Element): boolean {
         return true;
     }
 
-    if (targetEl.closest('.canvas-node') || targetEl.closest('.cmb-collapse-button')) {
+    if (isCanvasEdgeConnectGestureTarget(targetEl)) {
+        return false;
+    }
+
+    if (targetEl.closest('.cmb-collapse-button')) {
         return false;
     }
 
     if (isCanvasEdgeInteractionTarget(targetEl) || isCanvasControlInteractionTarget(targetEl)) {
+        return false;
+    }
+
+    const nodeInsertEventEl = targetEl.closest('.node-insert-event');
+    if (nodeInsertEventEl?.closest('.canvas-node')) {
+        return true;
+    }
+
+    if (targetEl.closest('.canvas-node')) {
         return false;
     }
 
@@ -201,6 +230,10 @@ export function isCanvasNativeInsertGestureTarget(targetEl: Element): boolean {
 
 export function shouldBypassCanvasNodeGestureTarget(targetEl: Element): boolean {
     if (targetEl.closest('.cmb-collapse-button')) {
+        return true;
+    }
+
+    if (isCanvasEdgeConnectGestureTarget(targetEl)) {
         return true;
     }
 

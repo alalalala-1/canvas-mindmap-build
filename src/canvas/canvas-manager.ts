@@ -10,7 +10,7 @@ import { CanvasFileService } from './services/canvas-file-service';
 import { EdgeDeletionService } from './services/edge-deletion-service';
 import { FromLinkRepairService } from './services/fromlink-repair-service';
 import { NodeOrderService } from './services/node-order-service';
-import { log } from '../utils/logger';
+import { log, logEvent } from '../utils/logger';
 import {
     getCanvasView
 } from '../utils/canvas-utils';
@@ -79,6 +79,17 @@ export class CanvasManager implements ICanvasManager {
         this.layoutManager.setCanvasManager(this);
 
         log('[Manager] 实例化');
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'Constructed',
+            message: 'CanvasManager initialized',
+            data: {
+                canvasFilePath: settings.canvasFilePath || 'unset',
+                debugLogging: settings.enableDebugLogging,
+                verboseDiagnostics: settings.enableVerboseCanvasDiagnostics,
+            }
+        });
     }
 
     // =========================================================================
@@ -96,6 +107,13 @@ export class CanvasManager implements ICanvasManager {
      * @param source 触发来源标识
      */
     async arrangeCanvas(source: string = 'manual') {
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'ArrangeCanvas',
+            message: 'schedule arrange canvas',
+            data: { source }
+        });
         this.layoutManager.arrangeCanvas(source);
     }
 
@@ -103,6 +121,13 @@ export class CanvasManager implements ICanvasManager {
      * [OpenFix] Canvas 打开后触发轻量自愈（仅视觉层，不写布局坐标）
      */
     public scheduleOpenStabilization(source: string = 'canvas-open'): void {
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'ScheduleOpenStabilization',
+            message: 'schedule canvas open stabilization',
+            data: { source }
+        });
         this.layoutManager.scheduleOpenStabilization(source);
     }
 
@@ -112,6 +137,11 @@ export class CanvasManager implements ICanvasManager {
 
     public scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {
         this.nodeManager.scheduleNodeHeightAdjustment(nodeId, delayMs, reason);
+    }
+
+    public notifyNodeMountedVisible(nodeId: string, reason: string = 'runtime-mounted-visible'): void {
+        this.floatingNodeService.notifyNodeMountedVisible(nodeId);
+        this.nodeManager.notifyNodeMountedVisible(nodeId, reason);
     }
 
     public async adjustNodeHeightAfterRender(nodeId: string) {
@@ -148,6 +178,14 @@ export class CanvasManager implements ICanvasManager {
             log(`[CanvasManager] RefreshCanvasViewsForFileSkip: file not found, reason=${reason}, file=${filePath}`);
             return 0;
         }
+
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'RefreshCanvasViewsForFile',
+            message: 'refresh canvas views for file',
+            data: { filePath, reason, leafCount: this.app.workspace.getLeavesOfType('canvas').length }
+        });
 
         const canvasLeaves = this.app.workspace.getLeavesOfType('canvas');
         let refreshed = 0;
@@ -199,6 +237,14 @@ export class CanvasManager implements ICanvasManager {
             return 0;
         }
 
+        logEvent({
+            level: 'debug',
+            subsystem: 'manager',
+            event: 'ReapplyCollapseVisibility',
+            message: 'reapply collapse visibility',
+            data: { reason, filePath: targetCanvas.file?.path || 'none' }
+        });
+
         return this.layoutManager.reapplyCurrentCollapseVisibility(targetCanvas, reason);
     }
 
@@ -211,6 +257,12 @@ export class CanvasManager implements ICanvasManager {
     }
 
     async repairNodeFromLinks(): Promise<void> {
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'RepairNodeFromLinks',
+            message: 'repair node from links requested',
+        });
         await this.fromLinkRepairService.repairFromLinksForCurrentCanvas();
     }
 
@@ -367,6 +419,13 @@ export class CanvasManager implements ICanvasManager {
 
         this.markProgrammaticCanvasReload(file.path, 1800);
         log(`[CanvasManager] RefreshActiveCanvasFromFile: reason=${reason}, file=${file.path}`);
+        logEvent({
+            level: 'info',
+            subsystem: 'manager',
+            event: 'RefreshActiveCanvasFromFile',
+            message: 'refresh active canvas from file',
+            data: { reason, filePath: file.path }
+        });
         await leaf.openFile(file, { active: false });
         await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
     }

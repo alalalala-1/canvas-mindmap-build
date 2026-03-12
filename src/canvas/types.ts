@@ -170,6 +170,7 @@ export function getBooleanProp(obj: unknown, key: string): boolean | undefined {
 export interface ICanvasManager {
     checkAndAddCollapseButtons(): void;
     scheduleNodeHeightAdjustment(nodeId: string, delayMs?: number, reason?: string): void;
+    notifyNodeMountedVisible?(nodeId: string, reason?: string): void;
     adjustNodeHeightAfterRender(nodeId: string): Promise<void>;
     measureAndPersistTrustedHeight(nodeId: string, options?: { suppressRequestSave?: boolean }): Promise<void>;
     toggleNodeCollapse(nodeId: string): Promise<void>;

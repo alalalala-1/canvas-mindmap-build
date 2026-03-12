@@ -26,6 +26,7 @@ import {
     getSelectedNodeFromCanvas,
     findDeleteButton,
     findCanvasNodeElementFromTarget,
+    isCanvasEdgeConnectGestureTarget,
     isCanvasNativeInsertGestureTarget,
     shouldBypassCanvasNodeGestureTarget,
     clearCanvasEdgeSelection,
@@ -78,6 +79,7 @@ type PenLongPressSnapshot = {
 type NativeInsertSession = {
     pointerId: number;
     pointerType: string;
+    startReason: string;
     startedAt: number;
     lastSeenAt: number;
     traceId: string;
@@ -367,6 +369,15 @@ export class CanvasEventManager {
             if (!canvasView) return;
 
             if (isCanvasNativeInsertGestureTarget(targetEl)) {
+                const clickNativeInsertEvaluation = this.evaluateNativeInsertSessionStart('mouse', targetEl);
+                if (!this.isNativeInsertSessionActive() && !clickNativeInsertEvaluation.allow) {
+                    logVerbose(
+                        `[Event] NativeInsertClickIgnored: reason=${clickNativeInsertEvaluation.reason}, ` +
+                        `target=${this.describeEventTarget(targetEl)}, chain=${this.describeEventTargetChain(targetEl)}`
+                    );
+                    return;
+                }
+
                 if (this.isNativeInsertSessionActive()) {
                     this.touchNativeInsertSession(targetEl);
                     logVerbose(
@@ -508,12 +519,41 @@ export class CanvasEventManager {
                 this.activePointerGesture = null;
                 this.clearTouchDragNodeArm();
                 this.clearPenLongPress();
-                if (event.target instanceof Element && isCanvasNativeInsertGestureTarget(event.target)) {
-                    this.startNativeInsertSession(event.pointerId, pointerType, event.target, event);
+                const isEdgeConnectTarget = event.target instanceof Element && isCanvasEdgeConnectGestureTarget(event.target);
+                const nativeInsertEvaluation = this.evaluateNativeInsertSessionStart(pointerType, event.target);
+                if (nativeInsertEvaluation.allow && event.target instanceof Element) {
+                    this.startNativeInsertSession(
+                        event.pointerId,
+                        pointerType,
+                        event.target,
+                        event,
+                        nativeInsertEvaluation.reason
+                    );
+                } else if (isEdgeConnectTarget) {
+                    logVerbose(
+                        `[Event] EdgeConnectGestureObserved: pointer=${pointerType}, target=${this.describeEventTarget(event.target)}, ` +
+                        `chain=${this.describeEventTargetChain(event.target)}, flags=${this.describePointerEventState(event)}, ` +
+                        `selection=${this.describeCanvasSelection()}`
+                    );
+                } else if (nativeInsertEvaluation.candidate) {
+                    logVerbose(
+                        `[Event] NativeInsertCandidateRejected: pointer=${pointerType}, reason=${nativeInsertEvaluation.reason}, ` +
+                        `targetKind=${nativeInsertEvaluation.targetKind}, target=${this.describeEventTarget(event.target)}, ` +
+                        `chain=${this.describeEventTargetChain(event.target)}, flags=${this.describePointerEventState(event)}, ` +
+                        `selection=${this.describeCanvasSelection()}`
+                    );
                 }
                 if (this.isTouchLikePointer(pointerType)) {
+                    let bypassReason = 'other';
+                    if (isEdgeConnectTarget) {
+                        bypassReason = 'edge-connect';
+                    } else if (nativeInsertEvaluation.allow) {
+                        bypassReason = 'native-insert';
+                    } else if (nativeInsertEvaluation.candidate) {
+                        bypassReason = `native-insert-rejected:${nativeInsertEvaluation.reason}`;
+                    }
                     logVerbose(
-                        `[Event] DragPointerBypass: pointer=${pointerType}, target=${this.describeEventTarget(event.target)}, ` +
+                        `[Event] DragPointerBypass: pointer=${pointerType}, reason=${bypassReason}, target=${this.describeEventTarget(event.target)}, ` +
                         `chain=${this.describeEventTargetChain(event.target)}, flags=${this.describePointerEventState(event)}`
                     );
                 }
@@ -1539,6 +1579,7 @@ export class CanvasEventManager {
 
     private describeCanvasPointerTargetKind(target: EventTarget | null): string {
         if (!(target instanceof Element)) return 'non-element';
+        if (isCanvasEdgeConnectGestureTarget(target)) return 'edge-connect';
         if (isCanvasNativeInsertGestureTarget(target)) return `native-insert:${this.describeNativeInsertTargetKind(target)}`;
         if (findCanvasNodeElementFromTarget(target)) return 'node';
         if (target.closest('.cmb-collapse-button')) return 'collapse-button';
@@ -1564,11 +1605,119 @@ export class CanvasEventManager {
         return typeof pointerId === 'number' ? session.pointerId === pointerId : true;
     }
 
+    private evaluateNativeInsertSessionStart(pointerType: string, target: EventTarget | null): {
+        candidate: boolean;
+        allow: boolean;
+        reason: string;
+        targetKind: string;
+    } {
+        if (!(target instanceof Element)) {
+            return {
+                candidate: false,
+                allow: false,
+                reason: 'non-element',
+                targetKind: 'non-element'
+            };
+        }
+
+        if (isCanvasEdgeConnectGestureTarget(target)) {
+            return {
+                candidate: true,
+                allow: false,
+                reason: 'edge-connect',
+                targetKind: 'edge-connect'
+            };
+        }
+
+        const candidate = isCanvasNativeInsertGestureTarget(target);
+        const targetKind = this.describeNativeInsertTargetKind(target);
+        if (!candidate) {
+            return {
+                candidate: false,
+                allow: false,
+                reason: 'not-native-target',
+                targetKind
+            };
+        }
+
+        if (targetKind === 'placeholder') {
+            return {
+                candidate: true,
+                allow: true,
+                reason: 'placeholder',
+                targetKind
+            };
+        }
+
+        if (targetKind.startsWith('node-content')) {
+            return {
+                candidate: true,
+                allow: true,
+                reason: 'node-content',
+                targetKind
+            };
+        }
+
+        if (targetKind.startsWith('wrapper')) {
+            const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
+            const wrapperActive = insertWrapper instanceof HTMLElement
+                && (insertWrapper.classList.contains('is-dragging') || insertWrapper.classList.contains('mod-animating'));
+
+            if (wrapperActive) {
+                return {
+                    candidate: true,
+                    allow: true,
+                    reason: 'wrapper-active',
+                    targetKind
+                };
+            }
+
+            const hasPlaceholder = !!document.querySelector('.canvas-node-placeholder');
+            if (hasPlaceholder) {
+                return {
+                    candidate: true,
+                    allow: true,
+                    reason: 'wrapper-placeholder-present',
+                    targetKind
+                };
+            }
+
+            if (this.isTouchLikePointer(pointerType)) {
+                return {
+                    candidate: true,
+                    allow: true,
+                    reason: 'wrapper-touch-like',
+                    targetKind
+                };
+            }
+
+            return {
+                candidate: true,
+                allow: false,
+                reason: 'empty-wrapper-idle',
+                targetKind
+            };
+        }
+
+        return {
+            candidate: true,
+            allow: false,
+            reason: `unsupported-kind:${targetKind}`,
+            targetKind
+        };
+    }
+
     private shouldSuppressSideEffectsForNativeInsert(): boolean {
         return this.activeNativeInsertSession !== null || Date.now() < this.nativeInsertSideEffectsSuppressUntil;
     }
 
-    private startNativeInsertSession(pointerId: number, pointerType: string, target: EventTarget | null, event: PointerEvent): void {
+    private startNativeInsertSession(
+        pointerId: number,
+        pointerType: string,
+        target: EventTarget | null,
+        event: PointerEvent,
+        startReason: string = 'direct'
+    ): void {
         const now = Date.now();
         const placeholderSeen = target instanceof HTMLElement && !!target.closest('.canvas-node-placeholder');
         const traceId = this.createNativeInsertTraceId(pointerId);
@@ -1582,6 +1731,7 @@ export class CanvasEventManager {
         this.activeNativeInsertSession = {
             pointerId,
             pointerType,
+            startReason,
             startedAt: now,
             lastSeenAt: now,
             traceId,
@@ -1604,6 +1754,7 @@ export class CanvasEventManager {
         this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, now + 1200);
         log(
             `[Event] NativeInsertSessionStart: trace=${traceId}, pointer=${pointerId}, pointerType=${pointerType}, ` +
+            `startReason=${startReason}, ` +
             `target=${this.activeNativeInsertSession.targetKind}, eventTarget=${this.describeEventTarget(target)}, ` +
             `chain=${this.describeEventTargetChain(target)}, flags=${this.describePointerEventState(event)}, ` +
             `wrapperStyle=${this.activeNativeInsertSession.initialWrapperStyle}, selection=${startSelection}, ` +
@@ -1678,7 +1829,7 @@ export class CanvasEventManager {
         const endSelection = this.describeCanvasSelection();
         log(
             `[Event] NativeInsertSessionEnd: trace=${session.traceId}, pointer=${pointerId}, pointerType=${session.pointerType}, ` +
-            `duration=${duration}ms, target=${session.targetKind}, wrapperDrag=${session.wrapperDragSeen}, ` +
+            `duration=${duration}ms, startReason=${session.startReason}, target=${session.targetKind}, wrapperDrag=${session.wrapperDragSeen}, ` +
             `placeholder=${session.placeholderSeen}, nodeCreate=${session.nodeCreateSeen}, ` +
             `placeholderAdds=${session.placeholderAddedCount}, placeholderRemoves=${session.placeholderRemovedCount}, ` +
             `domNodeAdds=${session.domNodeAddedCount}, domNodeRemoves=${session.domNodeRemovedCount}, ` +
@@ -1917,10 +2068,13 @@ export class CanvasEventManager {
         ].join(',');
     }
 
-    private hasSuspiciousDeleteModalFocusContext(): boolean {
+    private hasSuspiciousDeleteModalFocusContext(expectCanvasActive: boolean = false): boolean {
         const activeViewType = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() || 'none';
         const activeEditorInfo = this.app.workspace.activeEditor;
-        return activeViewType === 'canvas' && !!activeEditorInfo && !activeEditorInfo.editor;
+        if (expectCanvasActive && activeViewType !== 'canvas') {
+            return true;
+        }
+        return !!activeEditorInfo && !activeEditorInfo.editor;
     }
 
     private isDeleteOverlayInteractionTarget(target: EventTarget | null): boolean {
@@ -1930,10 +2084,29 @@ export class CanvasEventManager {
     }
 
     private clearSuspiciousDeleteModalFocusContext(reason: string, kind: 'node' | 'edge', targetId: string): boolean {
-        if (!this.hasSuspiciousDeleteModalFocusContext()) return false;
+        const shouldExpectCanvasActive = true;
+        const shouldNormalize = this.hasSuspiciousDeleteModalFocusContext(shouldExpectCanvasActive);
+        if (!shouldNormalize) return false;
 
         const before = this.describeDeleteModalFocusContext();
         const activeBefore = this.describeEventTarget(document.activeElement);
+        let focusedCanvasLeaf = false;
+
+        const activeCanvasView = getCanvasView(this.app);
+        const activeCanvasLeaf = (activeCanvasView as { leaf?: unknown } | null)?.leaf;
+        if (activeCanvasLeaf && typeof this.app.workspace.setActiveLeaf === 'function') {
+            try {
+                (this.app.workspace.setActiveLeaf as (leaf: unknown, options?: { focus?: boolean }) => unknown)(
+                    activeCanvasLeaf,
+                    { focus: true }
+                );
+                focusedCanvasLeaf = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() === 'canvas';
+            } catch {
+                focusedCanvasLeaf = false;
+            }
+        }
+
+        const focusAfterLeafSync = this.describeDeleteModalFocusContext();
         let blurred = false;
         try {
             const activeElement = document.activeElement;
@@ -1948,10 +2121,11 @@ export class CanvasEventManager {
         const after = this.describeDeleteModalFocusContext();
         logVerbose(
             `[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
-            `focusBefore=${before}, focusAfter=${after}, activeBefore=${activeBefore}, ` +
-            `activeAfter=${this.describeEventTarget(document.activeElement)}, blurred=${blurred}`
+            `focusBefore=${before}, focusAfterLeafSync=${focusAfterLeafSync}, focusAfter=${after}, ` +
+            `activeBefore=${activeBefore}, activeAfter=${this.describeEventTarget(document.activeElement)}, ` +
+            `focusedCanvasLeaf=${focusedCanvasLeaf}, blurred=${blurred}`
         );
-        return blurred;
+        return focusedCanvasLeaf || blurred;
     }
 
     private async runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {
@@ -1967,6 +2141,10 @@ export class CanvasEventManager {
 
     private async openDeleteModalSafely(modal: { open: () => void }, kind: 'node' | 'edge', targetId: string): Promise<void> {
         this.clearSuspiciousDeleteModalFocusContext('pre-open', kind, targetId);
+        logVerbose(
+            `[Event] DeleteModalNormalized: kind=${kind}, target=${targetId}, ` +
+            `focusContext=${this.describeDeleteModalFocusContext()}`
+        );
         await this.runDeleteModalOnNextFrame(() => {
             modal.open();
         });
@@ -1974,6 +2152,10 @@ export class CanvasEventManager {
 
     private async waitForDeleteModalFocusSettle(kind: 'node' | 'edge', targetId: string): Promise<void> {
         this.clearSuspiciousDeleteModalFocusContext('post-close', kind, targetId);
+        logVerbose(
+            `[Event] DeleteModalPostClose: kind=${kind}, target=${targetId}, ` +
+            `focusContext=${this.describeDeleteModalFocusContext()}`
+        );
         await this.runDeleteModalOnNextFrame(() => undefined);
     }
 
@@ -2001,7 +2183,7 @@ export class CanvasEventManager {
         const modal = new DeleteEdgeConfirmationModal(this.app);
         const resultPromise = modal.waitForResult();
         log(
-            `[Event] DeleteEdgeModalOpen: edge=${edgeKey}, ` +
+            `[Event] DeleteEdgeModalOpenRaw: edge=${edgeKey}, ` +
             `focusContext=${this.describeDeleteModalFocusContext()}`
         );
         try {
@@ -2058,7 +2240,7 @@ export class CanvasEventManager {
         const modal = new DeleteConfirmationModal(this.app, hasChildren);
         const resultPromise = modal.waitForResult();
         log(
-            `[Event] DeleteNodeModalOpen: node=${nodeId}, hasChildren=${hasChildren}, ` +
+            `[Event] DeleteNodeModalOpenRaw: node=${nodeId}, hasChildren=${hasChildren}, ` +
             `focusContext=${this.describeDeleteModalFocusContext()}`
         );
         try {
@@ -2560,9 +2742,8 @@ export class CanvasEventManager {
                 } else {
                     void this.canvasManager.checkAndAddCollapseButtons();
                     for (const mountedNodeId of mountedNodeIds) {
-                        this.canvasManager.scheduleNodeHeightAdjustment(
+                        this.canvasManager.notifyNodeMountedVisible?.(
                             mountedNodeId,
-                            CONSTANTS.TIMING.SCROLL_DELAY,
                             'node-mounted-visible'
                         );
                     }

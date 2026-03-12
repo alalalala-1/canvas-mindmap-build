@@ -83,10 +83,17 @@ export class NodeCreationService {
             return;
         }
 
+        const createRequestId = `create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
         const newNodeId = generateRandomId();
+        const newEdgeId = generateRandomId();
         let modifyPass = 0;
         let lastParentResolutionSummary = 'none';
         let lastPlacementSummary = 'none';
+
+        log(
+            `[Create] AddNodeIntent: request=${createRequestId}, node=${newNodeId}, edge=${newEdgeId}, ` +
+            `targetCanvas=${canvasFilePath}, sourceFile=${sourceFile.path}`
+        );
 
         const success = await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
             modifyPass += 1;
@@ -95,62 +102,92 @@ export class NodeCreationService {
             if (!canvasData.edges) canvasData.edges = [];
             if (!canvasData.canvasMindmapBuildHistory) canvasData.canvasMindmapBuildHistory = [];
 
-            const newNode = this.createNodeData(content, sourceFile, newNodeId);
+            let changed = false;
+            const isPreflight = phase === 'preflight';
+            const nodeEvent = isPreflight ? 'NodePlanned' : 'NodeCreated';
+            const edgeEvent = isPreflight ? 'EdgePlanned' : 'EdgeCreated';
+
+            const existingNode = canvasData.nodes.find(node => node.id === newNodeId);
+            const newNode = existingNode || this.createNodeData(content, sourceFile, newNodeId);
 
             const parentResolution = this.findParentNodeForNewNode(canvasData, canvasFilePath);
             const parentNode = parentResolution.parentNode;
             lastParentResolutionSummary = `phase=${phase},source=${parentResolution.source},parent=${parentNode?.id || 'none'},detail=${parentResolution.detail}`;
 
             log(
-                `[Create] ParentResolve: phase=${phase}, targetCanvas=${canvasFilePath}, source=${parentResolution.source}, ` +
+                `[Create] ParentResolve: request=${createRequestId}, phase=${phase}, targetCanvas=${canvasFilePath}, source=${parentResolution.source}, ` +
                 `parent=${parentNode?.id || 'none'}, detail=${parentResolution.detail}, canvasSelection=${this.describeCanvasSelection()}`
             );
 
             if (parentNode) {
-                log(`[Create] 父节点: phase=${phase}, id=${parentNode.id} (${parentNode.x}, ${parentNode.y})`);
+                log(`[Create] ParentNode: request=${createRequestId}, phase=${phase}, id=${parentNode.id} (${parentNode.x}, ${parentNode.y})`);
             }
 
-            const position = this.positionCalculator.calculatePosition(newNode, parentNode, canvasData);
-            newNode.x = position.x;
-            newNode.y = position.y;
-            lastPlacementSummary = `phase=${phase},x=${position.x},y=${position.y},parent=${parentNode?.id || 'none'}`;
+            if (!existingNode) {
+                const position = this.positionCalculator.calculatePosition(newNode, parentNode, canvasData);
+                newNode.x = position.x;
+                newNode.y = position.y;
+                lastPlacementSummary = `phase=${phase},x=${position.x},y=${position.y},parent=${parentNode?.id || 'none'}`;
 
-            log(
-                `[Create] NodePlacement: phase=${phase}, node=${newNodeId}, x=${position.x}, y=${position.y}, ` +
-                `parent=${parentNode?.id || 'none'}, targetCanvas=${canvasFilePath}`
-            );
+                log(
+                    `[Create] NodePlacement: request=${createRequestId}, phase=${phase}, node=${newNodeId}, x=${position.x}, y=${position.y}, ` +
+                    `parent=${parentNode?.id || 'none'}, targetCanvas=${canvasFilePath}`
+                );
 
-            canvasData.nodes.push(newNode);
-            canvasData.canvasMindmapBuildHistory.push(newNodeId);
-            log(`[Create] 节点已添加: phase=${phase}, node=${newNodeId}, historySize=${canvasData.canvasMindmapBuildHistory.length}`);
+                canvasData.nodes.push(newNode);
+                changed = true;
+                log(`[Create] ${nodeEvent}: request=${createRequestId}, phase=${phase}, node=${newNodeId}`);
+            } else {
+                const nodeX = typeof existingNode.x === 'number' ? existingNode.x : 0;
+                const nodeY = typeof existingNode.y === 'number' ? existingNode.y : 0;
+                lastPlacementSummary = `phase=${phase},x=${nodeX},y=${nodeY},parent=${parentNode?.id || 'none'},reused=true`;
+                log(`[Create] NodeReuse: request=${createRequestId}, phase=${phase}, node=${newNodeId}, reason=already-exists`);
+            }
+
+            if (!canvasData.canvasMindmapBuildHistory.includes(newNodeId)) {
+                canvasData.canvasMindmapBuildHistory.push(newNodeId);
+                changed = true;
+            }
+            log(`[Create] HistoryUpdated: request=${createRequestId}, phase=${phase}, node=${newNodeId}, historySize=${canvasData.canvasMindmapBuildHistory.length}`);
 
             if (parentNode) {
-                const newEdge: CanvasEdgeLike = {
-                    id: generateRandomId(),
-                    fromNode: parentNode.id,
-                    toNode: newNodeId,
-                    fromSide: "right",
-                    toSide: "left"
-                };
-                canvasData.edges.push(newEdge);
-                log(`[Create] EdgeCreated: phase=${phase}, edge=${newEdge.id}, from=${parentNode.id}, to=${newNodeId}`);
+                const existingEdge = canvasData.edges.find(edge => edge.id === newEdgeId);
+                if (!existingEdge) {
+                    const newEdge: CanvasEdgeLike = {
+                        id: newEdgeId,
+                        fromNode: parentNode.id,
+                        toNode: newNodeId,
+                        fromSide: "right",
+                        toSide: "left"
+                    };
+                    canvasData.edges.push(newEdge);
+                    changed = true;
+                    log(`[Create] ${edgeEvent}: request=${createRequestId}, phase=${phase}, edge=${newEdge.id}, from=${parentNode.id}, to=${newNodeId}`);
+                } else {
+                    log(`[Create] EdgeReuse: request=${createRequestId}, phase=${phase}, edge=${newEdgeId}, from=${parentNode.id}, to=${newNodeId}, reason=already-exists`);
+                }
                 
                 if (parentNode.id && this.canvasManager?.collapseStateManager?.isCollapsed(parentNode.id)) {
-                    newNode.unknownData = {
-                        ...newNode.unknownData,
-                        collapsedHide: true
-                    };
-                    log(`[Create] NewNodeCollapsedHideInherited: phase=${phase}, node=${newNodeId}, parent=${parentNode.id}`);
+                    const targetNode = existingNode || newNode;
+                    const previousUnknownData = targetNode.unknownData || {};
+                    if (previousUnknownData.collapsedHide !== true) {
+                        targetNode.unknownData = {
+                            ...previousUnknownData,
+                            collapsedHide: true
+                        };
+                        changed = true;
+                    }
+                    log(`[Create] NewNodeCollapsedHideInherited: request=${createRequestId}, phase=${phase}, node=${newNodeId}, parent=${parentNode.id}`);
                 }
             } else {
-                log(`[Create] EdgeSkipped: phase=${phase}, node=${newNodeId}, reason=no-parent`);
+                log(`[Create] EdgeSkipped: request=${createRequestId}, phase=${phase}, node=${newNodeId}, reason=no-parent`);
             }
 
-            return true; 
+            return changed;
         });
 
         log(
-            `[Create] AddNodeWriteResult: success=${success}, node=${newNodeId}, targetCanvas=${canvasFilePath}, ` +
+            `[Create] AddNodeWriteResult: request=${createRequestId}, success=${success}, node=${newNodeId}, edge=${newEdgeId}, targetCanvas=${canvasFilePath}, ` +
             `parent=${lastParentResolutionSummary}, placement=${lastPlacementSummary}`
         );
 
@@ -161,7 +198,7 @@ export class NodeCreationService {
 
         await this.postNodeCreation(newNodeId, canvasFilePath);
 
-        log(`[Create] AddNodeDone: node=${newNodeId}, targetCanvas=${canvasFilePath}`);
+        log(`[Create] AddNodeDone: request=${createRequestId}, node=${newNodeId}, edge=${newEdgeId}, targetCanvas=${canvasFilePath}`);
 
         new Notice('节点已成功添加到 canvas');
     }

@@ -4,10 +4,17 @@ import {
     CanvasLike,
     CanvasNodeLike
 } from '../types';
-import { log, logVerbose } from '../../utils/logger';
+import {
+    classifyDiagnosticPhase,
+    log,
+    logEvent,
+    logVerbose,
+    resolveDiagnosticLogLevel,
+} from '../../utils/logger';
 import { getEdgesFromCanvas, getNodeIdFromEdgeEndpoint, isRecord } from '../../utils/canvas-utils';
 import { CONSTANTS } from '../../constants';
 import { Platform } from 'obsidian';
+import type { DiagnosticPhase, LogLevel } from '../../utils/logging/types';
 
 
 export interface EdgeGeomDiagnostics {
@@ -56,7 +63,148 @@ export interface OffsetCleanupOptions {
     sourceTag?: string;
 }
 
+export interface DiagnosticPhaseLogResult {
+    level: LogLevel;
+    finalBad: boolean;
+    classification: string;
+}
+
+type NodeDomVisibilityState = 'visible' | 'zero' | 'missing';
+type EdgeVisibilityBucket = 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+type EdgeScreenRisk = 'high' | 'medium' | 'low';
+
 export class EdgeGeometryService {
+    private getNodeDomVisibilityState(node: CanvasNodeLike | undefined): NodeDomVisibilityState {
+        if (!node) return 'missing';
+        const nodeEl = (node).nodeEl;
+        if (!nodeEl || !(nodeEl instanceof HTMLElement)) return 'missing';
+
+        const display = window.getComputedStyle(nodeEl).display;
+        if (display === 'none') return 'zero';
+
+        const rectHeight = nodeEl.getBoundingClientRect().height;
+        return rectHeight > 0 ? 'visible' : 'zero';
+    }
+
+    private classifyEdgeVisibilityBucket(
+        fromState: NodeDomVisibilityState,
+        toState: NodeDomVisibilityState
+    ): EdgeVisibilityBucket {
+        if (fromState === 'visible' && toState === 'visible') {
+            return 'both-visible';
+        }
+
+        if (fromState === 'visible' || toState === 'visible') {
+            return 'one-side-visible';
+        }
+
+        return 'virtualized-involved';
+    }
+
+    private deriveEdgeScreenRisk(bucket: EdgeVisibilityBucket): EdgeScreenRisk {
+        switch (bucket) {
+            case 'both-visible':
+                return 'high';
+            case 'one-side-visible':
+                return 'medium';
+            case 'virtualized-involved':
+            default:
+                return 'low';
+        }
+    }
+
+    private formatVisibilityBucketCounts(counts: Record<EdgeVisibilityBucket, number>): string {
+        return [
+            `both-visible:${counts['both-visible']}`,
+            `one-side-visible:${counts['one-side-visible']}`,
+            `virtualized-involved:${counts['virtualized-involved']}`,
+        ].join('|');
+    }
+
+    private buildCoverageNote(summary: EdgeScreenGapSummary): string {
+        if (summary.sampledEdges <= 0) {
+            return 'no-visible-samples';
+        }
+
+        if (summary.oneSideVisibleEdges > 0 || summary.bothVirtualizedEdges > 0) {
+            return 'partial-observation:visible-residual-only';
+        }
+
+        if (summary.sampledEdges < summary.bothVisibleEdges) {
+            return 'partial-observation:sample-limited';
+        }
+
+        return 'full-visible-coverage';
+    }
+
+    emitDiagnosticPhaseSummary(options: {
+        phase: DiagnosticPhase;
+        tag: string;
+        anomalyStats: OffsetAnomalyStats;
+        gapSummary: EdgeScreenGapSummary;
+        contextId?: string;
+        extra?: Record<string, unknown>;
+    }): DiagnosticPhaseLogResult {
+        const hasAnomaly = options.anomalyStats.anomalous > 0;
+        const hasBadEdges = options.gapSummary.residualBadEdges > 0
+            || options.gapSummary.maxResidualGap > options.gapSummary.badGapThresholdPx;
+        const hasPartialObservation = options.gapSummary.oneSideVisibleEdges > 0
+            || options.gapSummary.bothVirtualizedEdges > 0;
+        const visibilityCoverageRatio = options.gapSummary.bothVisibleEdges > 0
+            ? Number((options.gapSummary.sampledEdges / options.gapSummary.bothVisibleEdges).toFixed(3))
+            : 1;
+        const coverageNote = this.buildCoverageNote(options.gapSummary);
+        const classification = classifyDiagnosticPhase(options.phase);
+        const finalBad = classification.isFinal && (hasAnomaly || hasBadEdges);
+        const level = resolveDiagnosticLogLevel({
+            phase: options.phase,
+            hasBadEdges,
+            hasAnomaly,
+            residualGap: options.gapSummary.maxResidualGap,
+            severeGapThreshold: Math.max(20, options.gapSummary.badGapThresholdPx * 3),
+        });
+        const label = finalBad
+            ? `${options.phase}:final-bad`
+            : (hasAnomaly || hasBadEdges
+                ? `${options.phase}:expected-transient`
+                : `${options.phase}:healthy`);
+
+        logEvent({
+            level,
+            subsystem: 'layout',
+            event: 'DiagnosticPhase',
+            message: options.tag,
+            phase: options.phase,
+            classification: label,
+            data: {
+                contextId: options.contextId || 'none',
+                expectedTransient: classification.expectedTransient,
+                isFinal: classification.isFinal,
+                hasAnomaly,
+                hasBadEdges,
+                anomalyCount: options.anomalyStats.anomalous,
+                residualBadEdges: options.gapSummary.residualBadEdges,
+                maxResidualGap: Number(options.gapSummary.maxResidualGap.toFixed(2)),
+                badGapThresholdPx: Number(options.gapSummary.badGapThresholdPx.toFixed(2)),
+                allEdges: options.gapSummary.allEdges,
+                bothVisibleEdges: options.gapSummary.bothVisibleEdges,
+                oneSideVisibleEdges: options.gapSummary.oneSideVisibleEdges,
+                bothVirtualizedEdges: options.gapSummary.bothVirtualizedEdges,
+                sampledEdges: options.gapSummary.sampledEdges,
+                hasPartialObservation,
+                visibilityCoverageRatio,
+                coverageNote,
+                ...(options.extra || {})
+            }
+        });
+
+        return {
+            level,
+            finalBad,
+            classification: label,
+        };
+    }
+
     private getCanvasScaleAbs(canvas: CanvasLike): number {
         const zoomRaw = Number((canvas)?.zoom);
         if (Number.isFinite(zoomRaw)) {
@@ -1148,14 +1296,19 @@ export class EdgeGeometryService {
 
             const errF = bzrFrom ? Math.hypot(bzrFrom.x - expFrom.x, bzrFrom.y - expFrom.y) : -1;
             const errT = bzrTo ? Math.hypot(bzrTo.x - expTo.x, bzrTo.y - expTo.y) : -1;
-            const ok = errF >= 0 && errT >= 0 && errF < 8 && errT < 8;
+            const hasEndpointData = errF >= 0 && errT >= 0;
+            const ok = hasEndpointData && errF < 8 && errT < 8;
 
             const bzrFStr = bzrFrom ? `(${bzrFrom.x.toFixed(0)},${bzrFrom.y.toFixed(0)})` : 'n/a';
             const bzrTStr = bzrTo ? `(${bzrTo.x.toFixed(0)},${bzrTo.y.toFixed(0)})` : 'n/a';
             const expFStr = `(${expFrom.x.toFixed(0)},${expFrom.y.toFixed(0)})`;
             const expTStr = `(${expTo.x.toFixed(0)},${expTo.y.toFixed(0)})`;
 
-            edgeLines.push(`  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errF.toFixed(1)}/${errT.toFixed(1)} ${ok ? '✓' : '✗'}`);
+            const errSummary = hasEndpointData
+                ? `${errF.toFixed(1)}/${errT.toFixed(1)}`
+                : 'n/a';
+            const status = hasEndpointData ? (ok ? '✓' : '✗') : 'deferred';
+            edgeLines.push(`  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errSummary} ${status}`);
         }
 
         if (edgeLines.length > 0) {
@@ -1460,8 +1613,8 @@ export class EdgeGeometryService {
      * 输出格式:
      *   [DiagFull-TAG] NodeSnapshot: 统计摘要
      *   [DiagFull-TAG] NodeMismatch: 全部 |domH-memH|>5px 的节点，按差值降序
-     *   [DiagFull-TAG] EdgeSnapshot: 统计摘要
-     *   [DiagFull-TAG] EdgeBad: 全部 err>8px 的边（bezier vs expected），按误差降序
+     *   [DiagFull-TAG] EdgeSnapshot: 统计摘要（含 noData，表示几何未完全可观测）
+     *   [DiagFull-TAG] EdgeBad: 全部 err>8px 的边（仅统计具备完整 bezier/bbox 数据的边），按误差降序
      */
     logFullDiagSnapshot(
         canvas: CanvasLike,
@@ -1536,12 +1689,27 @@ export class EdgeGeometryService {
         // === 边全量快照 ===
         const edgeRows: Array<{ maxErr: number; line: string }> = [];
         let edgeOk = 0, edgeWarn = 0, edgeBad = 0, edgeNoData = 0;
+        const edgeNoDataRows: string[] = [];
+        const edgeDeferredByBucket: Record<EdgeVisibilityBucket, number> = {
+            'both-visible': 0,
+            'one-side-visible': 0,
+            'virtualized-involved': 0,
+        };
+        const edgeBadByBucket: Record<EdgeVisibilityBucket, number> = {
+            'both-visible': 0,
+            'one-side-visible': 0,
+            'virtualized-involved': 0,
+        };
 
         for (const edge of edges) {
             const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode) ?? '';
             const toId = getNodeIdFromEdgeEndpoint((edge).to) ?? this.toStringId((edge).toNode) ?? '';
             const fromNode = allNodes.get(fromId);
             const toNode = allNodes.get(toId);
+            const fromDomState = this.getNodeDomVisibilityState(fromNode);
+            const toDomState = this.getNodeDomVisibilityState(toNode);
+            const visibilityBucket = this.classifyEdgeVisibilityBucket(fromDomState, toDomState);
+            const screenRisk = this.deriveEdgeScreenRisk(visibilityBucket);
 
             const bezier = (edge).bezier;
             const bzrFrom = bezier?.from;
@@ -1552,6 +1720,19 @@ export class EdgeGeometryService {
 
             if (!fromBbox || !toBbox || !bzrFrom || !bzrTo) {
                 edgeNoData++;
+                edgeDeferredByBucket[visibilityBucket]++;
+                if (edgeNoDataRows.length < 20) {
+                    const reason = [
+                        !fromBbox ? 'from-bbox-missing' : '',
+                        !toBbox ? 'to-bbox-missing' : '',
+                        !bzrFrom ? 'bezier-from-missing' : '',
+                        !bzrTo ? 'bezier-to-missing' : '',
+                    ].filter(Boolean).join('|') || 'unknown';
+                    edgeNoDataRows.push(
+                        `  ${(edge.id ?? '?').slice(0, 8)} ${fromId.slice(0, 8)}(${fromDomState})->${toId.slice(0, 8)}(${toDomState}): ` +
+                        `scope=${visibilityBucket}, screenRisk=${screenRisk}, reason=${reason}`
+                    );
+                }
                 continue;
             }
 
@@ -1569,6 +1750,7 @@ export class EdgeGeometryService {
 
             // 只记录 err > 8 的边（stub=7px 正常，>8 才异常）
             if (maxErr > 8) {
+                edgeBadByBucket[visibilityBucket]++;
                 const fromMemH = fromNode && typeof (fromNode).height === 'number' ? (fromNode).height : -1;
                 const fromDomH = fromNode ? ((fromNode).nodeEl)?.offsetHeight ?? 0 : -1;
                 const toMemH = toNode && typeof (toNode).height === 'number' ? (toNode).height : -1;
@@ -1577,16 +1759,34 @@ export class EdgeGeometryService {
                 const bzrTStr = `(${bzrTo.x.toFixed(0)},${bzrTo.y.toFixed(0)})`;
                 const expFStr = `(${expFrom.x.toFixed(0)},${expFrom.y.toFixed(0)})`;
                 const expTStr = `(${expTo.x.toFixed(0)},${expTo.y.toFixed(0)})`;
-                const line = `  ${(edge.id ?? '?').slice(0, 8)} ${fromId.slice(0, 8)}(m=${fromMemH},d=${fromDomH})->${toId.slice(0, 8)}(m=${toMemH},d=${toDomH}): bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} errF=${errF.toFixed(1)} errT=${errT.toFixed(1)}`;
+                const line =
+                    `  ${(edge.id ?? '?').slice(0, 8)} ${fromId.slice(0, 8)}(m=${fromMemH},d=${fromDomH},s=${fromDomState})->` +
+                    `${toId.slice(0, 8)}(m=${toMemH},d=${toDomH},s=${toDomState}): ` +
+                    `scope=${visibilityBucket}, screenRisk=${screenRisk}, ` +
+                    `bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} errF=${errF.toFixed(1)} errT=${errT.toFixed(1)}`;
                 edgeRows.push({ maxErr, line });
             }
         }
 
         edgeRows.sort((a, b) => b.maxErr - a.maxErr);
 
-        logVerbose(`[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`);
+        logVerbose(
+            `[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, ` +
+            `bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`
+        );
+        if (edgeNoDataRows.length > 0) {
+            logVerbose(
+                `[DiagFull-${tag}] EdgeDeferred(${edgeNoDataRows.length} noData/deferred, ` +
+                `buckets=${this.formatVisibilityBucketCounts(edgeDeferredByBucket)}, desc):\n${edgeNoDataRows.join('\n')}`
+            );
+        } else {
+            logVerbose(`[DiagFull-${tag}] EdgeDeferred: 无 noData/deferred 边 ✓`);
+        }
         if (edgeRows.length > 0) {
-            logVerbose(`[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`);
+            logVerbose(
+                `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
+                `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`
+            );
         } else {
             logVerbose(`[DiagFull-${tag}] EdgeBad: 无边 err > 8px ✓`);
         }

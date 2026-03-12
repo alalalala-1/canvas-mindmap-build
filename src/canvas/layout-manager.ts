@@ -408,6 +408,19 @@ export class LayoutManager {
 
                 const anomalyBeforeStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(pulseNodes);
                 const gapBefore = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(pulseCanvas, pulseNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'transient-open-pulse',
+                    tag: `open-pulse-${pulseNo}`,
+                    anomalyStats: anomalyBeforeStats,
+                    gapSummary: gapBefore,
+                    contextId: stabilizeId,
+                    extra: {
+                        source,
+                        pulseNo,
+                        visibleNodeCount,
+                        lateVisibleNodes,
+                    }
+                });
                 const lateVisibleSignal = this.evaluateLateVisibleSignal(
                     pulseNo,
                     lateVisibleNodes,
@@ -567,6 +580,16 @@ export class LayoutManager {
                 const finalView = getCanvasView(this.app);
                 const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? pulseCanvas) : pulseCanvas;
                 const finalNodes = this.getCanvasNodes(finalCanvas);
+                const finalAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(finalNodes);
+                const finalGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(finalCanvas, finalNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'final',
+                    tag: 'open-final',
+                    anomalyStats: finalAnomalyStats,
+                    gapSummary: finalGapSummary,
+                    contextId: stabilizeId,
+                    extra: { source }
+                });
                 if (this.shouldLogVerboseCanvasDiagnostics()) {
                     this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'open-final', stabilizeId);
                 }
@@ -1248,6 +1271,16 @@ export class LayoutManager {
 
             // 诊断日志：arrange前的节点/边几何与视觉层快照
             if (this.shouldLogVerboseCanvasDiagnostics()) {
+                const preArrangeAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(allNodes);
+                const preArrangeGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'transient-pre',
+                    tag: 'pre-arrange',
+                    anomalyStats: preArrangeAnomalyStats,
+                    gapSummary: preArrangeGapSummary,
+                    contextId: arrangeId,
+                    extra: { source }
+                });
                 this.edgeGeometryService.logFullDiagSnapshot(canvas, allNodes, 'pre-arrange', arrangeId);
                 this.edgeGeometryService.logComprehensiveDiag(canvas, allNodes, 'pre-arrange', arrangeId);
             }
@@ -1431,6 +1464,16 @@ export class LayoutManager {
 
             // 诊断日志：reload后的节点/边几何与视觉层快照
             if (this.shouldLogVerboseCanvasDiagnostics()) {
+                const postReloadAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(freshNodes);
+                const postReloadGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(freshCanvas, freshNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'transient-post-reload',
+                    tag: 'post-reload',
+                    anomalyStats: postReloadAnomalyStats,
+                    gapSummary: postReloadGapSummary,
+                    contextId: arrangeId,
+                    extra: { source }
+                });
                 this.edgeGeometryService.logFullDiagSnapshot(freshCanvas, freshNodes, 'post-reload', arrangeId);
                 this.edgeGeometryService.logComprehensiveDiag(freshCanvas, freshNodes, 'post-reload', arrangeId);
                 this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-reload-style-truth', arrangeId);
@@ -1525,6 +1568,16 @@ export class LayoutManager {
             log(`[Layout] 双pass边刷新完成: pass1=${refreshResult.pass1}, pass2=${refreshResult.pass2}, bezierChanged=${refreshResult.bezierChangedPass1}/${refreshResult.bezierChangedPass2}, pathDChanged=${refreshResult.pathDChangedPass1}/${refreshResult.pathDChangedPass2}, ctx=${arrangeId}`);
             await edgeRefreshWatchPromise;
             if (this.shouldLogVerboseCanvasDiagnostics()) {
+                const postEdgeRefreshAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(freshNodes);
+                const postEdgeRefreshGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(freshCanvas, freshNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'transient-post-edge-refresh',
+                    tag: 'post-edge-refresh',
+                    anomalyStats: postEdgeRefreshAnomalyStats,
+                    gapSummary: postEdgeRefreshGapSummary,
+                    contextId: arrangeId,
+                    extra: { source }
+                });
                 this.edgeGeometryService.logNodeStyleTruth(freshNodes, 'post-edge-refresh-style-truth', arrangeId);
             }
 
@@ -1578,6 +1631,16 @@ export class LayoutManager {
                 const finalView = getCanvasView(this.app);
                 const finalCanvas = finalView ? (this.getCanvasFromView(finalView) ?? freshCanvas) : freshCanvas;
                 const finalNodes = this.getCanvasNodes(finalCanvas);
+                const finalAnomalyStats = this.edgeGeometryService.countAnomalousVisibleNodesDetailed(finalNodes);
+                const finalGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(finalCanvas, finalNodes);
+                this.edgeGeometryService.emitDiagnosticPhaseSummary({
+                    phase: 'final',
+                    tag: 'final',
+                    anomalyStats: finalAnomalyStats,
+                    gapSummary: finalGapSummary,
+                    contextId: arrangeId,
+                    extra: { source }
+                });
                 if (this.shouldLogVerboseCanvasDiagnostics()) {
                     this.edgeGeometryService.logFullDiagSnapshot(finalCanvas, finalNodes, 'final', arrangeId);
                     this.edgeGeometryService.logComprehensiveDiag(finalCanvas, finalNodes, 'final', arrangeId);

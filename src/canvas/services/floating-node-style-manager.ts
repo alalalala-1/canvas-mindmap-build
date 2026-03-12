@@ -7,6 +7,8 @@ export class FloatingNodeStyleManager {
     private canvas: CanvasLike | null = null;
     private pendingTimeouts: Map<string, Set<ReturnType<typeof setTimeout>>> = new Map();
     private elementCache: Map<string, HTMLElement> = new Map();
+    private pendingApplyNodeIds: Set<string> = new Set();
+    private pendingClearNodeIds: Set<string> = new Set();
 
     setCanvas(canvas: CanvasLike): void {
         this.canvas = canvas;
@@ -21,6 +23,23 @@ export class FloatingNodeStyleManager {
         }
         this.pendingTimeouts.clear();
         this.elementCache.clear();
+        this.pendingApplyNodeIds.clear();
+        this.pendingClearNodeIds.clear();
+    }
+
+    notifyNodeMountedVisible(nodeId: string): void {
+        if (!nodeId) return;
+
+        if (this.pendingApplyNodeIds.delete(nodeId)) {
+            log(`[Style] 节点已挂载，恢复应用红框: ${nodeId}`);
+            this.applyFloatingStyle(nodeId);
+            return;
+        }
+
+        if (this.pendingClearNodeIds.delete(nodeId)) {
+            log(`[Style] 节点已挂载，恢复清除红框: ${nodeId}`);
+            this.clearFloatingStyle(nodeId);
+        }
     }
 
     private scheduleRetry(nodeId: string, callback: () => void, delay: number): void {
@@ -56,11 +75,14 @@ export class FloatingNodeStyleManager {
             this.clearPendingRetries(nodeId);
             const nodeEl = this.findNodeElement(nodeId);
             if (!nodeEl) {
-                log(`[Style] 找不到节点元素: ${nodeId}，将延迟重试`);
+                this.pendingApplyNodeIds.add(nodeId);
+                this.pendingClearNodeIds.delete(nodeId);
+                log(`[Style] 找不到节点元素: ${nodeId}，进入等待挂载队列`);
                 this.scheduleRetry(nodeId, () => this.applyFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
-                this.scheduleRetry(nodeId, () => this.applyFloatingStyleRetry(nodeId, 2), CONSTANTS.TIMING.RETRY_DELAY_LONG);
                 return false;
             }
+
+            this.pendingApplyNodeIds.delete(nodeId);
 
             nodeEl.classList.add(this.FLOATING_CLASS);
 
@@ -80,6 +102,9 @@ export class FloatingNodeStyleManager {
         if (nodeEl) {
             log(`[Style] 应用红框 (重试 #${retryNum}): ${nodeId}`);
             this.applyFloatingStyle(nodeId);
+        } else {
+            this.pendingApplyNodeIds.add(nodeId);
+            log(`[Style] 应用红框重试 #${retryNum}: ${nodeId}, 节点元素仍未挂载，等待可见`);
         }
     }
 
@@ -88,14 +113,13 @@ export class FloatingNodeStyleManager {
             this.clearPendingRetries(nodeId);
             const cleared = this.removeFloatingClass(nodeId);
             if (!cleared) {
-                log(`[Style] 清除红框时找不到节点元素: ${nodeId}，将延迟重试`);
-                let retryIndex = 1;
-                for (const delay of CONSTANTS.BUTTON_CHECK_INTERVALS) {
-                    this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, retryIndex), delay);
-                    retryIndex += 1;
-                }
+                this.pendingClearNodeIds.add(nodeId);
+                this.pendingApplyNodeIds.delete(nodeId);
+                log(`[Style] 清除红框时找不到节点元素: ${nodeId}，进入等待挂载队列`);
+                this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
                 return false;
             }
+            this.pendingClearNodeIds.delete(nodeId);
             return true;
         } catch (err) {
             log('[Style] 清除失败:', err);
@@ -122,7 +146,8 @@ export class FloatingNodeStyleManager {
             void nodeEl.offsetHeight;
             log(`[Style] 清除红框 (重试 #${retryNum}): ${nodeId}`);
         } else {
-            log(`[Style] 清除红框重试 #${retryNum}: ${nodeId}, 节点元素未找到`);
+            this.pendingClearNodeIds.add(nodeId);
+            log(`[Style] 清除红框重试 #${retryNum}: ${nodeId}, 节点元素未找到，等待可见`);
         }
     }
 

@@ -10,6 +10,9 @@ import {
 	getSelectedNodeFromCanvas,
 	hasChildNodes,
 	identifyRootNodes,
+	isCanvasEdgeConnectGestureTarget,
+	isCanvasNativeInsertGestureTarget,
+	shouldBypassCanvasNodeGestureTarget,
 } from '../utils/canvas-utils';
 
 function createClassList(initial: string[] = []) {
@@ -29,6 +32,17 @@ function createMockElement(initial: string[] = []): HTMLElement {
 	return {
 		classList: createClassList(initial),
 	} as unknown as HTMLElement;
+}
+
+function createGestureTarget(hits: string[] = []): Element {
+	const hitSet = new Set(hits);
+	const target = {
+		closest: (selector: string) => {
+			const tokens = selector.split(',').map(token => token.trim());
+			return tokens.some(token => hitSet.has(token)) ? (target as Element) : null;
+		},
+	};
+	return target as unknown as Element;
 }
 
 describe('canvas-utils', () => {
@@ -268,6 +282,38 @@ describe('canvas-utils', () => {
 			expect(node.nodeEl.classList.contains('is-editing')).toBe(false);
 			expect(edge.lineGroupEl.classList.contains('is-selected')).toBe(false);
 			expect(edge.lineEndGroupEl.classList.contains('is-focused')).toBe(false);
+		});
+	});
+
+	describe('gesture target helpers', () => {
+		it('should detect edge connection point targets', () => {
+			const target = createGestureTarget(['.canvas-node-connection-point']);
+			expect(isCanvasEdgeConnectGestureTarget(target)).toBe(true);
+		});
+
+		it('should exclude edge connect targets from native insert gesture', () => {
+			const target = createGestureTarget(['.canvas-node-connection-point']);
+			expect(isCanvasNativeInsertGestureTarget(target)).toBe(false);
+		});
+
+		it('should treat node-insert-event inside canvas node as native insert gesture', () => {
+			const target = createGestureTarget(['.node-insert-event', '.canvas-node']);
+			expect(isCanvasNativeInsertGestureTarget(target)).toBe(true);
+		});
+
+		it('should not treat plain canvas node target as native insert gesture', () => {
+			const target = createGestureTarget(['.canvas-node']);
+			expect(isCanvasNativeInsertGestureTarget(target)).toBe(false);
+		});
+
+		it('should bypass node gesture handling for edge connect targets', () => {
+			const target = createGestureTarget(['[data-connection-point]']);
+			expect(shouldBypassCanvasNodeGestureTarget(target)).toBe(true);
+		});
+
+		it('should bypass node gesture handling for node-insert-event inside canvas node', () => {
+			const target = createGestureTarget(['.node-insert-event', '.canvas-node']);
+			expect(shouldBypassCanvasNodeGestureTarget(target)).toBe(true);
 		});
 	});
 });

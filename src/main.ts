@@ -3,9 +3,18 @@ import { CanvasMindmapBuildSettings, DEFAULT_SETTINGS } from './settings/types';
 import { CanvasMindmapBuildSettingTab } from './settings/setting-tab';
 import { CollapseStateManager } from './state/collapse-state';
 import { CanvasManager } from './canvas/canvas-manager';
-import { updateLoggerConfig, log } from './utils/logger';
+import {
+    buildDebugReport,
+    createLogTrace,
+    finishLogTrace,
+    log,
+    logEvent,
+    updateLoggerConfig,
+} from './utils/logger';
 import { validateSettings, migrateSettings } from './settings/validator';
 import { CSS_VARS } from './constants';
+import { makeSnapshot, snapshotCanvasRuntime, snapshotViewportState, snapshotViewState } from './utils/logging/snapshots';
+import { getCanvasView } from './utils/canvas-utils';
 
 export default class CanvasMindmapBuildPlugin extends Plugin {
     settings: CanvasMindmapBuildSettings;
@@ -35,6 +44,9 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
             id: 'add-to-canvas-mindmap',
             name: 'Add to canvas mindmap',
             callback: async () => {
+                const trace = createLogTrace('command.add-to-canvas-mindmap', {
+                    activeView: snapshotViewState(this.app.workspace.getActiveViewOfType(MarkdownView)),
+                });
                 const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
                 const selection = mdView?.editor.getSelection() || '';
                 log(
@@ -42,10 +54,47 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
                     `sourceFile=${mdView?.file?.path || 'none'}, lastClickedNodeId=${this.lastClickedNodeId || 'none'}, ` +
                     `lastClickedCanvasFilePath=${this.lastClickedCanvasFilePath || 'none'}`
                 );
-                if (mdView && selection) {
-                    await this.canvasManager.addNodeToCanvas(selection, mdView.file);
-                } else {
-                    new Notice('请在 Markdown 编辑器中选择文本');
+                logEvent({
+                    level: 'info',
+                    subsystem: 'command',
+                    event: 'AddToCanvasMindmap',
+                    message: 'command invoked',
+                    traceId: trace.traceId,
+                    data: {
+                        hasMarkdownView: !!mdView,
+                        selectionLength: selection.length,
+                        sourceFile: mdView?.file?.path || 'none',
+                        lastClickedNodeId: this.lastClickedNodeId || 'none',
+                        lastClickedCanvasFilePath: this.lastClickedCanvasFilePath || 'none',
+                    }
+                });
+
+                try {
+                    if (mdView && selection) {
+                        await this.canvasManager.addNodeToCanvas(selection, mdView.file);
+                        finishLogTrace(trace, {
+                            status: 'success',
+                            sourceFile: mdView.file?.path || 'none',
+                            selectionLength: selection.length,
+                        });
+                    } else {
+                        new Notice('请在 Markdown 编辑器中选择文本');
+                        finishLogTrace(trace, {
+                            status: 'notice',
+                            reason: 'no-selection',
+                        });
+                    }
+                } catch (err) {
+                    logEvent({
+                        level: 'error',
+                        subsystem: 'command',
+                        event: 'AddToCanvasMindmapFailed',
+                        message: 'add to canvas mindmap failed',
+                        traceId: trace.traceId,
+                        data: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+                    });
+                    finishLogTrace(trace, { status: 'error' });
+                    throw err;
                 }
             }
         });
@@ -53,13 +102,114 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         this.addCommand({
             id: 'arrange-canvas-mindmap-layout',
             name: 'Arrange canvas mindmap layout',
-            callback: () => this.canvasManager.arrangeCanvas(),
+            callback: async () => {
+                const trace = createLogTrace('command.arrange-canvas-mindmap-layout', {
+                    canvasView: snapshotViewState(getCanvasView(this.app)),
+                    viewport: snapshotViewportState(),
+                });
+                try {
+                    await this.canvasManager.arrangeCanvas();
+                    finishLogTrace(trace, { status: 'scheduled' });
+                } catch (err) {
+                    logEvent({
+                        level: 'error',
+                        subsystem: 'command',
+                        event: 'ArrangeCanvasMindmapFailed',
+                        message: 'arrange canvas command failed',
+                        traceId: trace.traceId,
+                        data: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+                    });
+                    finishLogTrace(trace, { status: 'error' });
+                    throw err;
+                }
+            },
         });
 
         this.addCommand({
             id: 'repair-node-fromlinks',
             name: 'Repair node from links (修复节点源链接)',
-            callback: () => this.canvasManager.repairNodeFromLinks(),
+            callback: async () => {
+                const trace = createLogTrace('command.repair-node-fromlinks', {
+                    canvasView: snapshotViewState(getCanvasView(this.app)),
+                });
+                try {
+                    await this.canvasManager.repairNodeFromLinks();
+                    finishLogTrace(trace, { status: 'success' });
+                } catch (err) {
+                    logEvent({
+                        level: 'error',
+                        subsystem: 'command',
+                        event: 'RepairNodeFromLinksFailed',
+                        message: 'repair node from links failed',
+                        traceId: trace.traceId,
+                        data: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+                    });
+                    finishLogTrace(trace, { status: 'error' });
+                    throw err;
+                }
+            },
+        });
+
+        this.addCommand({
+            id: 'export-canvas-mindmap-debug-report',
+            name: 'Export canvas mindmap debug report',
+            callback: async () => {
+                const canvasView = getCanvasView(this.app);
+                const canvas = (canvasView as { canvas?: unknown } | null)?.canvas;
+                const trace = createLogTrace('command.export-canvas-mindmap-debug-report', {
+                    canvasView: snapshotViewState(canvasView),
+                });
+                let copied = false;
+
+                try {
+                    const report = buildDebugReport({
+                        title: 'Canvas Mindmap Debug Report',
+                        limit: 250,
+                        snapshots: [
+                            makeSnapshot('viewport', snapshotViewportState()),
+                            makeSnapshot('canvas-view', snapshotViewState(canvasView)),
+                            makeSnapshot('canvas-runtime', snapshotCanvasRuntime(canvas as Parameters<typeof snapshotCanvasRuntime>[0])),
+                            makeSnapshot('plugin-settings', {
+                                canvasFilePath: this.settings.canvasFilePath || 'unset',
+                                debugLogging: this.settings.enableDebugLogging,
+                                verboseDiagnostics: this.settings.enableVerboseCanvasDiagnostics,
+                                textNodeWidth: this.settings.textNodeWidth,
+                                textNodeMaxHeight: this.settings.textNodeMaxHeight,
+                                horizontalSpacing: this.settings.horizontalSpacing,
+                                verticalSpacing: this.settings.verticalSpacing,
+                            })
+                        ]
+                    });
+
+                    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+                        await navigator.clipboard.writeText(report);
+                        copied = true;
+                    }
+
+                    console.info(report);
+                    logEvent({
+                        level: 'info',
+                        subsystem: 'command',
+                        event: 'ExportDebugReport',
+                        message: 'debug report generated',
+                        traceId: trace.traceId,
+                        data: { copied, length: report.length }
+                    });
+                    new Notice(copied ? '调试报告已复制到剪贴板，并输出到控制台' : '调试报告已输出到控制台');
+                    finishLogTrace(trace, { status: 'success', copied });
+                } catch (err) {
+                    logEvent({
+                        level: 'error',
+                        subsystem: 'command',
+                        event: 'ExportDebugReportFailed',
+                        message: 'export debug report failed',
+                        traceId: trace.traceId,
+                        data: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
+                    });
+                    finishLogTrace(trace, { status: 'error', copied });
+                    throw err;
+                }
+            }
         });
 
         this.addCommand({
@@ -93,10 +243,26 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         });
 
         this.addSettingTab(new CanvasMindmapBuildSettingTab(this.app, this));
+        logEvent({
+            level: 'info',
+            subsystem: 'lifecycle',
+            event: 'PluginLoaded',
+            message: 'plugin onload complete',
+            data: {
+                commandCount: 10,
+                canvasFilePath: this.settings.canvasFilePath || 'unset',
+            }
+        });
     }
 
     onunload() {
         log('[Lifecycle] 插件卸载');
+        logEvent({
+            level: 'info',
+            subsystem: 'lifecycle',
+            event: 'PluginUnload',
+            message: 'plugin unloaded',
+        });
         this.canvasManager.unload();
     }
 
@@ -122,11 +288,29 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
 
             updateLoggerConfig(this.settings);
             log('[Settings] 加载成功');
+            logEvent({
+                level: 'info',
+                subsystem: 'settings',
+                event: 'LoadSettingsSuccess',
+                message: 'settings loaded',
+                data: {
+                    canvasFilePath: this.settings.canvasFilePath || 'unset',
+                    debugLogging: this.settings.enableDebugLogging,
+                    verboseDiagnostics: this.settings.enableVerboseCanvasDiagnostics,
+                }
+            });
         } catch (e) {
             log('[Settings] 加载失败:', e);
             // [修复] 失败时也用Object.assign，保持引用
             Object.assign(this.settings, DEFAULT_SETTINGS);
             new Notice('加载插件设置失败，使用默认设置');
+            logEvent({
+                level: 'error',
+                subsystem: 'settings',
+                event: 'LoadSettingsFailed',
+                message: 'load settings failed and defaults were applied',
+                data: e instanceof Error ? { name: e.name, message: e.message, stack: e.stack } : String(e),
+            });
         }
     }
 
@@ -134,6 +318,17 @@ export default class CanvasMindmapBuildPlugin extends Plugin {
         await this.saveData(this.settings);
         updateLoggerConfig(this.settings);
         log('[Settings] 已保存');
+        logEvent({
+            level: 'info',
+            subsystem: 'settings',
+            event: 'SaveSettings',
+            message: 'settings saved',
+            data: {
+                canvasFilePath: this.settings.canvasFilePath || 'unset',
+                debugLogging: this.settings.enableDebugLogging,
+                verboseDiagnostics: this.settings.enableVerboseCanvasDiagnostics,
+            }
+        });
     }
 
     updateCollapseButtonColor() {

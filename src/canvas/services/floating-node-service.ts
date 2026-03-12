@@ -732,6 +732,10 @@ export class FloatingNodeService {
         this.styleManager.applyFloatingStyle(nodeId);
     }
 
+    notifyNodeMountedVisible(nodeId: string): void {
+        this.styleManager.notifyNodeMountedVisible(nodeId);
+    }
+
     /**
      * 清除单个节点的浮动样式
      */

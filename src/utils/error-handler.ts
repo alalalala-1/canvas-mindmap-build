@@ -1,5 +1,5 @@
 import { Notice } from 'obsidian';
-import { log } from './logger';
+import { log, logEvent } from './logger';
 
 export interface ErrorHandlerOptions {
     context: string;
@@ -17,6 +17,20 @@ export function handleError(err: unknown, options: ErrorHandlerOptions): void {
         : `[${context}] ${errorMessage}`;
     
     log(logMessage, err);
+    logEvent({
+        level: 'error',
+        subsystem: 'error',
+        event: context,
+        message: message || `${context}失败`,
+        data: {
+            errorMessage,
+            showNotice,
+            rethrow,
+            error: err instanceof Error
+                ? { name: err.name, message: err.message, stack: err.stack }
+                : String(err),
+        }
+    });
     
     if (showNotice) {
         const noticeMessage = message || `${context}失败`;
