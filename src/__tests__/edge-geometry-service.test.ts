@@ -42,6 +42,82 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 		clearRecentLogs();
 	});
 
+	it('should suppress refresh-pending edge bad details when only partial-observation rows are bad', () => {
+		const service = new EdgeGeometryService() as unknown as {
+			getEdgeBadDumpPlan: (
+				pendingHint: { refreshPending: boolean; expectedRecovery: string; geometryState: string } | null,
+				edgeRows: Array<{
+					maxErr: number;
+					line: string;
+					visibilityBucket: 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+					screenRisk: 'high' | 'medium' | 'low';
+				}>
+			) => {
+				mode: 'full' | 'summary-only' | 'focused';
+				rowsToLog: Array<{ line: string }>;
+				suppressedCount: number;
+				actionableCount: number;
+				reason: string;
+			};
+		};
+
+		const plan = service.getEdgeBadDumpPlan(
+			{ refreshPending: true, expectedRecovery: 'edge-refresh-pass', geometryState: 'refresh-pending' },
+			[
+				{ maxErr: 48, line: 'edge-a', visibilityBucket: 'virtualized-involved', screenRisk: 'low' },
+				{ maxErr: 16, line: 'edge-b', visibilityBucket: 'one-side-visible', screenRisk: 'medium' },
+			],
+		);
+
+		expect(plan).toMatchObject({
+			mode: 'summary-only',
+			rowsToLog: [],
+			suppressedCount: 2,
+			actionableCount: 0,
+			reason: 'refresh-pending-partial-observation-only',
+		});
+	});
+
+	it('should keep both-visible bad edges actionable during refresh-pending suppression', () => {
+		const service = new EdgeGeometryService() as unknown as {
+			getEdgeBadDumpPlan: (
+				pendingHint: { refreshPending: boolean; expectedRecovery: string; geometryState: string } | null,
+				edgeRows: Array<{
+					maxErr: number;
+					line: string;
+					visibilityBucket: 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+					screenRisk: 'high' | 'medium' | 'low';
+				}>
+			) => {
+				mode: 'full' | 'summary-only' | 'focused';
+				rowsToLog: Array<{ line: string; visibilityBucket: string }>;
+				suppressedCount: number;
+				actionableCount: number;
+				reason: string;
+			};
+		};
+
+		const plan = service.getEdgeBadDumpPlan(
+			{ refreshPending: true, expectedRecovery: 'edge-refresh-pass', geometryState: 'refresh-pending' },
+			[
+				{ maxErr: 36, line: 'edge-a', visibilityBucket: 'both-visible', screenRisk: 'high' },
+				{ maxErr: 18, line: 'edge-b', visibilityBucket: 'one-side-visible', screenRisk: 'medium' },
+			],
+		);
+
+		expect(plan).toMatchObject({
+			mode: 'focused',
+			suppressedCount: 1,
+			actionableCount: 1,
+			reason: 'refresh-pending-partial-observation-suppressed',
+		});
+		expect(plan.rowsToLog).toHaveLength(1);
+		expect(plan.rowsToLog[0]).toMatchObject({
+			line: 'edge-a',
+			visibilityBucket: 'both-visible',
+		});
+	});
+
 	it('should assess gap observation confidence for low-confidence and trusted coverage cases', () => {
 		const service = new EdgeGeometryService();
 

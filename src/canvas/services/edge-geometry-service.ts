@@ -80,6 +80,21 @@ type DiagnosticPendingHint = {
     geometryState: string;
 };
 
+type EdgeBadDetailRow = {
+    maxErr: number;
+    line: string;
+    visibilityBucket: EdgeVisibilityBucket;
+    screenRisk: EdgeScreenRisk;
+};
+
+type EdgeBadDumpPlan = {
+    mode: 'full' | 'summary-only' | 'focused';
+    rowsToLog: EdgeBadDetailRow[];
+    suppressedCount: number;
+    actionableCount: number;
+    reason: 'none' | 'refresh-pending-partial-observation-only' | 'refresh-pending-partial-observation-suppressed';
+};
+
 export class EdgeGeometryService {
     private getDiagnosticPendingHint(phase: DiagnosticPhase, tag: string): DiagnosticPendingHint | null {
         if (phase === 'transient-post-reload' || tag === 'post-reload') {
@@ -138,6 +153,52 @@ export class EdgeGeometryService {
             `one-side-visible:${counts['one-side-visible']}`,
             `virtualized-involved:${counts['virtualized-involved']}`,
         ].join('|');
+    }
+
+    private getEdgeBadDumpPlan(
+        pendingHint: DiagnosticPendingHint | null,
+        edgeRows: EdgeBadDetailRow[]
+    ): EdgeBadDumpPlan {
+        if (!pendingHint?.refreshPending || edgeRows.length === 0) {
+            return {
+                mode: 'full',
+                rowsToLog: edgeRows,
+                suppressedCount: 0,
+                actionableCount: edgeRows.filter(row => row.visibilityBucket === 'both-visible').length,
+                reason: 'none',
+            };
+        }
+
+        const actionableRows = edgeRows.filter(row => row.visibilityBucket === 'both-visible');
+        const suppressedRows = edgeRows.filter(row => row.visibilityBucket !== 'both-visible');
+
+        if (suppressedRows.length === 0) {
+            return {
+                mode: 'full',
+                rowsToLog: edgeRows,
+                suppressedCount: 0,
+                actionableCount: actionableRows.length,
+                reason: 'none',
+            };
+        }
+
+        if (actionableRows.length === 0) {
+            return {
+                mode: 'summary-only',
+                rowsToLog: [],
+                suppressedCount: suppressedRows.length,
+                actionableCount: 0,
+                reason: 'refresh-pending-partial-observation-only',
+            };
+        }
+
+        return {
+            mode: 'focused',
+            rowsToLog: actionableRows,
+            suppressedCount: suppressedRows.length,
+            actionableCount: actionableRows.length,
+            reason: 'refresh-pending-partial-observation-suppressed',
+        };
     }
 
     private buildCoverageNote(summary: EdgeScreenGapSummary): string {
@@ -1790,7 +1851,7 @@ export class EdgeGeometryService {
         }
 
         // === 边全量快照 ===
-        const edgeRows: Array<{ maxErr: number; line: string }> = [];
+        const edgeRows: EdgeBadDetailRow[] = [];
         let edgeOk = 0, edgeWarn = 0, edgeBad = 0, edgeNoData = 0;
         const edgeNoDataRows: string[] = [];
         const edgeDeferredByBucket: Record<EdgeVisibilityBucket, number> = {
@@ -1867,7 +1928,12 @@ export class EdgeGeometryService {
                     `${toId.slice(0, 8)}(m=${toMemH},d=${toDomH},s=${toDomState}): ` +
                     `scope=${visibilityBucket}, screenRisk=${screenRisk}, ` +
                     `bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} errF=${errF.toFixed(1)} errT=${errT.toFixed(1)}`;
-                edgeRows.push({ maxErr, line });
+                edgeRows.push({
+                    maxErr,
+                    line,
+                    visibilityBucket,
+                    screenRisk,
+                });
             }
         }
 
@@ -1893,11 +1959,29 @@ export class EdgeGeometryService {
         } else {
             logVerbose(`[DiagFull-${tag}] EdgeDeferred: 无 noData/deferred 边 ✓`);
         }
+        const edgeBadDumpPlan = this.getEdgeBadDumpPlan(pendingHint, edgeRows);
         if (edgeRows.length > 0) {
-            logVerbose(
-                `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
-                `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}${pendingHintSuffix}, desc):\n${edgeRows.slice(0, 30).map(r => r.line).join('\n')}`
-            );
+            if (edgeBadDumpPlan.mode === 'summary-only') {
+                logVerbose(
+                    `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
+                    `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}${pendingHintSuffix}, ` +
+                    `actionableBothVisible=${edgeBadDumpPlan.actionableCount}, ` +
+                    `suppressedPartialObservation=${edgeBadDumpPlan.suppressedCount}, ` +
+                    `reason=${edgeBadDumpPlan.reason})`
+                );
+            } else {
+                const descPrefix = edgeBadDumpPlan.mode === 'focused'
+                    ? `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
+                        `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}${pendingHintSuffix}, ` +
+                        `actionableBothVisible=${edgeBadDumpPlan.actionableCount}, ` +
+                        `suppressedPartialObservation=${edgeBadDumpPlan.suppressedCount}, ` +
+                        `reason=${edgeBadDumpPlan.reason}, desc):\n`
+                    : `[DiagFull-${tag}] EdgeBad(${edgeRows.length} err>8px, ` +
+                        `buckets=${this.formatVisibilityBucketCounts(edgeBadByBucket)}${pendingHintSuffix}, desc):\n`;
+                logVerbose(
+                    `${descPrefix}${edgeBadDumpPlan.rowsToLog.slice(0, 30).map(r => r.line).join('\n')}`
+                );
+            }
         } else {
             logVerbose(`[DiagFull-${tag}] EdgeBad: 无边 err > 8px ✓`);
         }
