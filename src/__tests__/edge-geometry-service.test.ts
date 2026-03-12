@@ -118,6 +118,86 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 		});
 	});
 
+	it('should suppress transient diagnostic details when refresh-pending has no actionable both-visible bad rows', () => {
+		const service = new EdgeGeometryService() as unknown as {
+			getDiagnosticDetailDumpPlan: (
+				pendingHint: { refreshPending: boolean; expectedRecovery: string; geometryState: string } | null,
+				detailRows: Array<{
+					line: string;
+					visibilityBucket: 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+					screenRisk: 'high' | 'medium' | 'low';
+					status: 'ok' | 'bad' | 'deferred';
+				}>
+			) => {
+				mode: 'full' | 'summary-only' | 'focused';
+				rowsToLog: Array<{ line: string }>;
+				suppressedCount: number;
+				actionableCount: number;
+				reason: string;
+			};
+		};
+
+		const plan = service.getDiagnosticDetailDumpPlan(
+			{ refreshPending: true, expectedRecovery: 'edge-refresh-pass', geometryState: 'refresh-pending' },
+			[
+				{ line: 'edge-a', visibilityBucket: 'both-visible', screenRisk: 'high', status: 'ok' },
+				{ line: 'edge-b', visibilityBucket: 'one-side-visible', screenRisk: 'medium', status: 'bad' },
+				{ line: 'edge-c', visibilityBucket: 'virtualized-involved', screenRisk: 'low', status: 'deferred' },
+			],
+		);
+
+		expect(plan).toMatchObject({
+			mode: 'summary-only',
+			rowsToLog: [],
+			suppressedCount: 3,
+			actionableCount: 0,
+			reason: 'refresh-pending-no-actionable-both-visible',
+		});
+	});
+
+	it('should keep only both-visible bad transient details actionable during refresh-pending', () => {
+		const service = new EdgeGeometryService() as unknown as {
+			getDiagnosticDetailDumpPlan: (
+				pendingHint: { refreshPending: boolean; expectedRecovery: string; geometryState: string } | null,
+				detailRows: Array<{
+					line: string;
+					visibilityBucket: 'both-visible' | 'one-side-visible' | 'virtualized-involved';
+					screenRisk: 'high' | 'medium' | 'low';
+					status: 'ok' | 'bad' | 'deferred';
+				}>
+			) => {
+				mode: 'full' | 'summary-only' | 'focused';
+				rowsToLog: Array<{ line: string; visibilityBucket: string; status: string }>;
+				suppressedCount: number;
+				actionableCount: number;
+				reason: string;
+			};
+		};
+
+		const plan = service.getDiagnosticDetailDumpPlan(
+			{ refreshPending: true, expectedRecovery: 'edge-refresh-pass', geometryState: 'refresh-pending' },
+			[
+				{ line: 'edge-a', visibilityBucket: 'both-visible', screenRisk: 'high', status: 'bad' },
+				{ line: 'edge-b', visibilityBucket: 'both-visible', screenRisk: 'high', status: 'ok' },
+				{ line: 'edge-c', visibilityBucket: 'one-side-visible', screenRisk: 'medium', status: 'bad' },
+			],
+		);
+
+		expect(plan).toMatchObject({
+			mode: 'focused',
+			suppressedCount: 2,
+			actionableCount: 1,
+			reason: 'refresh-pending-focused-both-visible-bad',
+		});
+		expect(plan.rowsToLog).toEqual([
+			expect.objectContaining({
+				line: 'edge-a',
+				visibilityBucket: 'both-visible',
+				status: 'bad',
+			}),
+		]);
+	});
+
 	it('should assess gap observation confidence for low-confidence and trusted coverage cases', () => {
 		const service = new EdgeGeometryService();
 

@@ -394,8 +394,12 @@ export class FloatingNodeService {
         shouldRequestCanvasSave: boolean
     ): Promise<void> {
         try {
-            const persistSuccess = await this.persistClearFloatingState(primaryNodeId, false);
-            log(`[FloatingNode] 后台文件持久化完成: ${primaryNodeId}, success=${persistSuccess}`);
+            let persistSuccess = false;
+            for (const nodeId of nodesToClear) {
+                const nodePersisted = await this.persistClearFloatingState(nodeId, false);
+                persistSuccess = nodePersisted || persistSuccess;
+            }
+            log(`[FloatingNode] 后台文件持久化完成: ${primaryNodeId}, cleared=${nodesToClear.length}, success=${persistSuccess}`);
 
             if (shouldRequestCanvasSave) {
                 // 延迟调用 requestSave，确保边数据已写入
@@ -590,13 +594,15 @@ export class FloatingNodeService {
             this.styleManager.setCanvas(canvas);
         }
 
+        const effectiveCanvas = canvas ?? this.canvas;
+
         if (!this.currentCanvasFilePath) {
             log(`[FloatingNode] 警告: currentCanvasFilePath 为空，跳过样式应用`);
             return;
         }
 
         // 获取当前 Canvas 中的所有节点 ID
-        const canvasNodeIds = this.getCanvasNodeIds(canvas);
+        const canvasNodeIds = this.getCanvasNodeIds(effectiveCanvas);
         log(`[FloatingNode] Canvas 中节点数: ${canvasNodeIds.size}`);
 
         // 获取当前 Canvas 中的所有边（用于验证浮动节点是否真的有入边）
@@ -621,7 +627,7 @@ export class FloatingNodeService {
         // 1. 检查状态文件中的浮动节点
         for (const nodeId of floatingNodes.keys()) {
             // 检查节点是否在当前 Canvas 中
-            if (!canvas || canvasNodeIds.has(nodeId)) {
+            if (!effectiveCanvas || canvasNodeIds.has(nodeId)) {
                 // 如果节点刚被连接过，跳过处理，不加入任何列表
                 if (this.shouldSkipStyleApply(nodeId)) {
                     log(`[FloatingNode] 跳过刚连接的节点: ${nodeId}`);
@@ -639,12 +645,12 @@ export class FloatingNodeService {
         }
 
         // 2. 补充检查内存中标记为浮动但可能还没写入文件的节点
-        if (canvas?.nodes) {
+        if (effectiveCanvas?.nodes) {
             const nodes: CanvasNodeLike[] = [];
-            if (canvas.nodes instanceof Map) {
-                nodes.push(...Array.from(canvas.nodes.values()));
-            } else if (Array.isArray(canvas.nodes)) {
-                for (const rawNode of canvas.nodes as unknown[]) {
+            if (effectiveCanvas.nodes instanceof Map) {
+                nodes.push(...Array.from(effectiveCanvas.nodes.values()));
+            } else if (Array.isArray(effectiveCanvas.nodes)) {
+                for (const rawNode of effectiveCanvas.nodes as unknown[]) {
                     if (!isRecord(rawNode)) continue;
                     const nodeId = getStringProp(rawNode, 'id');
                     if (!nodeId) continue;
@@ -692,6 +698,7 @@ export class FloatingNodeService {
 
         // 清理不存在的浮动节点记录（异步执行，不阻塞）
         if (invalidFloatingNodes.length > 0) {
+            log(`[FloatingNode] 清理无效浮动节点: ${invalidFloatingNodes.join(', ')}`);
             void this.cleanupInvalidFloatingNodes(invalidFloatingNodes);
         }
     }
@@ -718,6 +725,12 @@ export class FloatingNodeService {
         if (!this.currentCanvasFilePath) return;
 
         for (const nodeId of nodeIds) {
+            this.recentConnectedNodes.delete(nodeId);
+            this.clearEdgeWatch(nodeId);
+            this.removeFloatingNodeIds([nodeId]);
+            this.clearFloatingStyle(nodeId);
+            this.clearFloatingMemory(this.currentCanvasFilePath, [nodeId]);
+            this.clearFloatingCanvasData([nodeId], false);
             await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath);
         }
     }
@@ -889,7 +902,10 @@ export class FloatingNodeService {
             edges
         );
 
+        this.removeFloatingNodeIds(clearedNodes);
         for (const nodeId of clearedNodes) {
+            this.recentConnectedNodes.delete(nodeId);
+            this.clearEdgeWatch(nodeId);
             this.styleManager.clearFloatingStyle(nodeId);
         }
 

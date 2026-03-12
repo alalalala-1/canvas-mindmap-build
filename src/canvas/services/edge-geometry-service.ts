@@ -95,6 +95,23 @@ type EdgeBadDumpPlan = {
     reason: 'none' | 'refresh-pending-partial-observation-only' | 'refresh-pending-partial-observation-suppressed';
 };
 
+type DiagnosticDetailStatus = 'ok' | 'bad' | 'deferred';
+
+type DiagnosticDetailRow = {
+    line: string;
+    visibilityBucket: EdgeVisibilityBucket;
+    screenRisk: EdgeScreenRisk;
+    status: DiagnosticDetailStatus;
+};
+
+type DiagnosticDetailDumpPlan = {
+    mode: 'full' | 'summary-only' | 'focused';
+    rowsToLog: DiagnosticDetailRow[];
+    suppressedCount: number;
+    actionableCount: number;
+    reason: 'none' | 'refresh-pending-no-actionable-both-visible' | 'refresh-pending-focused-both-visible-bad';
+};
+
 export class EdgeGeometryService {
     private getDiagnosticPendingHint(phase: DiagnosticPhase, tag: string): DiagnosticPendingHint | null {
         if (phase === 'transient-post-reload' || tag === 'post-reload') {
@@ -199,6 +216,64 @@ export class EdgeGeometryService {
             actionableCount: actionableRows.length,
             reason: 'refresh-pending-partial-observation-suppressed',
         };
+    }
+
+    private getDiagnosticDetailDumpPlan(
+        pendingHint: DiagnosticPendingHint | null,
+        detailRows: DiagnosticDetailRow[]
+    ): DiagnosticDetailDumpPlan {
+        const actionableRows = detailRows.filter((row) => row.visibilityBucket === 'both-visible' && row.status === 'bad');
+
+        if (!pendingHint?.refreshPending || detailRows.length === 0) {
+            return {
+                mode: 'full',
+                rowsToLog: detailRows,
+                suppressedCount: 0,
+                actionableCount: actionableRows.length,
+                reason: 'none',
+            };
+        }
+
+        if (actionableRows.length === 0) {
+            return {
+                mode: 'summary-only',
+                rowsToLog: [],
+                suppressedCount: detailRows.length,
+                actionableCount: 0,
+                reason: 'refresh-pending-no-actionable-both-visible',
+            };
+        }
+
+        if (actionableRows.length === detailRows.length) {
+            return {
+                mode: 'full',
+                rowsToLog: detailRows,
+                suppressedCount: 0,
+                actionableCount: actionableRows.length,
+                reason: 'none',
+            };
+        }
+
+        return {
+            mode: 'focused',
+            rowsToLog: actionableRows,
+            suppressedCount: detailRows.length - actionableRows.length,
+            actionableCount: actionableRows.length,
+            reason: 'refresh-pending-focused-both-visible-bad',
+        };
+    }
+
+    private getTagPendingHint(tag: string): DiagnosticPendingHint | null {
+        return this.getDiagnosticPendingHint(
+            tag === 'post-reload' ? 'transient-post-reload' : 'final',
+            tag
+        );
+    }
+
+    private formatPendingHintSuffix(pendingHint: DiagnosticPendingHint | null): string {
+        return pendingHint
+            ? `, refreshPending=${pendingHint.refreshPending}, expectedRecovery=${pendingHint.expectedRecovery}, geometryState=${pendingHint.geometryState}`
+            : '';
     }
 
     private buildCoverageNote(summary: EdgeScreenGapSummary): string {
@@ -1427,7 +1502,18 @@ export class EdgeGeometryService {
             return (fId && visibleIds.has(fId)) || (tId && visibleIds.has(tId));
         }).slice(0, 10);
 
-        const edgeLines: string[] = [];
+        const pendingHint = this.getTagPendingHint(tag);
+        const pendingHintSuffix = this.formatPendingHintSuffix(pendingHint);
+        const vpEdgeRows: DiagnosticDetailRow[] = [];
+        const vpEdgeByBucket: Record<EdgeVisibilityBucket, number> = {
+            'both-visible': 0,
+            'one-side-visible': 0,
+            'virtualized-involved': 0,
+        };
+        let vpEdgeOkCount = 0;
+        let vpEdgeBadCount = 0;
+        let vpEdgeDeferredCount = 0;
+
         for (const edge of vpEdges) {
             const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode);
             const toId = getNodeIdFromEdgeEndpoint((edge).to) ?? this.toStringId((edge).toNode);
@@ -1468,15 +1554,42 @@ export class EdgeGeometryService {
                 ? `${errF.toFixed(1)}/${errT.toFixed(1)}`
                 : 'n/a';
             const status = hasEndpointData ? (ok ? 'ok' : 'bad') : 'deferred';
-            edgeLines.push(
-                `  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} ` +
-                `bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errSummary} ` +
-                `status=${status},scope=${visibilityBucket},screenRisk=${screenRisk}`
-            );
+            vpEdgeByBucket[visibilityBucket]++;
+            if (status === 'ok') vpEdgeOkCount++;
+            else if (status === 'bad') vpEdgeBadCount++;
+            else vpEdgeDeferredCount++;
+
+            vpEdgeRows.push({
+                line:
+                    `  ${(edge.id ?? '?').slice(0, 6)}: ${fromId.slice(0, 6)}->${toId.slice(0, 6)} ${fromSide[0]}->${toSide[0]} ` +
+                    `bzr=${bzrFStr}->${bzrTStr} exp=${expFStr}->${expTStr} err=${errSummary} ` +
+                    `status=${status},scope=${visibilityBucket},screenRisk=${screenRisk}`,
+                visibilityBucket,
+                screenRisk,
+                status,
+            });
         }
 
-        if (edgeLines.length > 0) {
-            logVerbose(`[Diag-${tag}] VpEdges(${vpEdges.length}):\n${edgeLines.join('\n')}`);
+        if (vpEdgeRows.length > 0) {
+            const detailPlan = this.getDiagnosticDetailDumpPlan(pendingHint, vpEdgeRows);
+
+            if (detailPlan.mode === 'summary-only') {
+                logVerbose(
+                    `[Diag-${tag}] VpEdges(${vpEdges.length}): ok=${vpEdgeOkCount}, bad=${vpEdgeBadCount}, ` +
+                    `deferred=${vpEdgeDeferredCount}, buckets=${this.formatVisibilityBucketCounts(vpEdgeByBucket)}${pendingHintSuffix}, ` +
+                    `actionableBothVisible=${detailPlan.actionableCount}, suppressedDetails=${detailPlan.suppressedCount}, ` +
+                    `reason=${detailPlan.reason}`
+                );
+            } else {
+                const descPrefix = detailPlan.mode === 'focused'
+                    ? `[Diag-${tag}] VpEdges(${vpEdges.length}): ok=${vpEdgeOkCount}, bad=${vpEdgeBadCount}, ` +
+                        `deferred=${vpEdgeDeferredCount}, buckets=${this.formatVisibilityBucketCounts(vpEdgeByBucket)}${pendingHintSuffix}, ` +
+                        `actionableBothVisible=${detailPlan.actionableCount}, suppressedDetails=${detailPlan.suppressedCount}, ` +
+                        `reason=${detailPlan.reason}, desc):\n`
+                    : `[Diag-${tag}] VpEdges(${vpEdges.length}): ok=${vpEdgeOkCount}, bad=${vpEdgeBadCount}, ` +
+                        `deferred=${vpEdgeDeferredCount}, buckets=${this.formatVisibilityBucketCounts(vpEdgeByBucket)}${pendingHintSuffix}, desc):\n`;
+                logVerbose(`${descPrefix}${detailPlan.rowsToLog.map((row) => row.line).join('\n')}`);
+            }
         } else {
             logVerbose(`[Diag-${tag}] VpEdges: vpVisible=${visibleNodes.length}, connected edges=0 (all virtualized?)`);
         }
@@ -1506,6 +1619,9 @@ export class EdgeGeometryService {
     ): void {
         const c = canvas;
         const ctxStr = contextId ?? 'none';
+        const pendingHint = this.getTagPendingHint(tag);
+        const pendingHintSuffix = this.formatPendingHintSuffix(pendingHint);
+        const badGapThresholdPx = this.getZoomAwareBadGapThreshold(canvas);
 
         // [真值工具] 从 SVG path 提取“屏幕像素坐标”端点，不依赖手工 transform 推算
         const getPathEndpointScreen = (pathEl: Element | null, atStart: boolean): { x: number; y: number } | null => {
@@ -1645,13 +1761,16 @@ export class EdgeGeometryService {
         }
 
         // --- 3. 前3条可见边：边 SVG 路径真实屏幕端点 vs 节点锚点真实屏幕位置 ---
-        const edgeVisualLines: string[] = [];
+        const edgeVisualRows: DiagnosticDetailRow[] = [];
         const visibleIds = new Set(visibleNodes.map(v => v.id));
         const sampleEdges = getEdgesFromCanvas(canvas).filter(e => {
             const fId = getNodeIdFromEdgeEndpoint((e).from) ?? this.toStringId((e).fromNode) ?? '';
             const tId = getNodeIdFromEdgeEndpoint((e).to) ?? this.toStringId((e).toNode) ?? '';
             return fId !== '' && visibleIds.has(fId) && tId !== '' && visibleIds.has(tId);
         }).slice(0, 3);
+        let visualOkCount = 0;
+        let visualBadCount = 0;
+        let visualDeferredCount = 0;
 
         for (const edge of sampleEdges) {
             const fromId = getNodeIdFromEdgeEndpoint((edge).from) ?? this.toStringId((edge).fromNode) ?? '';
@@ -1728,6 +1847,16 @@ export class EdgeGeometryService {
                 ? `gapFrom=(${fromGapX.toFixed(1)},${fromGapY?.toFixed(1)}|${fromGapDist?.toFixed(1)}px), gapTo=(${toGapX.toFixed(1)},${toGapY?.toFixed(1)}|${toGapDist?.toFixed(1)}px)`
                 : 'gap=n/a';
 
+            const maxGapDist = fromGapDist !== null && toGapDist !== null
+                ? Math.max(fromGapDist, toGapDist)
+                : null;
+            const status: DiagnosticDetailStatus = maxGapDist === null
+                ? 'deferred'
+                : (maxGapDist > badGapThresholdPx ? 'bad' : 'ok');
+            if (status === 'ok') visualOkCount++;
+            else if (status === 'bad') visualBadCount++;
+            else visualDeferredCount++;
+
             const pathChain = getTransformChain(pathEl, 'canvas');
             const fromChain = getTransformChain(fromNodeEl ?? null, 'canvas');
             const toChain = getTransformChain(toNodeEl ?? null, 'canvas');
@@ -1753,18 +1882,41 @@ export class EdgeGeometryService {
                 })()
                 : 'toBboxCenter=n/a';
 
-            edgeVisualLines.push(
+            edgeVisualRows.push({
+                line:
                 `  ${(edge.id ?? '?').slice(0, 8)} ${fromId.slice(0, 6)}->${toId.slice(0, 6)}: ` +
                 `pathRect=${pathRectStr} ${pathEndsStr} ${anchorStr} ${gapStr} map=${useReverse ? 'reverse' : 'direct'} ` +
                 `ctm={${pathCTMStr}}\n` +
                 `    pathChain=${pathChain}\n` +
                 `    fromNodeChain=${fromChain}\n` +
                 `    toNodeChain=${toChain}\n` +
-                `    ${toStyle}; ${toComputed}; ${toRectCenter}; ${toBboxCenter}`
-            );
+                `    ${toStyle}; ${toComputed}; ${toRectCenter}; ${toBboxCenter}`,
+                visibilityBucket: 'both-visible',
+                screenRisk: 'high',
+                status,
+            });
         }
-        if (edgeVisualLines.length > 0) {
-            logVerbose(`[Diag-${tag}-Visual] EdgeScreenPos(★关键):\n${edgeVisualLines.join('\n')}`);
+
+        if (edgeVisualRows.length > 0) {
+            const detailPlan = this.getDiagnosticDetailDumpPlan(pendingHint, edgeVisualRows);
+
+            if (detailPlan.mode === 'summary-only') {
+                logVerbose(
+                    `[Diag-${tag}-Visual] EdgeScreenPos(★关键): sampled=${edgeVisualRows.length}, ok=${visualOkCount}, ` +
+                    `bad=${visualBadCount}, deferred=${visualDeferredCount}, badGapThresholdPx=${badGapThresholdPx.toFixed(1)}${pendingHintSuffix}, ` +
+                    `actionableBothVisible=${detailPlan.actionableCount}, suppressedDetails=${detailPlan.suppressedCount}, ` +
+                    `reason=${detailPlan.reason}`
+                );
+            } else {
+                const descPrefix = detailPlan.mode === 'focused'
+                    ? `[Diag-${tag}-Visual] EdgeScreenPos(★关键): sampled=${edgeVisualRows.length}, ok=${visualOkCount}, ` +
+                        `bad=${visualBadCount}, deferred=${visualDeferredCount}, badGapThresholdPx=${badGapThresholdPx.toFixed(1)}${pendingHintSuffix}, ` +
+                        `actionableBothVisible=${detailPlan.actionableCount}, suppressedDetails=${detailPlan.suppressedCount}, ` +
+                        `reason=${detailPlan.reason}, desc):\n`
+                    : `[Diag-${tag}-Visual] EdgeScreenPos(★关键): sampled=${edgeVisualRows.length}, ok=${visualOkCount}, ` +
+                        `bad=${visualBadCount}, deferred=${visualDeferredCount}, badGapThresholdPx=${badGapThresholdPx.toFixed(1)}${pendingHintSuffix}, desc):\n`;
+                logVerbose(`${descPrefix}${detailPlan.rowsToLog.map((row) => row.line).join('\n')}`);
+            }
         } else {
             logVerbose(`[Diag-${tag}-Visual] EdgeScreenPos: 无两端均可见的边可采样`);
         }
@@ -1943,13 +2095,8 @@ export class EdgeGeometryService {
             `[DiagFull-${tag}] EdgeSnapshot: total=${edges.length}, ok(≤8)=${edgeOk}, warn(9-20)=${edgeWarn}, ` +
             `bad(>20)=${edgeBad}, noData=${edgeNoData}, ctx=${ctxStr}`
         );
-        const pendingHint = this.getDiagnosticPendingHint(
-            tag === 'post-reload' ? 'transient-post-reload' : 'final',
-            tag
-        );
-        const pendingHintSuffix = pendingHint
-            ? `, refreshPending=${pendingHint.refreshPending}, expectedRecovery=${pendingHint.expectedRecovery}, geometryState=${pendingHint.geometryState}`
-            : '';
+        const pendingHint = this.getTagPendingHint(tag);
+        const pendingHintSuffix = this.formatPendingHintSuffix(pendingHint);
 
         if (edgeNoDataRows.length > 0) {
             logVerbose(

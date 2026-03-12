@@ -293,6 +293,7 @@ describe('CanvasEventManager native insert gating', () => {
 				nodeDelta: number;
 				placeholderDelta: number;
 				endReason: string;
+				pointerDetail: number;
 			}) => { allow: boolean; reason: string };
 		};
 
@@ -307,6 +308,7 @@ describe('CanvasEventManager native insert gating', () => {
 			nodeDelta: 0,
 			placeholderDelta: 0,
 			endReason: 'pointerup',
+			pointerDetail: 1,
 		});
 
 		expect(result).toEqual({
@@ -328,6 +330,7 @@ describe('CanvasEventManager native insert gating', () => {
 				nodeDelta: number;
 				placeholderDelta: number;
 				endReason: string;
+				pointerDetail: number;
 			}) => { allow: boolean; reason: string };
 		};
 
@@ -342,6 +345,7 @@ describe('CanvasEventManager native insert gating', () => {
 			nodeDelta: 1,
 			placeholderDelta: 0,
 			endReason: 'pointerup',
+			pointerDetail: 1,
 		})).toEqual({
 			allow: false,
 			reason: 'node-create-observed',
@@ -358,9 +362,45 @@ describe('CanvasEventManager native insert gating', () => {
 			nodeDelta: 0,
 			placeholderDelta: 0,
 			endReason: 'pointercancel',
+			pointerDetail: 1,
 		})).toEqual({
 			allow: false,
 			reason: 'pointer-cancelled',
+		});
+	});
+
+	it('should skip native insert fallback for multi-click session end', () => {
+		const manager = createManager() as unknown as {
+			shouldCommitNativeInsertSession: (input: {
+				session: {
+					traceId: string;
+					targetKind: string;
+					startReason: string;
+					nodeCreateSeen: boolean;
+					anchorNodeId: string | null;
+				};
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				pointerDetail: number;
+			}) => { allow: boolean; reason: string };
+		};
+
+		expect(manager.shouldCommitNativeInsertSession({
+			session: {
+				traceId: 'ni-double-click',
+				targetKind: 'node-content',
+				startReason: 'node-content',
+				nodeCreateSeen: false,
+				anchorNodeId: 'parent-1',
+			},
+			nodeDelta: 0,
+			placeholderDelta: 0,
+			endReason: 'pointerup',
+			pointerDetail: 2,
+		})).toEqual({
+			allow: false,
+			reason: 'multi-click',
 		});
 	});
 
@@ -438,6 +478,7 @@ describe('CanvasEventManager native insert gating', () => {
 				endReason: string;
 				endedAt: number;
 				engineAttempted: boolean;
+				lastPointerDetail: number;
 			} | null;
 			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
 			lastNativeInsertCommitTraceId: string | null;
@@ -456,6 +497,7 @@ describe('CanvasEventManager native insert gating', () => {
 			endReason: 'pointerup',
 			endedAt: Date.now(),
 			engineAttempted: false,
+			lastPointerDetail: 1,
 		};
 
 		await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
@@ -514,6 +556,7 @@ describe('CanvasEventManager native insert gating', () => {
 				endReason: string;
 				endedAt: number;
 				engineAttempted: boolean;
+				lastPointerDetail: number;
 			} | null;
 			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
 		};
@@ -531,6 +574,7 @@ describe('CanvasEventManager native insert gating', () => {
 			endReason: 'pointerup',
 			endedAt: Date.now(),
 			engineAttempted: false,
+			lastPointerDetail: 1,
 		};
 
 		await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
@@ -539,5 +583,84 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.pendingNativeInsertCommit).toBeNull();
 		const messages = getRecentLogs().map(entry => entry.message);
 		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-resolved-upstream') && message.includes('reason=node-count-increased'))).toBe(true);
+	});
+
+	it('should reject click-post-session commit when pending trace comes from multi-click', async () => {
+		const addNodeToCanvas = vi.fn(async () => undefined);
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => null,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+				lastPointerDetail: number;
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-double-click',
+			pointerType: 'mouse',
+			startReason: 'node-content',
+			targetKind: 'node-content',
+			anchorNodeId: 'parent-1',
+			initialNodeCount: 1,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 0,
+			endReason: 'pointerup',
+			endedAt: Date.now(),
+			engineAttempted: false,
+			lastPointerDetail: 2,
+		};
+
+		await manager.flushPendingNativeInsertCommit('click-post-session');
+
+		expect(addNodeToCanvas).not.toHaveBeenCalled();
+		expect(manager.pendingNativeInsertCommit).toBeNull();
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-double-click') && message.includes('reason=multi-click'))).toBe(true);
+	});
+
+	it('should dedup open-entry stabilization across active-leaf-change and file-open for same file', () => {
+		const scheduleOpenStabilization = vi.fn();
+		const plugin = {} as never;
+		const app = {} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			scheduleOpenStabilization,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			scheduleOpenStabilizationWithDedup: (source: string, filePath: string | null) => void;
+		};
+
+		manager.scheduleOpenStabilizationWithDedup('active-leaf-change', 'test.canvas');
+		manager.scheduleOpenStabilizationWithDedup('file-open', 'test.canvas');
+
+		expect(scheduleOpenStabilization).toHaveBeenCalledTimes(1);
+		expect(scheduleOpenStabilization).toHaveBeenCalledWith('active-leaf-change');
 	});
 });
