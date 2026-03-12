@@ -394,13 +394,17 @@ describe('CanvasEventManager native insert gating', () => {
 	});
 
 	it('should flush native insert commit via file fallback without runtime create', async () => {
-		const addNodeToCanvas = vi.fn(async () => undefined);
-		const createTextNode = vi.fn(() => ({ type: 'text', text: '', x: 10, y: 20 }));
 		const canvas = {
-			nodes: [],
-			createTextNode,
+			nodes: [] as Array<{ id: string; type: 'text'; text: string; x: number; y: number; width: number; height: number }>,
+			edges: [] as unknown[],
+			createTextNode: vi.fn(() => ({ type: 'text', text: '', x: 10, y: 20 })),
 			file: { path: 'test.canvas' },
 		};
+		const addNodeToCanvas = vi.fn(async () => {
+			canvas.nodes.push({ id: 'created-1', type: 'text', text: '', x: 0, y: 0, width: 200, height: 80 });
+		});
+		const createTextNode = vi.fn(() => ({ type: 'text', text: '', x: 10, y: 20 }));
+		canvas.createTextNode = createTextNode;
 		const canvasView = {
 			getViewType: () => 'canvas',
 			canvas,
@@ -465,5 +469,75 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(createTextNode).not.toHaveBeenCalled();
 		expect(manager.pendingNativeInsertCommit).toBeNull();
 		expect(manager.lastNativeInsertCommitTraceId).toBe('ni-fallback');
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('NativeInsertCommitStart: trace=ni-fallback'))).toBe(true);
+		expect(messages.some(message => message.includes('NativeInsertCommitDone: trace=ni-fallback') && message.includes('nodeCreate=observed') && message.includes('nodeDelta=1') && message.includes('edgeDelta=0'))).toBe(true);
+	});
+
+	it('should reject native insert fallback when node count already increased before flush', async () => {
+		const addNodeToCanvas = vi.fn(async () => undefined);
+		const canvas = {
+			nodes: [{ id: 'existing-1', type: 'text', text: '', x: 0, y: 0, width: 200, height: 80 }],
+			edges: [],
+			file: { path: 'test.canvas' },
+		};
+		const canvasView = {
+			getViewType: () => 'canvas',
+			canvas,
+			file: { path: 'test.canvas' },
+			contentEl: {},
+		};
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => canvasView,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-resolved-upstream',
+			pointerType: 'touch',
+			startReason: 'wrapper-touch-like',
+			targetKind: 'wrapper',
+			anchorNodeId: 'parent-1',
+			initialNodeCount: 0,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 0,
+			endReason: 'pointerup',
+			endedAt: Date.now(),
+			engineAttempted: false,
+		};
+
+		await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
+
+		expect(addNodeToCanvas).not.toHaveBeenCalled();
+		expect(manager.pendingNativeInsertCommit).toBeNull();
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-resolved-upstream') && message.includes('reason=node-count-increased'))).toBe(true);
 	});
 });

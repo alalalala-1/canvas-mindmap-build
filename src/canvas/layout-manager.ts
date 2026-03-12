@@ -23,6 +23,28 @@ import { CollapseToggleService } from './services/collapse-toggle-service';
 import { EdgeGeometryService, EdgeScreenGapSummary, OffsetAnomalyStats, OffsetCleanupOptions } from './services/edge-geometry-service';
 import { requestCanvasUpdate } from './adapters/canvas-runtime-adapter';
 
+export type ArrangeNoOpFollowUpDecision = {
+    finishImmediately: boolean;
+    scheduleOpenStabilization: boolean;
+    reason: 'stable-no-op' | 'severe-visual-gap-risk';
+};
+
+export function getArrangeNoOpFollowUpDecision(severeVisualRisk: boolean): ArrangeNoOpFollowUpDecision {
+    if (severeVisualRisk) {
+        return {
+            finishImmediately: false,
+            scheduleOpenStabilization: false,
+            reason: 'severe-visual-gap-risk'
+        };
+    }
+
+    return {
+        finishImmediately: true,
+        scheduleOpenStabilization: false,
+        reason: 'stable-no-op'
+    };
+}
+
 /**
  * 布局管理器 - 负责Canvas布局相关的操作
  */
@@ -1420,17 +1442,21 @@ export class LayoutManager {
 
             // [No-Op 快路径] 当 arrange 预测无节点位移且文件层也无任何实际改动时，
             // 直接跳过 leaf.openFile 重载与后续重型链路，避免无意义视觉跳动。
-            // 仍触发一次 open stabilization，处理晚到节点/样式层抖动，但不触发重开。
+            // 若当前没有严重视觉风险，则直接视为成功终态，不再默认补一次 open stabilization。
             if (predictedChangedCount === 0 && !success) {
                 const noOpGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
                 const severeVisualRisk = this.edgeGeometryService.hasSevereVisualGapRisk(noOpGapSummary);
+                const noOpDecision = getArrangeNoOpFollowUpDecision(severeVisualRisk);
 
-                if (!severeVisualRisk) {
+                if (noOpDecision.finishImmediately) {
                     log(
                         `[Layout] ArrangeNoOpFastPath: predictedChanged=0, fileChanged=false, ` +
-                        `skipLeafReload=true, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                        `skipLeafReload=true, postArrangeStabilize=${noOpDecision.scheduleOpenStabilization}, ` +
+                        `reason=${noOpDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
                     );
-                    this.scheduleOpenStabilization('arrange-no-op');
+                    if (noOpDecision.scheduleOpenStabilization) {
+                        this.scheduleOpenStabilization('arrange-no-op');
+                    }
                     new Notice('布局完成！无节点变化');
                     log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=no-op-fast-path, ctx=${arrangeId}`);
                     return;
@@ -1438,7 +1464,7 @@ export class LayoutManager {
 
                 log(
                     `[Layout] ArrangeNoOpFastPathBlocked: predictedChanged=0, fileChanged=false, ` +
-                    `reason=severe-visual-gap-risk, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
+                    `reason=${noOpDecision.reason}, gapSummary=${this.formatGapSummary(noOpGapSummary)}, ctx=${arrangeId}`
                 );
             }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeLayout } from '../canvas/layout';
+import { getArrangeNoOpFollowUpDecision } from '../canvas/layout-manager';
 import { CanvasArrangerSettings, CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../canvas/types';
 
 const SETTINGS: CanvasArrangerSettings = {
@@ -99,5 +100,23 @@ describe('arrangeLayout child order', () => {
             .map((entry) => entry.id);
 
         expect(orderedByY).toEqual(['c2', 'c1', 'c3']);
+    });
+});
+
+describe('LayoutManager no-op follow-up decision', () => {
+    it('should finish stable no-op without scheduling post-arrange stabilization', () => {
+        expect(getArrangeNoOpFollowUpDecision(false)).toEqual({
+            finishImmediately: true,
+            scheduleOpenStabilization: false,
+            reason: 'stable-no-op',
+        });
+    });
+
+    it('should keep heavy arrange path when severe visual risk exists', () => {
+        expect(getArrangeNoOpFollowUpDecision(true)).toEqual({
+            finishImmediately: false,
+            scheduleOpenStabilization: false,
+            reason: 'severe-visual-gap-risk',
+        });
     });
 });

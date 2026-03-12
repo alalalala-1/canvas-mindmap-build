@@ -124,6 +124,11 @@ type NativeInsertPendingCommit = {
     engineAttempted: boolean;
 };
 
+type CanvasGraphSnapshot = {
+    nodeCount: number;
+    edgeCount: number;
+};
+
 export class CanvasEventManager {
     private plugin: Plugin;
     private app: App;
@@ -1703,6 +1708,20 @@ export class CanvasEventManager {
         });
     }
 
+    private getCanvasGraphSnapshot(canvas: CanvasLike | null | undefined): CanvasGraphSnapshot {
+        if (!canvas) {
+            return {
+                nodeCount: 0,
+                edgeCount: 0,
+            };
+        }
+
+        return {
+            nodeCount: getNodesFromCanvas(canvas).length,
+            edgeCount: getEdgesFromCanvas(canvas).length,
+        };
+    }
+
     private stageNativeInsertCommit(
         session: NativeInsertSession,
         nodeDelta: number,
@@ -1775,17 +1794,25 @@ export class CanvasEventManager {
 
         if (!canvas) {
             if (ageMs > 1200) {
-                log(`[Event] NativeInsertCommitExpired: trace=${candidate.traceId}, trigger=${trigger}, reason=no-canvas, age=${ageMs}ms`);
+                log(
+                    `[Event] NativeInsertCommitRejected: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                    `reason=no-canvas-expired, age=${ageMs}ms, target=${candidate.targetKind}, ` +
+                    `anchor=${candidate.anchorNodeId || 'none'}, queuedNodeDelta=${candidate.nodeDelta}, ` +
+                    `queuedPlaceholderDelta=${candidate.placeholderDelta}, endReason=${candidate.endReason}`
+                );
                 this.pendingNativeInsertCommit = null;
             }
             return;
         }
 
-        const currentNodeCount = getNodesFromCanvas(canvas).length;
-        if (currentNodeCount > candidate.initialNodeCount) {
+        const currentSnapshot = this.getCanvasGraphSnapshot(canvas);
+        if (currentSnapshot.nodeCount > candidate.initialNodeCount) {
             log(
-                `[Event] NativeInsertCommitResolved: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `reason=node-count-increased, initial=${candidate.initialNodeCount}, current=${currentNodeCount}`
+                `[Event] NativeInsertCommitRejected: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                `reason=node-count-increased, initialNodeCount=${candidate.initialNodeCount}, ` +
+                `currentNodeCount=${currentSnapshot.nodeCount}, currentEdgeCount=${currentSnapshot.edgeCount}, ` +
+                `queuedNodeDelta=${candidate.nodeDelta}, queuedPlaceholderDelta=${candidate.placeholderDelta}, ` +
+                `endReason=${candidate.endReason}`
             );
             this.pendingNativeInsertCommit = null;
             return;
@@ -1794,8 +1821,17 @@ export class CanvasEventManager {
         this.nativeInsertCommitInFlight = true;
         try {
             log(
+                `[Event] NativeInsertCommitStart: trace=${candidate.traceId}, trigger=${trigger}, ` +
+                `mode=file-fallback, pointerType=${candidate.pointerType}, startReason=${candidate.startReason}, ` +
+                `target=${candidate.targetKind}, anchor=${candidate.anchorNodeId || 'none'}, ` +
+                `initialNodeCount=${candidate.initialNodeCount}, currentNodeCount=${currentSnapshot.nodeCount}, ` +
+                `currentEdgeCount=${currentSnapshot.edgeCount}, queuedNodeDelta=${candidate.nodeDelta}, ` +
+                `queuedPlaceholderDelta=${candidate.placeholderDelta}, endReason=${candidate.endReason}, age=${ageMs}ms`
+            );
+            log(
                 `[Event] NativeInsertCommitFallback: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `anchor=${candidate.anchorNodeId || 'none'}, engineAttempted=false, runtimeCreate=disabled, age=${ageMs}ms`
+                `anchor=${candidate.anchorNodeId || 'none'}, engineAttempted=${candidate.engineAttempted}, ` +
+                `runtimeCreate=disabled, beforeNodes=${currentSnapshot.nodeCount}, beforeEdges=${currentSnapshot.edgeCount}, age=${ageMs}ms`
             );
             await this.canvasManager.addNodeToCanvas('', null, {
                 source: 'native-insert',
@@ -1803,12 +1839,23 @@ export class CanvasEventManager {
                 suppressSuccessNotice: true,
                 skipFromLink: true,
             });
+
+            const refreshedCanvasView = getCanvasView(this.app);
+            const refreshedCanvas = refreshedCanvasView ? this.getCanvasFromView(refreshedCanvasView) : canvas;
+            const afterSnapshot = this.getCanvasGraphSnapshot(refreshedCanvas ?? canvas);
+            const observedNodeDelta = afterSnapshot.nodeCount - currentSnapshot.nodeCount;
+            const observedEdgeDelta = afterSnapshot.edgeCount - currentSnapshot.edgeCount;
+            const nodeCreate = observedNodeDelta > 0 ? 'observed' : 'deferred-or-unobserved';
+
             this.pendingNativeInsertCommit = null;
             this.lastNativeInsertCommitTraceId = candidate.traceId;
             this.lastNativeInsertCommitAt = Date.now();
             log(
                 `[Event] NativeInsertCommitDone: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}`
+                `mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}, accepted=true, ` +
+                `nodeCreate=${nodeCreate}, nodeDelta=${observedNodeDelta}, edgeDelta=${observedEdgeDelta}, ` +
+                `beforeNodes=${currentSnapshot.nodeCount}, afterNodes=${afterSnapshot.nodeCount}, ` +
+                `beforeEdges=${currentSnapshot.edgeCount}, afterEdges=${afterSnapshot.edgeCount}`
             );
         } catch (error) {
             log(`[Event] NativeInsertCommitError: trace=${candidate.traceId}, trigger=${trigger}, error=${String(error)}`);
