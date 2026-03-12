@@ -168,9 +168,28 @@ export class LayoutManager {
         anomalyStats: OffsetAnomalyStats,
         gapSummary: EdgeScreenGapSummary
     ): boolean {
+        const gapAssessment = this.getOpenStabilizeGapAssessment(gapSummary);
         return anomalyStats.anomalous === 0
-            && gapSummary.residualBadEdges === 0
-            && gapSummary.maxResidualGap <= this.openStabilizeStableMaxGapPx;
+            && !gapAssessment.trustedGapIssue;
+    }
+
+    private getOpenStabilizeGapAssessment(gapSummary: EdgeScreenGapSummary): {
+        rawGapIssue: boolean;
+        trustedGapIssue: boolean;
+        lowConfidenceGapIssue: boolean;
+        confidenceReason: string;
+    } {
+        const gapConfidence = this.edgeGeometryService.assessGapObservationConfidence(gapSummary);
+        const rawGapIssue = gapSummary.residualBadEdges > 0
+            || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx;
+        const trustedGapIssue = rawGapIssue && gapConfidence.trustedForSevereRisk;
+
+        return {
+            rawGapIssue,
+            trustedGapIssue,
+            lowConfidenceGapIssue: rawGapIssue && !gapConfidence.trustedForSevereRisk,
+            confidenceReason: gapConfidence.reason,
+        };
     }
 
     private evaluateLateVisibleSignal(
@@ -253,14 +272,11 @@ export class LayoutManager {
             return { skip: false, reason: `anomaly:${anomalyStats.anomalous}` };
         }
 
-        if (gapSummary.residualBadEdges > 0) {
-            return { skip: false, reason: `resBadEdges:${gapSummary.residualBadEdges}` };
-        }
-
-        if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
+        const gapAssessment = this.getOpenStabilizeGapAssessment(gapSummary);
+        if (gapAssessment.trustedGapIssue) {
             return {
                 skip: false,
-                reason: `maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`
+                reason: `trusted-gap:${gapSummary.residualBadEdges}/${gapSummary.maxResidualGap.toFixed(1)}(${gapAssessment.confidenceReason})`
             };
         }
 
@@ -441,11 +457,11 @@ export class LayoutManager {
                         pulseNo
                     )
                     : { skip: false, reason: 'not-forced' };
+                const gapAssessment = this.getOpenStabilizeGapAssessment(gapBefore);
                 const actionableAnomaly = anomalyBeforeStats.anomalous > 0
-                    && (gapBefore.residualBadEdges > 0 || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx);
+                    && gapAssessment.trustedGapIssue;
                 const heavyEscalated = lateVisibleSignal.shouldEscalateHeavy
-                    || gapBefore.residualBadEdges > 0
-                    || gapBefore.maxResidualGap > this.openStabilizeStableMaxGapPx
+                    || gapAssessment.trustedGapIssue
                     || actionableAnomaly;
                 const shouldRunHeavy = (forcedHeavyFirstPulse && !forceHeavyDecision.skip) || heavyEscalated;
                 const cleanupOptions = this.getOffsetCleanupOptionsForSource(source, `open-p${pulseNo}`);
@@ -460,8 +476,7 @@ export class LayoutManager {
 
                 const persistentAnomaly = anomalyBeforeStats.anomalous > 0
                     && lateVisibleNodes === 0
-                    && gapBefore.residualBadEdges === 0
-                    && gapBefore.maxResidualGap <= this.openStabilizeStableMaxGapPx
+                    && !gapAssessment.trustedGapIssue
                     && pulseNo >= 2;
                 const shouldRunLightPersistentGuard = persistentAnomaly && !shouldRunHeavy;
 
@@ -471,7 +486,7 @@ export class LayoutManager {
                             `[Layout] OpenStabilizeEscalateHeavy: source=${source}, lateVisible=${lateVisibleNodes}, ` +
                             `lateVisibleSignal=${lateVisibleSignal.reason}, ` +
                             `anomalies={${this.formatAnomalyStats(anomalyBeforeStats)}}, anomalyActionable=${actionableAnomaly}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
-                            `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, topBad=${gapBefore.topResidualBadSample || gapBefore.topBadSample}, ctx=${stabilizeId}`
+                            `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, gapTrust=${gapAssessment.confidenceReason}, topBad=${gapBefore.topResidualBadSample || gapBefore.topBadSample}, ctx=${stabilizeId}`
                         );
                     } else {
                         logVerbose(`[Layout] OpenStabilizeSkipHeavyBySource: source=${source}, pulse=${pulseNo}, ctx=${stabilizeId}`);
@@ -482,7 +497,7 @@ export class LayoutManager {
                     logVerbose(
                         `[Layout] OpenStabilizePersistentAnomalyGuard: source=${source}, pulse=${pulseNo}, ` +
                         `anomaly=${anomalyBeforeStats.anomalous}, residualBadEdges=${gapBefore.residualBadEdges}, ` +
-                        `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, ctx=${stabilizeId}`
+                        `maxResidualGap=${gapBefore.maxResidualGap.toFixed(1)}, gapTrust=${gapAssessment.confidenceReason}, ctx=${stabilizeId}`
                     );
                 }
 
@@ -494,6 +509,7 @@ export class LayoutManager {
                     `runHeavy=${shouldRunHeavy}, sourceAware=${firstPulseStrategyLabel}, ` +
                     `firstPulseForce=${firstPulseForceLabel}, ` +
                     `firstPulseReason=${forceHeavyDecision.reason}, ` +
+                    `gapTrusted=${gapAssessment.trustedGapIssue}, gapLowConfidence=${gapAssessment.lowConfidenceGapIssue}, ` +
                     `anomalyActionable=${actionableAnomaly}, persistentGuard=${shouldRunLightPersistentGuard}, cleanupRelease=${cleanupOptions.releaseFixClass ? 'allow' : 'hold'}, ctx=${stabilizeId}`
                 );
 
@@ -634,10 +650,12 @@ export class LayoutManager {
     }
 
     private formatGapSummary(summary: EdgeScreenGapSummary): string {
+        const gapConfidence = this.edgeGeometryService.assessGapObservationConfidence(summary);
         return `all=${summary.allEdges},bothVis=${summary.bothVisibleEdges},oneVis=${summary.oneSideVisibleEdges},virt=${summary.bothVirtualizedEdges},` +
             `sampled=${summary.sampledEdges},bad=${summary.badEdges},resBad=${summary.residualBadEdges}(>${summary.badGapThresholdPx.toFixed(1)}px),` +
             `avg=${summary.avgGap.toFixed(1)}/${summary.avgResidualGap.toFixed(1)}(raw/res),` +
             `max=${summary.maxGap.toFixed(1)}/${summary.maxResidualGap.toFixed(1)}(raw/res),stub=${summary.stubCompensationPx.toFixed(1)},scale=${summary.canvasScale.toFixed(3)},` +
+            `gapTrust=${gapConfidence.trustedForSevereRisk ? 'trusted' : 'low'},gapReason=${gapConfidence.reason},` +
             `topBad=${summary.topBadSample || 'none'},topResBad=${summary.topResidualBadSample || 'none'},decompose=${summary.topBadDecompose || 'none'},` +
             `driftNodes=${summary.topDriftNodes || 'none'},posBuckets=${summary.positionBuckets || 'none'},` +
             `sample=${summary.sample || 'none'}`;
@@ -652,18 +670,18 @@ export class LayoutManager {
         gapSummary: EdgeScreenGapSummary,
         pulseNo: number
     ): { shouldDowngradeGapBlockers: boolean; reason: string } {
-        const noVisiblePairSample = gapSummary.bothVisibleEdges === 0 || gapSummary.sampledEdges === 0;
-        const sparseMixedVisibility = gapSummary.bothVisibleEdges <= 1
-            && gapSummary.oneSideVisibleEdges > 0
-            && gapSummary.sampledEdges <= 1;
-        const lowConfidence = noVisiblePairSample || sparseMixedVisibility;
+        const gapConfidence = this.edgeGeometryService.assessGapObservationConfidence(gapSummary);
+        const rawGapIssue = gapSummary.residualBadEdges > 0
+            || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx;
 
         const mildResidualCap = this.openStabilizeStableMaxGapPx + 6;
         const mildResidual = gapSummary.residualBadEdges <= 1
             && gapSummary.maxResidualGap <= mildResidualCap;
 
-        const shouldDowngradeGapBlockers = pulseNo >= 2 && lowConfidence && mildResidual;
-        const reason = `p${pulseNo},bothVis=${gapSummary.bothVisibleEdges},oneVis=${gapSummary.oneSideVisibleEdges},sampled=${gapSummary.sampledEdges},resBad=${gapSummary.residualBadEdges},maxRes=${gapSummary.maxResidualGap.toFixed(1)}`;
+        const shouldDowngradeGapBlockers = rawGapIssue
+            && !gapConfidence.trustedForSevereRisk
+            && (gapConfidence.lowConfidence || pulseNo >= 2 || mildResidual);
+        const reason = `p${pulseNo},bothVis=${gapSummary.bothVisibleEdges},oneVis=${gapSummary.oneSideVisibleEdges},sampled=${gapSummary.sampledEdges},resBad=${gapSummary.residualBadEdges},maxRes=${gapSummary.maxResidualGap.toFixed(1)},gapReason=${gapConfidence.reason}`;
         return { shouldDowngradeGapBlockers, reason };
     }
 
@@ -678,6 +696,7 @@ export class LayoutManager {
         const downgraded: string[] = [];
 
         const gapConfidence = this.evaluateOpenStabilizeGapConfidence(gapSummary, pulseNo);
+        const gapAssessment = this.getOpenStabilizeGapAssessment(gapSummary);
         const lateVisibleSignal = this.evaluateLateVisibleSignal(
             pulseNo,
             lateVisibleNodes,
@@ -687,26 +706,21 @@ export class LayoutManager {
         );
 
         const actionableAnomaly = anomalyStats.anomalous > 0
-            && (gapSummary.residualBadEdges > 0 || gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx);
+            && gapAssessment.trustedGapIssue;
         if (actionableAnomaly) {
             blockers.push(`anomaly:${anomalyStats.anomalous}`);
         }
 
-        if (gapSummary.residualBadEdges > 0) {
+        if (gapAssessment.rawGapIssue) {
             if (gapConfidence.shouldDowngradeGapBlockers) {
-                downgraded.push(`resBadEdges:${gapSummary.residualBadEdges}(${gapConfidence.reason})`);
+                downgraded.push(`gapRisk:resBad=${gapSummary.residualBadEdges},maxRes=${gapSummary.maxResidualGap.toFixed(1)}(${gapConfidence.reason})`);
             } else {
-                blockers.push(`resBadEdges:${gapSummary.residualBadEdges}`);
-            }
-        }
-
-        if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
-            if (gapConfidence.shouldDowngradeGapBlockers) {
-                downgraded.push(
-                    `maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}(${gapConfidence.reason})`
-                );
-            } else {
-                blockers.push(`maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`);
+                if (gapSummary.residualBadEdges > 0) {
+                    blockers.push(`resBadEdges:${gapSummary.residualBadEdges}`);
+                }
+                if (gapSummary.maxResidualGap > this.openStabilizeStableMaxGapPx) {
+                    blockers.push(`maxResGap:${gapSummary.maxResidualGap.toFixed(1)}>${this.openStabilizeStableMaxGapPx.toFixed(1)}`);
+                }
             }
         }
 

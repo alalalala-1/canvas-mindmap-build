@@ -156,6 +156,66 @@ export class EdgeGeometryService {
         return 'full-visible-coverage';
     }
 
+    assessGapObservationConfidence(summary: EdgeScreenGapSummary): {
+        coverageRatio: number;
+        lowConfidence: boolean;
+        trustedForFinal: boolean;
+        trustedForSevereRisk: boolean;
+        reason: string;
+    } {
+        const coverageRatio = summary.bothVisibleEdges > 0
+            ? Number((summary.sampledEdges / summary.bothVisibleEdges).toFixed(3))
+            : 0;
+
+        if (summary.bothVisibleEdges <= 0) {
+            return {
+                coverageRatio,
+                lowConfidence: true,
+                trustedForFinal: false,
+                trustedForSevereRisk: false,
+                reason: 'no-both-visible-edges'
+            };
+        }
+
+        if (summary.sampledEdges <= 0) {
+            return {
+                coverageRatio,
+                lowConfidence: true,
+                trustedForFinal: false,
+                trustedForSevereRisk: false,
+                reason: 'no-visible-gap-samples'
+            };
+        }
+
+        if (summary.sampledEdges <= 1) {
+            return {
+                coverageRatio,
+                lowConfidence: true,
+                trustedForFinal: false,
+                trustedForSevereRisk: false,
+                reason: `sparse-samples:${summary.sampledEdges}/${summary.bothVisibleEdges}`
+            };
+        }
+
+        if (coverageRatio < 0.75) {
+            return {
+                coverageRatio,
+                lowConfidence: true,
+                trustedForFinal: false,
+                trustedForSevereRisk: false,
+                reason: `sample-limited:${summary.sampledEdges}/${summary.bothVisibleEdges}`
+            };
+        }
+
+        return {
+            coverageRatio,
+            lowConfidence: false,
+            trustedForFinal: true,
+            trustedForSevereRisk: true,
+            reason: `trusted-visible-coverage:${summary.sampledEdges}/${summary.bothVisibleEdges}`
+        };
+    }
+
     emitDiagnosticPhaseSummary(options: {
         phase: DiagnosticPhase;
         tag: string;
@@ -165,13 +225,15 @@ export class EdgeGeometryService {
         extra?: Record<string, unknown>;
     }): DiagnosticPhaseLogResult {
         const hasAnomaly = options.anomalyStats.anomalous > 0;
-        const hasBadEdges = options.gapSummary.residualBadEdges > 0
+        const rawHasBadEdges = options.gapSummary.residualBadEdges > 0
             || options.gapSummary.maxResidualGap > options.gapSummary.badGapThresholdPx;
         const hasPartialObservation = options.gapSummary.oneSideVisibleEdges > 0
             || options.gapSummary.bothVirtualizedEdges > 0;
-        const visibilityCoverageRatio = options.gapSummary.bothVisibleEdges > 0
-            ? Number((options.gapSummary.sampledEdges / options.gapSummary.bothVisibleEdges).toFixed(3))
-            : 1;
+        const gapConfidence = this.assessGapObservationConfidence(options.gapSummary);
+        const hasBadEdges = classifyDiagnosticPhase(options.phase).isFinal
+            ? (rawHasBadEdges && gapConfidence.trustedForFinal)
+            : rawHasBadEdges;
+        const visibilityCoverageRatio = gapConfidence.coverageRatio;
         const coverageNote = this.buildCoverageNote(options.gapSummary);
         const pendingHint = this.getDiagnosticPendingHint(options.phase, options.tag);
         const classification = classifyDiagnosticPhase(options.phase);
@@ -185,9 +247,11 @@ export class EdgeGeometryService {
         });
         const label = finalBad
             ? `${options.phase}:final-bad`
+            : (classification.isFinal && rawHasBadEdges && !hasBadEdges && !hasAnomaly
+                ? `${options.phase}:low-confidence-gap-monitoring`
             : (hasAnomaly || hasBadEdges
                 ? `${options.phase}:expected-transient`
-                : `${options.phase}:healthy`);
+                : `${options.phase}:healthy`));
 
         logEvent({
             level,
@@ -202,6 +266,7 @@ export class EdgeGeometryService {
                 isFinal: classification.isFinal,
                 hasAnomaly,
                 hasBadEdges,
+                rawHasBadEdges,
                 anomalyCount: options.anomalyStats.anomalous,
                 residualBadEdges: options.gapSummary.residualBadEdges,
                 maxResidualGap: Number(options.gapSummary.maxResidualGap.toFixed(2)),
@@ -214,6 +279,10 @@ export class EdgeGeometryService {
                 hasPartialObservation,
                 visibilityCoverageRatio,
                 coverageNote,
+                gapLowConfidence: gapConfidence.lowConfidence,
+                gapTrustedForFinal: gapConfidence.trustedForFinal,
+                gapTrustedForSevereRisk: gapConfidence.trustedForSevereRisk,
+                gapConfidenceReason: gapConfidence.reason,
                 refreshPending: pendingHint?.refreshPending ?? false,
                 expectedRecovery: pendingHint?.expectedRecovery ?? 'none',
                 geometryState: pendingHint?.geometryState ?? 'stable',
@@ -862,6 +931,15 @@ export class EdgeGeometryService {
     }
 
     hasSevereVisualGapRisk(summary: EdgeScreenGapSummary): boolean {
+        if (summary.sampledEdges <= 0) {
+            return false;
+        }
+
+        const gapConfidence = this.assessGapObservationConfidence(summary);
+        if (!gapConfidence.trustedForSevereRisk) {
+            return false;
+        }
+
         const severeGap = Math.max(12, summary.badGapThresholdPx * 3);
         return summary.residualBadEdges > 0 || summary.maxResidualGap >= severeGap;
     }
@@ -2216,12 +2294,19 @@ export class EdgeGeometryService {
     private getPathEndpointScreen(pathEl: Element | null, atStart: boolean): { x: number; y: number } | null {
         try {
             if (!(pathEl instanceof SVGPathElement)) return null;
+            if (!pathEl.isConnected) return null;
+
+            const svgRoot = pathEl.ownerSVGElement;
+            const svgParent = pathEl.parentElement;
+            if (!svgRoot || !svgParent || !svgRoot.isConnected) return null;
+
+            const pathRect = pathEl.getBoundingClientRect();
+            if (pathRect.width <= 0 && pathRect.height <= 0) return null;
+
             const total = pathEl.getTotalLength();
+            if (!Number.isFinite(total) || total <= 0) return null;
             const length = atStart ? 0 : Math.max(0, total);
             const point = pathEl.getPointAtLength(length);
-
-            const svgParent = pathEl.parentElement;
-            if (!svgParent) return null;
 
             const marker = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
             marker.setAttribute('cx', String(point.x));
@@ -2233,6 +2318,11 @@ export class EdgeGeometryService {
 
             const rect = marker.getBoundingClientRect();
             marker.remove();
+
+            if (rect.width <= 0 && rect.height <= 0) {
+                return null;
+            }
+
             return {
                 x: rect.left + rect.width / 2,
                 y: rect.top + rect.height / 2,
