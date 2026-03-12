@@ -1,6 +1,11 @@
 import type { ItemView } from 'obsidian';
 import type { CanvasLike, CanvasNodeLike, CanvasEdgeLike } from '../../canvas/types';
 import type { LogReportSnapshot } from './types';
+import {
+    getPrimarySelectedEdgeFromState,
+    getSelectedEdgesFromState,
+    getSelectedNodesFromState,
+} from '../../canvas/adapters/canvas-selection-adapter';
 
 function getNodeId(node: CanvasNodeLike | null | undefined): string | null {
     return typeof node?.id === 'string' ? node.id : null;
@@ -45,28 +50,15 @@ function collectSelectionEntries(canvas: CanvasLike | null | undefined): {
         return { nodeIds: [], edgeIds: [] };
     }
 
-    if (canvas.selection instanceof Set) {
-        for (const entry of canvas.selection) {
-            const nodeId = getNodeId(entry as CanvasNodeLike);
-            if (nodeId) {
-                nodeIds.add(nodeId);
-                continue;
-            }
-
-            const edgeId = getEdgeId(entry as CanvasEdgeLike);
-            if (edgeId) edgeIds.add(edgeId);
-        }
-    }
-
-    for (const node of canvas.selectedNodes || []) {
+    for (const node of getSelectedNodesFromState(canvas)) {
         const nodeId = getNodeId(node);
         if (nodeId) nodeIds.add(nodeId);
     }
 
-    const activeEdgeId = getEdgeId(canvas.selectedEdge);
+    const activeEdgeId = getEdgeId(getPrimarySelectedEdgeFromState(canvas));
     if (activeEdgeId) edgeIds.add(activeEdgeId);
 
-    for (const edge of canvas.selectedEdges || []) {
+    for (const edge of getSelectedEdgesFromState(canvas)) {
         const edgeId = getEdgeId(edge);
         if (edgeId) edgeIds.add(edgeId);
     }

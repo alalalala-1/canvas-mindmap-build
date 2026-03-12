@@ -15,6 +15,7 @@ import {
     getNodesFromCanvas
 } from '../../utils/canvas-utils';
 import { log } from '../../utils/logger';
+import { requestCanvasSave, requestCanvasUpdate } from '../adapters/canvas-runtime-adapter';
 import {
     CanvasDataLike,
     CanvasLike,
@@ -424,7 +425,7 @@ export class NodeDeletionService {
                     `edges=${clearedSelectionState.clearedEdgeIds.join('|') || 'none'}`
                 );
             }
-            freshCanvas.requestUpdate?.();
+            requestCanvasUpdate(freshCanvas);
             return freshCanvas;
         }
 
@@ -435,8 +436,8 @@ export class NodeDeletionService {
 
         log(`[Delete] 未命中 canvas leaf，使用运行时软刷新兜底: reason=${reason}, file=${canvasFilePath}`);
         clearCanvasSelection(fallbackCanvas);
-        fallbackCanvas.requestUpdate?.();
-        fallbackCanvas.requestSave?.();
+        requestCanvasUpdate(fallbackCanvas);
+        requestCanvasSave(fallbackCanvas);
         return fallbackCanvas;
     }
 

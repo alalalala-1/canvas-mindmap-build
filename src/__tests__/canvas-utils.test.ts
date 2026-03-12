@@ -202,6 +202,23 @@ describe('canvas-utils', () => {
 			expect(describeCanvasSelectionState(canvas)).toBe('nodes=1[node-1],selectionEdges=1[node-1->node-2],edge=node-1->node-2');
 		});
 
+		it('should prefer selectedNodes state when selection set does not include nodes', () => {
+			const node = { id: 'node-1', type: 'text' as const };
+			const edge = { id: 'edge-1', fromNode: 'node-1', toNode: 'node-2' };
+			const canvas = {
+				nodes: {
+					'node-1': node,
+					'node-2': { id: 'node-2', type: 'text' as const },
+				},
+				edges: [edge],
+				selection: new Set([edge]),
+				selectedNodes: [node],
+				selectedEdge: edge,
+			};
+
+			expect(getSelectedNodeFromCanvas(canvas)).toBe(node);
+		});
+
 		it('should clear edge selection from canvas.selection and DOM classes', () => {
 			const node = { id: 'node-1', type: 'text' as const };
 			const edge = {

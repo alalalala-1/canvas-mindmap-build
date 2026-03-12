@@ -1,4 +1,15 @@
-import { CanvasEdgeLike, CanvasLike } from '../types';
+import { CanvasEdgeLike, CanvasLike, CanvasNodeLike } from '../types';
+
+function isNodeSelectionEntry(value: unknown): value is CanvasNodeLike {
+    if (!value || typeof value !== 'object') return false;
+    if (isEdgeSelectionEntry(value)) return false;
+
+    return (
+        typeof (value as { id?: unknown }).id === 'string'
+        || typeof (value as { type?: unknown }).type === 'string'
+        || 'nodeEl' in (value as Record<string, unknown>)
+    );
+}
 
 function getNodeIdFromEdgeEndpoint(endpoint: unknown): string | null {
     if (!endpoint) return null;
@@ -45,18 +56,91 @@ function isSameEdge(left: CanvasEdgeLike | null | undefined, right: CanvasEdgeLi
 }
 
 export function getPrimarySelectedEdgeFromState(canvas: CanvasLike): CanvasEdgeLike | null {
-    if (canvas.selectedEdge) return canvas.selectedEdge;
-    if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
-        return canvas.selectedEdges[0] || null;
+    return getSelectedEdgesFromState(canvas)[0] || null;
+}
+
+export function getSelectedNodesFromState(canvas: CanvasLike): CanvasNodeLike[] {
+    const selectedNodes: CanvasNodeLike[] = [];
+    const seenNodeRefs = new Set<CanvasNodeLike>();
+    const seenNodeIds = new Set<string>();
+
+    const rememberNode = (node: CanvasNodeLike | null | undefined): void => {
+        if (!node) return;
+
+        if (typeof node.id === 'string' && node.id.length > 0) {
+            if (seenNodeIds.has(node.id)) return;
+            seenNodeIds.add(node.id);
+            selectedNodes.push(node);
+            return;
+        }
+
+        if (seenNodeRefs.has(node)) return;
+        seenNodeRefs.add(node);
+        selectedNodes.push(node);
+    };
+
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const entry of Array.from(canvas.selection)) {
+            if (isNodeSelectionEntry(entry)) {
+                rememberNode(entry);
+            }
+        }
     }
-    return null;
+
+    if (Array.isArray(canvas.selectedNodes)) {
+        for (const node of canvas.selectedNodes) {
+            rememberNode(node);
+        }
+    }
+
+    return selectedNodes;
+}
+
+export function getSelectedNodeCountFromState(canvas: CanvasLike): number {
+    return getSelectedNodesFromState(canvas).length;
+}
+
+export function getSelectedEdgesFromState(canvas: CanvasLike): CanvasEdgeLike[] {
+    const selectedEdges: CanvasEdgeLike[] = [];
+    const seenEdgeRefs = new Set<CanvasEdgeLike>();
+    const seenEdgeKeys = new Set<string>();
+
+    const rememberEdge = (edge: CanvasEdgeLike | null | undefined): void => {
+        if (!edge) return;
+
+        const edgeKey = getEdgeKey(edge);
+        if (edgeKey) {
+            if (seenEdgeKeys.has(edgeKey)) return;
+            seenEdgeKeys.add(edgeKey);
+            selectedEdges.push(edge);
+            return;
+        }
+
+        if (seenEdgeRefs.has(edge)) return;
+        seenEdgeRefs.add(edge);
+        selectedEdges.push(edge);
+    };
+
+    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
+        for (const entry of Array.from(canvas.selection)) {
+            if (isEdgeSelectionEntry(entry)) {
+                rememberEdge(entry);
+            }
+        }
+    }
+
+    rememberEdge(canvas.selectedEdge);
+    if (Array.isArray(canvas.selectedEdges)) {
+        for (const edge of canvas.selectedEdges) {
+            rememberEdge(edge);
+        }
+    }
+
+    return selectedEdges;
 }
 
 export function getSelectedEdgeCountFromState(canvas: CanvasLike): number {
-    if (Array.isArray(canvas.selectedEdges) && canvas.selectedEdges.length > 0) {
-        return canvas.selectedEdges.length;
-    }
-    return canvas.selectedEdge ? 1 : 0;
+    return getSelectedEdgesFromState(canvas).length;
 }
 
 export function clearNodeSelectionState(canvas: CanvasLike): void {
@@ -100,8 +184,10 @@ export function clearAllSelectionState(canvas: CanvasLike): void {
 }
 
 export function setSingleSelectedEdgeState(canvas: CanvasLike, edge: CanvasEdgeLike, options?: { clearSelection?: boolean }): void {
-    if (options?.clearSelection && canvas.selection instanceof Set) {
-        canvas.selection.clear();
+    if (options?.clearSelection) {
+        clearAllSelectionState(canvas);
+    } else {
+        clearEdgeSelectionState(canvas);
     }
 
     if (canvas.selection instanceof Set) {

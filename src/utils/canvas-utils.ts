@@ -5,6 +5,8 @@ import { requestCanvasSave, requestCanvasUpdate } from '../canvas/adapters/canva
 import {
     clearAllSelectionState,
     clearEdgeSelectionState,
+    getSelectedEdgesFromState,
+    getSelectedNodesFromState,
     getPrimarySelectedEdgeFromState,
 } from '../canvas/adapters/canvas-selection-adapter';
 
@@ -496,64 +498,14 @@ export function getDirectSelectedNodes(canvas: CanvasLike | null | undefined): C
     if (!canvas) return [];
 
     const nodesInCanvas = getNodesFromCanvas(canvas);
-    const selectedNodes: CanvasNodeLike[] = [];
-    const seenNodeIds = new Set<string>();
-    const rememberNode = (node: CanvasNodeLike | null | undefined) => {
-        if (!node || !isPresentInCanvasNodes(nodesInCanvas, node)) return;
-        const key = node.id || `ref:${nodesInCanvas.indexOf(node)}`;
-        if (seenNodeIds.has(key)) return;
-        seenNodeIds.add(key);
-        selectedNodes.push(node);
-    };
-
-    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
-        for (const value of canvas.selection.values()) {
-            if (isCanvasNodeLike(value)) {
-                rememberNode(value);
-            }
-        }
-        if (selectedNodes.length > 0) {
-            return selectedNodes;
-        }
-    }
-
-    if (Array.isArray(canvas.selectedNodes)) {
-        for (const node of canvas.selectedNodes) {
-            rememberNode(node);
-        }
-    }
-
-    return selectedNodes;
+    return getSelectedNodesFromState(canvas).filter(node => isPresentInCanvasNodes(nodesInCanvas, node));
 }
 
 export function getDirectSelectedEdges(canvas: CanvasLike | null | undefined): CanvasEdgeLike[] {
     if (!canvas) return [];
 
     const edgesInCanvas = getEdgesFromCanvas(canvas);
-    const selectedEdges: CanvasEdgeLike[] = [];
-    const seenEdgeIds = new Set<string>();
-    const rememberEdge = (edge: CanvasEdgeLike | null | undefined) => {
-        if (!edge || !isPresentInCanvasEdges(edgesInCanvas, edge)) return;
-        const edgeId = getEdgeId(edge) || edge.id || `ref:${edgesInCanvas.indexOf(edge)}`;
-        if (seenEdgeIds.has(edgeId)) return;
-        seenEdgeIds.add(edgeId);
-        selectedEdges.push(edge);
-    };
-
-    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
-        for (const value of canvas.selection.values()) {
-            if (isCanvasEdgeLike(value)) {
-                rememberEdge(value);
-            }
-        }
-    }
-
-    rememberEdge(canvas.selectedEdge);
-    for (const edge of canvas.selectedEdges || []) {
-        rememberEdge(edge);
-    }
-
-    return selectedEdges;
+    return getSelectedEdgesFromState(canvas).filter(edge => isPresentInCanvasEdges(edgesInCanvas, edge));
 }
 
 export function getCanvasSelectionSummary(canvas: CanvasLike | null | undefined): CanvasSelectionSummary {
@@ -602,10 +554,6 @@ export function getSelectedNodeFromCanvas(canvas: CanvasLike): CanvasNodeLike | 
     const selectedNodes = getDirectSelectedNodes(canvas);
     if (selectedNodes.length > 0) {
         return selectedNodes[0] || null;
-    }
-
-    if (canvas.selectedNodes && canvas.selectedNodes.length > 0) {
-        return canvas.selectedNodes[0] || null;
     }
 
     const allNodes = getNodesFromCanvas(canvas);
@@ -896,17 +844,8 @@ export function clearCanvasEdgeSelection(canvas: CanvasLike): {
         }
     };
 
-    rememberEdge(canvas.selectedEdge);
-    for (const edge of canvas.selectedEdges || []) {
+    for (const edge of getSelectedEdgesFromState(canvas)) {
         rememberEdge(edge);
-    }
-
-    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
-        for (const entry of Array.from(canvas.selection)) {
-            if (isCanvasEdgeLike(entry)) {
-                rememberEdge(entry);
-            }
-        }
     }
 
     clearEdgeSelectionState(canvas);
@@ -958,21 +897,11 @@ export function clearCanvasSelection(canvas: CanvasLike): {
         clearedEdgeIds.add(edgeId);
     };
 
-    if (canvas.selection instanceof Set && canvas.selection.size > 0) {
-        for (const entry of Array.from(canvas.selection)) {
-            if (isCanvasNodeLike(entry)) {
-                rememberNode(entry);
-            } else if (isCanvasEdgeLike(entry)) {
-                rememberEdge(entry);
-            }
-        }
-    }
-
-    for (const node of canvas.selectedNodes || []) {
+    for (const node of getSelectedNodesFromState(canvas)) {
         rememberNode(node);
     }
-    rememberEdge(canvas.selectedEdge);
-    for (const edge of canvas.selectedEdges || []) {
+
+    for (const edge of getSelectedEdgesFromState(canvas)) {
         rememberEdge(edge);
     }
 
