@@ -44,6 +44,25 @@ import {
     getSelectedEdgeCountFromState,
     setSingleSelectedEdgeState,
 } from './adapters/canvas-selection-adapter';
+import {
+    type NativeInsertScheduledWorkCleanup,
+    type NativeInsertTraceContext,
+    type NativeInsertTraceState,
+    clearAllNativeInsertTraceState as clearAllNativeInsertTraceStateHelper,
+    clearNativeInsertScheduledWork as clearNativeInsertScheduledWorkHelper,
+    finalizeNativeInsertTrace as finalizeNativeInsertTraceHelper,
+    isNativeInsertTraceSettled as isNativeInsertTraceSettledHelper,
+    logNativeInsertCommitWait as logNativeInsertCommitWaitHelper,
+    markNativeInsertTraceSettled as markNativeInsertTraceSettledHelper,
+    mergeNativeInsertScheduledWorkCleanup as mergeNativeInsertScheduledWorkCleanupHelper,
+    pruneNativeInsertTraceDiagnostics as pruneNativeInsertTraceDiagnosticsHelper,
+    pruneSettledNativeInsertTraces as pruneSettledNativeInsertTracesHelper,
+    registerNativeInsertPostSessionPhase as registerNativeInsertPostSessionPhaseHelper,
+    registerNativeInsertProbePhase as registerNativeInsertProbePhaseHelper,
+    registerNativeInsertRaf as registerNativeInsertRafHelper,
+    registerNativeInsertTimeout as registerNativeInsertTimeoutHelper,
+    rememberNativeInsertTraceContext as rememberNativeInsertTraceContextHelper,
+} from './event-manager/native-insert-trace';
 
 type FromLinkInfo = {
     file: string;
@@ -132,39 +151,6 @@ type NativeInsertPendingCommit = {
     queuedSelectionNodeCount?: number;
     queuedSelectionEdgeCount?: number;
     queuedSelectionKey?: string;
-};
-
-type NativeInsertTraceContext = {
-    traceId: string;
-    pointerType?: string;
-    startReason?: string;
-    targetKind?: string;
-    anchorNodeId?: string | null;
-    endReason?: string;
-    nodeDelta?: number;
-    placeholderDelta?: number;
-    lastPointerDetail?: number;
-    clickDetail?: number;
-    clickClassified?: boolean;
-    awaitingClickClassification?: boolean;
-    evidenceFlags?: string[];
-    blankCandidate?: boolean;
-    queuedSelectionNodeCount?: number;
-    queuedSelectionEdgeCount?: number;
-    selectionNodeCount?: number;
-    selectionEdgeCount?: number;
-    selectionStable?: boolean;
-    fallbackCommitted?: boolean;
-    accepted?: boolean;
-    nodeCreate?: string;
-    updatedAt: number;
-};
-
-type NativeInsertScheduledWorkCleanup = {
-    clearedTimeoutCount: number;
-    clearedRafCount: number;
-    clearedProbePhaseCount: number;
-    markedSettled: boolean;
 };
 
 type CanvasGraphSnapshot = {
@@ -1643,93 +1629,71 @@ export class CanvasEventManager {
         return typeof arg;
     }
 
+    private getNativeInsertTraceState(): NativeInsertTraceState {
+        return {
+            nativeInsertTraceTimeouts: this.nativeInsertTraceTimeouts,
+            nativeInsertTraceRafs: this.nativeInsertTraceRafs,
+            nativeInsertSettledTraceAt: this.nativeInsertSettledTraceAt,
+            nativeInsertProbePhasesByTrace: this.nativeInsertProbePhasesByTrace,
+            nativeInsertPostSessionPhasesByTrace: this.nativeInsertPostSessionPhasesByTrace,
+            nativeInsertTraceContextById: this.nativeInsertTraceContextById,
+            nativeInsertTraceSummaryLoggedAt: this.nativeInsertTraceSummaryLoggedAt,
+            lastNativeInsertCommitWaitKey: this.lastNativeInsertCommitWaitKey,
+        };
+    }
+
+    private syncNativeInsertTraceState(state: NativeInsertTraceState): void {
+        this.lastNativeInsertCommitWaitKey = state.lastNativeInsertCommitWaitKey;
+    }
+
     private pruneSettledNativeInsertTraces(): void {
-        const cutoff = Date.now() - 5000;
-        for (const [traceId, settledAt] of this.nativeInsertSettledTraceAt.entries()) {
-            if (settledAt < cutoff) {
-                this.nativeInsertSettledTraceAt.delete(traceId);
-            }
-        }
+        const state = this.getNativeInsertTraceState();
+        pruneSettledNativeInsertTracesHelper(state);
+        this.syncNativeInsertTraceState(state);
     }
 
     private isNativeInsertTraceSettled(traceId: string): boolean {
-        this.pruneSettledNativeInsertTraces();
-        return this.nativeInsertSettledTraceAt.has(traceId);
+        const state = this.getNativeInsertTraceState();
+        const settled = isNativeInsertTraceSettledHelper(state, traceId);
+        this.syncNativeInsertTraceState(state);
+        return settled;
     }
 
     private markNativeInsertTraceSettled(traceId: string): void {
-        this.nativeInsertSettledTraceAt.set(traceId, Date.now());
-        if (this.lastNativeInsertCommitWaitKey?.startsWith(`${traceId}|`)) {
-            this.lastNativeInsertCommitWaitKey = null;
-        }
-        this.pruneSettledNativeInsertTraces();
+        const state = this.getNativeInsertTraceState();
+        markNativeInsertTraceSettledHelper(state, traceId);
+        this.syncNativeInsertTraceState(state);
     }
 
     private pruneNativeInsertTraceDiagnostics(): void {
-        const cutoff = Date.now() - 8000;
-        for (const [traceId, context] of this.nativeInsertTraceContextById.entries()) {
-            if (context.updatedAt < cutoff) {
-                this.nativeInsertTraceContextById.delete(traceId);
-            }
-        }
-
-        for (const [traceId, loggedAt] of this.nativeInsertTraceSummaryLoggedAt.entries()) {
-            if (loggedAt < cutoff) {
-                this.nativeInsertTraceSummaryLoggedAt.delete(traceId);
-            }
-        }
+        const state = this.getNativeInsertTraceState();
+        pruneNativeInsertTraceDiagnosticsHelper(state);
+        this.syncNativeInsertTraceState(state);
     }
 
     private rememberNativeInsertTraceContext(input: Omit<Partial<NativeInsertTraceContext>, 'updatedAt'> & { traceId: string }): void {
-        const previous = this.nativeInsertTraceContextById.get(input.traceId);
-        const next: NativeInsertTraceContext = {
-            traceId: input.traceId,
-            pointerType: input.pointerType ?? previous?.pointerType,
-            startReason: input.startReason ?? previous?.startReason,
-            targetKind: input.targetKind ?? previous?.targetKind,
-            anchorNodeId: input.anchorNodeId ?? previous?.anchorNodeId,
-            endReason: input.endReason ?? previous?.endReason,
-            nodeDelta: input.nodeDelta ?? previous?.nodeDelta,
-            placeholderDelta: input.placeholderDelta ?? previous?.placeholderDelta,
-            lastPointerDetail: input.lastPointerDetail ?? previous?.lastPointerDetail,
-            clickDetail: input.clickDetail ?? previous?.clickDetail,
-            clickClassified: input.clickClassified ?? previous?.clickClassified,
-            awaitingClickClassification: input.awaitingClickClassification ?? previous?.awaitingClickClassification,
-            evidenceFlags: input.evidenceFlags ?? previous?.evidenceFlags,
-            blankCandidate: input.blankCandidate ?? previous?.blankCandidate,
-            queuedSelectionNodeCount: input.queuedSelectionNodeCount ?? previous?.queuedSelectionNodeCount,
-            queuedSelectionEdgeCount: input.queuedSelectionEdgeCount ?? previous?.queuedSelectionEdgeCount,
-            selectionNodeCount: input.selectionNodeCount ?? previous?.selectionNodeCount,
-            selectionEdgeCount: input.selectionEdgeCount ?? previous?.selectionEdgeCount,
-            selectionStable: input.selectionStable ?? previous?.selectionStable,
-            fallbackCommitted: input.fallbackCommitted ?? previous?.fallbackCommitted,
-            accepted: input.accepted ?? previous?.accepted,
-            nodeCreate: input.nodeCreate ?? previous?.nodeCreate,
-            updatedAt: Date.now(),
-        };
-
-        this.nativeInsertTraceContextById.set(input.traceId, next);
-        this.pruneNativeInsertTraceDiagnostics();
+        const state = this.getNativeInsertTraceState();
+        rememberNativeInsertTraceContextHelper(state, input);
+        this.syncNativeInsertTraceState(state);
     }
 
     private registerNativeInsertPostSessionPhase(traceId: string, phase: 'click-post-session' | 'dblclick-post-session'): boolean {
-        const phaseSet = this.nativeInsertPostSessionPhasesByTrace.get(traceId) ?? new Set<string>();
-        if (phaseSet.has(phase)) {
-            return false;
-        }
-        phaseSet.add(phase);
-        this.nativeInsertPostSessionPhasesByTrace.set(traceId, phaseSet);
-        return true;
+        const state = this.getNativeInsertTraceState();
+        const registered = registerNativeInsertPostSessionPhaseHelper(state, traceId, phase);
+        this.syncNativeInsertTraceState(state);
+        return registered;
     }
 
     private formatNativeInsertExtraFields(extraFields?: Record<string, unknown>): string {
-        if (!extraFields) return '';
-
-        const fields = Object.entries(extraFields)
-            .filter(([, value]) => value !== undefined)
-            .map(([key, value]) => `${key}=${value === null ? 'none' : String(value)}`);
-
-        return fields.length > 0 ? `, ${fields.join(', ')}` : '';
+        const state = this.getNativeInsertTraceState();
+        // 利用 helper 维持统一格式；state 仅用于保持封装接口一致。
+        this.syncNativeInsertTraceState(state);
+        return extraFields
+            ? Object.entries(extraFields)
+                .filter(([, value]) => value !== undefined)
+                .map(([key, value]) => `${key}=${value === null ? 'none' : String(value)}`)
+                .reduce((acc, field, index) => acc + `${index === 0 ? ', ' : ', '}${field}`, '')
+            : '';
     }
 
     private finalizeNativeInsertTrace(input: {
@@ -1741,55 +1705,22 @@ export class CanvasEventManager {
         cleanup?: NativeInsertScheduledWorkCleanup;
         extraFields?: Record<string, unknown>;
     }): void {
-        if (this.nativeInsertTraceSummaryLoggedAt.has(input.traceId)) return;
-
-        const context = this.nativeInsertTraceContextById.get(input.traceId);
-        const cleanup = input.cleanup ?? {
-            clearedTimeoutCount: 0,
-            clearedRafCount: 0,
-            clearedProbePhaseCount: 0,
-            markedSettled: false,
-        };
-
-        log(
-            `[Event] NativeInsertTraceSummary: trace=${input.traceId}, outcome=${input.outcome}, ` +
-            `trigger=${input.trigger}, reason=${input.reason}, pointerType=${context?.pointerType || 'unknown'}, ` +
-            `startReason=${context?.startReason || 'unknown'}, target=${context?.targetKind || 'unknown'}, ` +
-            `anchor=${context?.anchorNodeId || 'none'}, endReason=${context?.endReason || 'unknown'}, ` +
-            `detail=${input.detail ?? context?.lastPointerDetail ?? 'na'}, clickDetail=${context?.clickDetail ?? 'na'}, ` +
-            `clickClassified=${context?.clickClassified ?? false}, awaitClick=${context?.awaitingClickClassification ?? false}, ` +
-            `blankCandidate=${context?.blankCandidate ?? false}, queuedSelectionNodes=${context?.queuedSelectionNodeCount ?? 'na'}, ` +
-            `queuedSelectionEdges=${context?.queuedSelectionEdgeCount ?? 'na'}, selectionNodes=${context?.selectionNodeCount ?? 'na'}, ` +
-            `selectionEdges=${context?.selectionEdgeCount ?? 'na'}, selectionStable=${context?.selectionStable ?? 'na'}, ` +
-            `fallbackCommitted=${context?.fallbackCommitted ?? false}, accepted=${context?.accepted ?? (input.outcome === 'accepted')}, ` +
-            `nodeCreate=${context?.nodeCreate || 'none'}, ` +
-            `queuedNodeDelta=${context?.nodeDelta ?? 'na'}, queuedPlaceholderDelta=${context?.placeholderDelta ?? 'na'}, ` +
-            `evidence=${context?.evidenceFlags?.join('|') || 'none'}, clearedTimeouts=${cleanup.clearedTimeoutCount}, ` +
-            `clearedRafs=${cleanup.clearedRafCount}, clearedProbePhases=${cleanup.clearedProbePhaseCount}, ` +
-            `settled=${cleanup.markedSettled}${this.formatNativeInsertExtraFields(input.extraFields)}`
-        );
-
-        this.nativeInsertTraceSummaryLoggedAt.set(input.traceId, Date.now());
-        this.pruneNativeInsertTraceDiagnostics();
+        const state = this.getNativeInsertTraceState();
+        finalizeNativeInsertTraceHelper(state, input);
+        this.syncNativeInsertTraceState(state);
     }
 
     private mergeNativeInsertScheduledWorkCleanup(
         left: NativeInsertScheduledWorkCleanup,
         right: NativeInsertScheduledWorkCleanup
     ): NativeInsertScheduledWorkCleanup {
-        return {
-            clearedTimeoutCount: left.clearedTimeoutCount + right.clearedTimeoutCount,
-            clearedRafCount: left.clearedRafCount + right.clearedRafCount,
-            clearedProbePhaseCount: left.clearedProbePhaseCount + right.clearedProbePhaseCount,
-            markedSettled: left.markedSettled || right.markedSettled,
-        };
+        return mergeNativeInsertScheduledWorkCleanupHelper(left, right);
     }
 
     private logNativeInsertCommitWait(traceId: string, trigger: string, reason: string): void {
-        const waitKey = `${traceId}|${reason}`;
-        if (this.lastNativeInsertCommitWaitKey === waitKey) return;
-        logVerbose(`[Event] NativeInsertCommitWait: trace=${traceId}, trigger=${trigger}, reason=${reason}`);
-        this.lastNativeInsertCommitWaitKey = waitKey;
+        const state = this.getNativeInsertTraceState();
+        logNativeInsertCommitWaitHelper(state, traceId, trigger, reason);
+        this.syncNativeInsertTraceState(state);
     }
 
     private collectNativeInsertEvidence(input: {
@@ -1814,69 +1745,28 @@ export class CanvasEventManager {
     }
 
     private registerNativeInsertProbePhase(traceId: string, phase: 'raf' | 'timeout-120'): boolean {
-        const phaseSet = this.nativeInsertProbePhasesByTrace.get(traceId) ?? new Set<string>();
-        if (phaseSet.has(phase)) {
-            return false;
-        }
-        phaseSet.add(phase);
-        this.nativeInsertProbePhasesByTrace.set(traceId, phaseSet);
-        return true;
+        const state = this.getNativeInsertTraceState();
+        const registered = registerNativeInsertProbePhaseHelper(state, traceId, phase);
+        this.syncNativeInsertTraceState(state);
+        return registered;
     }
 
     private registerNativeInsertTimeout(traceId: string, timeoutId: number): void {
-        const timeoutSet = this.nativeInsertTraceTimeouts.get(traceId) ?? new Set<number>();
-        timeoutSet.add(timeoutId);
-        this.nativeInsertTraceTimeouts.set(traceId, timeoutSet);
+        const state = this.getNativeInsertTraceState();
+        registerNativeInsertTimeoutHelper(state, traceId, timeoutId);
+        this.syncNativeInsertTraceState(state);
     }
 
     private registerNativeInsertRaf(traceId: string, rafId: number): void {
-        const rafSet = this.nativeInsertTraceRafs.get(traceId) ?? new Set<number>();
-        rafSet.add(rafId);
-        this.nativeInsertTraceRafs.set(traceId, rafSet);
+        const state = this.getNativeInsertTraceState();
+        registerNativeInsertRafHelper(state, traceId, rafId);
+        this.syncNativeInsertTraceState(state);
     }
 
     private clearNativeInsertScheduledWork(traceId: string | null | undefined, markSettled: boolean = false): NativeInsertScheduledWorkCleanup {
-        if (!traceId) {
-            return {
-                clearedTimeoutCount: 0,
-                clearedRafCount: 0,
-                clearedProbePhaseCount: 0,
-                markedSettled: false,
-            };
-        }
-
-        const cleanup: NativeInsertScheduledWorkCleanup = {
-            clearedTimeoutCount: 0,
-            clearedRafCount: 0,
-            clearedProbePhaseCount: this.nativeInsertProbePhasesByTrace.get(traceId)?.size || 0,
-            markedSettled: markSettled,
-        };
-
-        const timeoutSet = this.nativeInsertTraceTimeouts.get(traceId);
-        if (timeoutSet) {
-            cleanup.clearedTimeoutCount = timeoutSet.size;
-            for (const timeoutId of timeoutSet) {
-                window.clearTimeout(timeoutId);
-            }
-            this.nativeInsertTraceTimeouts.delete(traceId);
-        }
-
-        const rafSet = this.nativeInsertTraceRafs.get(traceId);
-        if (rafSet) {
-            cleanup.clearedRafCount = rafSet.size;
-            for (const rafId of rafSet) {
-                cancelAnimationFrame(rafId);
-            }
-            this.nativeInsertTraceRafs.delete(traceId);
-        }
-
-        this.nativeInsertProbePhasesByTrace.delete(traceId);
-
-        if (markSettled) {
-            this.markNativeInsertTraceSettled(traceId);
-            this.nativeInsertPostSessionPhasesByTrace.delete(traceId);
-        }
-
+        const state = this.getNativeInsertTraceState();
+        const cleanup = clearNativeInsertScheduledWorkHelper(state, traceId, markSettled);
+        this.syncNativeInsertTraceState(state);
         return cleanup;
     }
 
@@ -4492,23 +4382,9 @@ export class CanvasEventManager {
             window.clearTimeout(this.deferredPostInsertMaintenanceTimeoutId);
             this.deferredPostInsertMaintenanceTimeoutId = null;
         }
-        for (const timeoutSet of this.nativeInsertTraceTimeouts.values()) {
-            for (const timeoutId of timeoutSet) {
-                window.clearTimeout(timeoutId);
-            }
-        }
-        this.nativeInsertTraceTimeouts.clear();
-        for (const rafSet of this.nativeInsertTraceRafs.values()) {
-            for (const rafId of rafSet) {
-                cancelAnimationFrame(rafId);
-            }
-        }
-        this.nativeInsertTraceRafs.clear();
-        this.nativeInsertSettledTraceAt.clear();
-        this.nativeInsertProbePhasesByTrace.clear();
-        this.nativeInsertPostSessionPhasesByTrace.clear();
-        this.nativeInsertTraceContextById.clear();
-        this.nativeInsertTraceSummaryLoggedAt.clear();
+        const nativeInsertTraceState = this.getNativeInsertTraceState();
+        clearAllNativeInsertTraceStateHelper(nativeInsertTraceState);
+        this.syncNativeInsertTraceState(nativeInsertTraceState);
         while (this.nativeInsertEngineRestoreFns.length > 0) {
             const restore = this.nativeInsertEngineRestoreFns.pop();
             try {
