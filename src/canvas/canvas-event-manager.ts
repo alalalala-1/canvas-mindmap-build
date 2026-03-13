@@ -63,6 +63,13 @@ import {
     registerNativeInsertTimeout as registerNativeInsertTimeoutHelper,
     rememberNativeInsertTraceContext as rememberNativeInsertTraceContextHelper,
 } from './event-manager/native-insert-trace';
+import {
+    collectNativeInsertEvidence as collectNativeInsertEvidenceHelper,
+    evaluateNativeInsertBlankProtection as evaluateNativeInsertBlankProtectionHelper,
+    getCurrentNativeInsertSelectionSummary as getCurrentNativeInsertSelectionSummaryHelper,
+    getNativeInsertSelectionKey as getNativeInsertSelectionKeyHelper,
+    shouldCommitNativeInsertSession as shouldCommitNativeInsertSessionHelper,
+} from './event-manager/native-insert-policy';
 
 type FromLinkInfo = {
     file: string;
@@ -1727,21 +1734,11 @@ export class CanvasEventManager {
         session: Pick<NativeInsertSession, 'pointerType' | 'startReason' | 'targetKind' | 'placeholderSeen' | 'placeholderAddedCount' | 'wrapperDragSeen'>;
         placeholderDelta: number;
     }): string[] {
-        const flags = new Set<string>();
-        const { session, placeholderDelta } = input;
-
-        if (session.targetKind === 'placeholder') flags.add('placeholder-target');
-        if (session.placeholderSeen) flags.add('placeholder-seen');
-        if ((session.placeholderAddedCount || 0) > 0) flags.add('placeholder-mutation');
-        if (placeholderDelta > 0) flags.add('placeholder-delta');
-        if (session.wrapperDragSeen) flags.add('wrapper-drag');
-        if (session.startReason === 'wrapper-active') flags.add('wrapper-active');
-        if (session.startReason === 'wrapper-placeholder-present') flags.add('wrapper-placeholder-present');
-        if (this.isTouchLikePointer(session.pointerType) && session.startReason === 'wrapper-touch-like') {
-            flags.add('touch-like-wrapper');
-        }
-
-        return Array.from(flags);
+        return collectNativeInsertEvidenceHelper({
+            session: input.session,
+            placeholderDelta: input.placeholderDelta,
+            isTouchLikePointer: (pointerType) => this.isTouchLikePointer(pointerType),
+        });
     }
 
     private registerNativeInsertProbePhase(traceId: string, phase: 'raf' | 'timeout-120'): boolean {
@@ -1978,63 +1975,14 @@ export class CanvasEventManager {
         allow: boolean;
         reason: string;
     } {
-        if (input.endReason === 'pointercancel') {
-            return {
-                allow: false,
-                reason: 'pointer-cancelled'
-            };
-        }
-
-        if (input.pointerDetail >= 2) {
-            return {
-                allow: false,
-                reason: 'multi-click'
-            };
-        }
-
-        if (input.session.nodeCreateSeen) {
-            return {
-                allow: false,
-                reason: 'node-create-observed'
-            };
-        }
-
-        if (input.nodeDelta > 0) {
-            return {
-                allow: false,
-                reason: `node-delta:${input.nodeDelta}`
-            };
-        }
-
-        const actionableTarget = input.session.targetKind === 'placeholder'
-            || input.session.targetKind.startsWith('node-content')
-            || input.session.targetKind.startsWith('wrapper');
-
-        if (!actionableTarget) {
-            return {
-                allow: false,
-                reason: `unsupported-target:${input.session.targetKind}`
-            };
-        }
-
-        const evidenceFlags = this.collectNativeInsertEvidence({
+        return shouldCommitNativeInsertSessionHelper({
             session: input.session,
+            nodeDelta: input.nodeDelta,
             placeholderDelta: input.placeholderDelta,
+            endReason: input.endReason,
+            pointerDetail: input.pointerDetail,
+            isTouchLikePointer: (pointerType) => this.isTouchLikePointer(pointerType),
         });
-
-        if (evidenceFlags.length === 0) {
-            return {
-                allow: false,
-                reason: 'insufficient-evidence'
-            };
-        }
-
-        return {
-            allow: true,
-            reason: input.session.anchorNodeId
-                ? 'missing-native-create-with-anchor'
-                : 'missing-native-create-no-anchor'
-        };
     }
 
     private queueNativeInsertCommitFlush(traceId: string, trigger: string, delayMs: number): void {
@@ -2074,11 +2022,7 @@ export class CanvasEventManager {
         edgeIds: string[];
         activeEdgeId: string | null;
     }): string {
-        return [
-            `nodes=${summary.nodeIds.join('|') || 'none'}`,
-            `edges=${summary.edgeIds.join('|') || 'none'}`,
-            `active=${summary.activeEdgeId || 'none'}`,
-        ].join(';');
+        return getNativeInsertSelectionKeyHelper(summary);
     }
 
     private getCurrentNativeInsertSelectionSummary(): {
@@ -2088,7 +2032,7 @@ export class CanvasEventManager {
     } {
         const canvasView = getCanvasView(this.app);
         const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
-        return getCanvasSelectionSummary(canvas);
+        return getCurrentNativeInsertSelectionSummaryHelper(canvas);
     }
 
     private evaluateNativeInsertBlankProtection(
@@ -2106,111 +2050,7 @@ export class CanvasEventManager {
         anchorSelected: boolean;
         weakEvidenceOnly: boolean;
     } {
-        const blankCandidate = candidate.blankCandidate ?? true;
-        const queuedSelectionNodeCount = candidate.queuedSelectionNodeCount ?? 0;
-        const queuedSelectionEdgeCount = candidate.queuedSelectionEdgeCount ?? 0;
-        const emptySelectionKey = this.getNativeInsertSelectionKey({
-            nodeIds: [],
-            edgeIds: [],
-            activeEdgeId: null,
-        });
-        const queuedSelectionKey = candidate.queuedSelectionKey ?? emptySelectionKey;
-        const currentSelection = getCanvasSelectionSummary(canvas);
-        const currentSelectionKey = this.getNativeInsertSelectionKey(currentSelection);
-        const selectionNodeCount = currentSelection.nodeIds.length;
-        const selectionEdgeCount = currentSelection.edgeIds.length;
-        const selectionStable = queuedSelectionKey === currentSelectionKey;
-        const anchorSelected = !!candidate.anchorNodeId && currentSelection.nodeIds.includes(candidate.anchorNodeId);
-        const weakEvidenceOnly = (candidate.evidenceFlags?.length ?? 0) > 0
-            && candidate.evidenceFlags!.every(flag => flag === 'touch-like-wrapper');
-
-        if (!blankCandidate) {
-            return {
-                allow: true,
-                reason: 'not-blank-candidate',
-                blankCandidate,
-                queuedSelectionNodeCount,
-                queuedSelectionEdgeCount,
-                selectionNodeCount,
-                selectionEdgeCount,
-                selectionStable,
-                anchorSelected,
-                weakEvidenceOnly,
-            };
-        }
-
-        if (selectionEdgeCount > 0) {
-            return {
-                allow: false,
-                reason: 'blank-protection-edge-selection',
-                blankCandidate,
-                queuedSelectionNodeCount,
-                queuedSelectionEdgeCount,
-                selectionNodeCount,
-                selectionEdgeCount,
-                selectionStable,
-                anchorSelected,
-                weakEvidenceOnly,
-            };
-        }
-
-        if (selectionNodeCount > 1) {
-            return {
-                allow: false,
-                reason: 'blank-protection-multi-node-selection',
-                blankCandidate,
-                queuedSelectionNodeCount,
-                queuedSelectionEdgeCount,
-                selectionNodeCount,
-                selectionEdgeCount,
-                selectionStable,
-                anchorSelected,
-                weakEvidenceOnly,
-            };
-        }
-
-        if (weakEvidenceOnly && !candidate.anchorNodeId) {
-            return {
-                allow: false,
-                reason: 'blank-protection-weak-evidence-only',
-                blankCandidate,
-                queuedSelectionNodeCount,
-                queuedSelectionEdgeCount,
-                selectionNodeCount,
-                selectionEdgeCount,
-                selectionStable,
-                anchorSelected,
-                weakEvidenceOnly,
-            };
-        }
-
-        if (candidate.anchorNodeId && selectionNodeCount > 0 && !anchorSelected && !selectionStable) {
-            return {
-                allow: false,
-                reason: 'blank-protection-selection-mismatch',
-                blankCandidate,
-                queuedSelectionNodeCount,
-                queuedSelectionEdgeCount,
-                selectionNodeCount,
-                selectionEdgeCount,
-                selectionStable,
-                anchorSelected,
-                weakEvidenceOnly,
-            };
-        }
-
-        return {
-            allow: true,
-            reason: 'blank-protection-passed',
-            blankCandidate,
-            queuedSelectionNodeCount,
-            queuedSelectionEdgeCount,
-            selectionNodeCount,
-            selectionEdgeCount,
-            selectionStable,
-            anchorSelected,
-            weakEvidenceOnly,
-        };
+        return evaluateNativeInsertBlankProtectionHelper(candidate, canvas);
     }
 
     private stageNativeInsertCommit(
