@@ -377,6 +377,55 @@ describe('CanvasEventManager native insert gating', () => {
 		});
 	});
 
+	it('should finalize a rejected summary when native insert session skip happens before pending commit is queued', () => {
+		const manager = createManager() as unknown as {
+			stageNativeInsertCommit: (
+				session: {
+					traceId: string;
+					pointerType: string;
+					targetKind: string;
+					startReason: string;
+					nodeCreateSeen: boolean;
+					anchorNodeId: string | null;
+					placeholderSeen: boolean;
+					placeholderAddedCount: number;
+					wrapperDragSeen: boolean;
+					initialNodeCount: number;
+					initialPlaceholderCount: number;
+				},
+				nodeDelta: number,
+				placeholderDelta: number,
+				endReason: string,
+				pointerDetail: number,
+			) => boolean;
+		};
+
+		const committed = manager.stageNativeInsertCommit({
+			traceId: 'ni-stage-reject',
+			pointerType: 'mouse',
+			targetKind: 'node-content:selected',
+			startReason: 'node-content',
+			nodeCreateSeen: false,
+			anchorNodeId: 'parent-1',
+			placeholderSeen: false,
+			placeholderAddedCount: 0,
+			wrapperDragSeen: false,
+			initialNodeCount: 1,
+			initialPlaceholderCount: 0,
+		} as never, 0, 0, 'pointerup', 1);
+
+		expect(committed).toBe(false);
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.filter(message => message.includes('NativeInsertTraceSummary: trace=ni-stage-reject'))).toHaveLength(1);
+		expect(messages.some(message => (
+			message.includes('NativeInsertTraceSummary: trace=ni-stage-reject')
+			&& message.includes('outcome=rejected')
+			&& message.includes('reason=insufficient-evidence')
+			&& message.includes('accepted=false')
+			&& message.includes('nodeCreate=none')
+		))).toBe(true);
+	});
+
 	it('should skip native insert fallback when node creation already happened or gesture was cancelled', () => {
 		const manager = createManager() as unknown as {
 			shouldCommitNativeInsertSession: (input: {
@@ -1259,6 +1308,8 @@ describe('CanvasEventManager native insert gating', () => {
 				&& message.includes('blankCandidate=true')
 				&& message.includes('selectionStable=true')
 				&& message.includes('fallbackCommitted=true')
+				&& message.includes('accepted=true')
+				&& message.includes('nodeCreate=observed')
 				&& message.includes('observedNodeDelta=1')
 				&& message.includes('clearedTimeouts=1')
 				&& message.includes('clearedRafs=1')
@@ -1268,6 +1319,106 @@ describe('CanvasEventManager native insert gating', () => {
 			(globalThis as Record<string, unknown>).cancelAnimationFrame = originalCancelRaf;
 			vi.useRealTimers();
 		}
+	});
+
+	it('should accept mouse native insert on classify-timeout with a single authoritative summary', async () => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: true });
+		clearRecentLogs();
+		const canvas = {
+			nodes: [{ id: 'parent-1', type: 'text', text: '' }] as Array<{ id: string; type: 'text'; text: string }>,
+			edges: [] as unknown[],
+			selectedNodes: [{ id: 'parent-1', type: 'text', text: '' }],
+			file: { path: 'test.canvas' },
+		};
+		const addNodeToCanvas = vi.fn(async () => {
+			canvas.nodes.push({ id: 'created-mouse-1', type: 'text', text: '' });
+		});
+		const canvasView = {
+			getViewType: () => 'canvas',
+			canvas,
+			file: { path: 'test.canvas' },
+			contentEl: {},
+		};
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => canvasView,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+				lastPointerDetail: number;
+				clickDetail?: number;
+				clickClassified?: boolean;
+				commitEligibleAt?: number;
+				awaitingClickClassification?: boolean;
+				evidenceFlags?: string[];
+				blankCandidate?: boolean;
+				queuedSelectionNodeCount?: number;
+				queuedSelectionEdgeCount?: number;
+				queuedSelectionKey?: string;
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-mouse-accept',
+			pointerType: 'mouse',
+			startReason: 'wrapper-active',
+			targetKind: 'wrapper:is-dragging',
+			anchorNodeId: 'parent-1',
+			initialNodeCount: 1,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 1,
+			endReason: 'pointerup',
+			endedAt: Date.now() - 800,
+			engineAttempted: false,
+			lastPointerDetail: 1,
+			clickDetail: 1,
+			clickClassified: false,
+			commitEligibleAt: Date.now() - 1,
+			awaitingClickClassification: true,
+			evidenceFlags: ['wrapper-active', 'placeholder-delta'],
+			blankCandidate: true,
+			queuedSelectionNodeCount: 1,
+			queuedSelectionEdgeCount: 0,
+			queuedSelectionKey: 'nodes=parent-1;edges=none;active=none',
+		};
+
+		await manager.flushPendingNativeInsertCommit('session-end:mouse-classify-timeout');
+
+		expect(addNodeToCanvas).toHaveBeenCalledTimes(1);
+		expect(manager.pendingNativeInsertCommit).toBeNull();
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.filter(message => message.includes('NativeInsertTraceSummary: trace=ni-mouse-accept'))).toHaveLength(1);
+		expect(messages.some(message => (
+			message.includes('NativeInsertTraceSummary: trace=ni-mouse-accept')
+			&& message.includes('outcome=accepted')
+			&& message.includes('clickClassified=true')
+			&& message.includes('accepted=true')
+			&& message.includes('nodeCreate=observed')
+			&& message.includes('selectionStable=true')
+		))).toBe(true);
 	});
 
 	it('should dedup open-entry stabilization across active-leaf-change and file-open for same file', () => {

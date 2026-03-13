@@ -155,6 +155,8 @@ type NativeInsertTraceContext = {
     selectionEdgeCount?: number;
     selectionStable?: boolean;
     fallbackCommitted?: boolean;
+    accepted?: boolean;
+    nodeCreate?: string;
     updatedAt: number;
 };
 
@@ -1701,6 +1703,8 @@ export class CanvasEventManager {
             selectionEdgeCount: input.selectionEdgeCount ?? previous?.selectionEdgeCount,
             selectionStable: input.selectionStable ?? previous?.selectionStable,
             fallbackCommitted: input.fallbackCommitted ?? previous?.fallbackCommitted,
+            accepted: input.accepted ?? previous?.accepted,
+            nodeCreate: input.nodeCreate ?? previous?.nodeCreate,
             updatedAt: Date.now(),
         };
 
@@ -1757,7 +1761,8 @@ export class CanvasEventManager {
             `blankCandidate=${context?.blankCandidate ?? false}, queuedSelectionNodes=${context?.queuedSelectionNodeCount ?? 'na'}, ` +
             `queuedSelectionEdges=${context?.queuedSelectionEdgeCount ?? 'na'}, selectionNodes=${context?.selectionNodeCount ?? 'na'}, ` +
             `selectionEdges=${context?.selectionEdgeCount ?? 'na'}, selectionStable=${context?.selectionStable ?? 'na'}, ` +
-            `fallbackCommitted=${context?.fallbackCommitted ?? false}, ` +
+            `fallbackCommitted=${context?.fallbackCommitted ?? false}, accepted=${context?.accepted ?? (input.outcome === 'accepted')}, ` +
+            `nodeCreate=${context?.nodeCreate || 'none'}, ` +
             `queuedNodeDelta=${context?.nodeDelta ?? 'na'}, queuedPlaceholderDelta=${context?.placeholderDelta ?? 'na'}, ` +
             `evidence=${context?.evidenceFlags?.join('|') || 'none'}, clearedTimeouts=${cleanup.clearedTimeoutCount}, ` +
             `clearedRafs=${cleanup.clearedRafCount}, clearedProbePhases=${cleanup.clearedProbePhaseCount}, ` +
@@ -1901,6 +1906,8 @@ export class CanvasEventManager {
             blankCandidate: candidate.blankCandidate ?? true,
             queuedSelectionNodeCount: candidate.queuedSelectionNodeCount,
             queuedSelectionEdgeCount: candidate.queuedSelectionEdgeCount,
+            accepted: false,
+            nodeCreate: 'none',
         });
 
         log(
@@ -2347,6 +2354,8 @@ export class CanvasEventManager {
             queuedSelectionNodeCount: queuedSelectionSummary.nodeIds.length,
             queuedSelectionEdgeCount: queuedSelectionSummary.edgeIds.length,
             fallbackCommitted: false,
+            accepted: false,
+            nodeCreate: 'none',
         });
         const decision = this.shouldCommitNativeInsertSession({
             session,
@@ -2363,7 +2372,15 @@ export class CanvasEventManager {
                 `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}, detail=${pointerDetail}`
             );
             this.pendingNativeInsertCommit = null;
-            this.clearNativeInsertScheduledWork(session.traceId, true);
+            const cleanup = this.clearNativeInsertScheduledWork(session.traceId, true);
+            this.finalizeNativeInsertTrace({
+                traceId: session.traceId,
+                outcome: 'rejected',
+                trigger: `session-end:${endReason}`,
+                reason: decision.reason,
+                detail: pointerDetail,
+                cleanup,
+            });
             return false;
         }
 
@@ -2406,6 +2423,8 @@ export class CanvasEventManager {
             queuedSelectionNodeCount: queuedSelectionSummary.nodeIds.length,
             queuedSelectionEdgeCount: queuedSelectionSummary.edgeIds.length,
             fallbackCommitted: false,
+            accepted: false,
+            nodeCreate: 'none',
         });
 
         log(
@@ -2454,6 +2473,8 @@ export class CanvasEventManager {
             queuedSelectionNodeCount: candidate.queuedSelectionNodeCount,
             queuedSelectionEdgeCount: candidate.queuedSelectionEdgeCount,
             fallbackCommitted: false,
+            accepted: false,
+            nodeCreate: 'none',
         });
 
         const combinedClickDetail = Math.max(candidate.lastPointerDetail || 0, candidate.clickDetail || 0);
@@ -2547,18 +2568,13 @@ export class CanvasEventManager {
             selectionEdgeCount: blankProtection.selectionEdgeCount,
             selectionStable: blankProtection.selectionStable,
             fallbackCommitted: false,
+            accepted: false,
+            nodeCreate: 'none',
         });
         if (!blankProtection.allow) {
             this.rejectPendingNativeInsertCommit(trigger, blankProtection.reason, undefined, {
-                blankCandidate: blankProtection.blankCandidate,
-                queuedSelectionNodes: blankProtection.queuedSelectionNodeCount,
-                queuedSelectionEdges: blankProtection.queuedSelectionEdgeCount,
-                selectionNodes: blankProtection.selectionNodeCount,
-                selectionEdges: blankProtection.selectionEdgeCount,
-                selectionStable: blankProtection.selectionStable,
                 anchorSelected: blankProtection.anchorSelected,
                 weakEvidenceOnly: blankProtection.weakEvidenceOnly,
-                fallbackCommitted: false,
             });
             return;
         }
@@ -2599,6 +2615,8 @@ export class CanvasEventManager {
                 selectionEdgeCount: blankProtection.selectionEdgeCount,
                 selectionStable: blankProtection.selectionStable,
                 fallbackCommitted: true,
+                accepted: true,
+                nodeCreate,
             });
 
             this.pendingNativeInsertCommit = null;
@@ -2623,17 +2641,8 @@ export class CanvasEventManager {
                 detail: combinedClickDetail || candidate.lastPointerDetail,
                 cleanup,
                 extraFields: {
-                    accepted: true,
-                    blankCandidate: blankProtection.blankCandidate,
-                    queuedSelectionNodes: blankProtection.queuedSelectionNodeCount,
-                    queuedSelectionEdges: blankProtection.queuedSelectionEdgeCount,
-                    selectionNodes: blankProtection.selectionNodeCount,
-                    selectionEdges: blankProtection.selectionEdgeCount,
-                    selectionStable: blankProtection.selectionStable,
                     anchorSelected: blankProtection.anchorSelected,
                     weakEvidenceOnly: blankProtection.weakEvidenceOnly,
-                    fallbackCommitted: true,
-                    nodeCreate,
                     observedNodeDelta,
                     observedEdgeDelta,
                     beforeNodes: currentSnapshot.nodeCount,
