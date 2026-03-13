@@ -34,7 +34,7 @@ import {
     parseFromLink,
     withTemporaryCanvasSelection
 } from '../utils/canvas-utils';
-import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, MarkdownViewLike, PluginWithLastClicked } from './types';
+import { CanvasLike, CanvasNodeLike, CanvasEdgeLike, CanvasViewLike, PluginWithLastClicked } from './types';
 import { VisibilityService } from './services/visibility-service';
 import { requestCanvasUpdate, setActiveLeafSafe } from './adapters/canvas-runtime-adapter';
 import {
@@ -70,12 +70,70 @@ import {
     getNativeInsertSelectionKey as getNativeInsertSelectionKeyHelper,
     shouldCommitNativeInsertSession as shouldCommitNativeInsertSessionHelper,
 } from './event-manager/native-insert-policy';
-
-type FromLinkInfo = {
-    file: string;
-    from: { line: number; ch: number };
-    to: { line: number; ch: number };
-};
+import {
+	describeCanvasPointerTargetKind as describeCanvasPointerTargetKindHelper,
+	describeEventTarget as describeEventTargetHelper,
+	describeEventTargetChain as describeEventTargetChainHelper,
+	describeNativeInsertTargetKind as describeNativeInsertTargetKindHelper,
+	describePointerEventState as describePointerEventStateHelper,
+	getMoveThresholdForPointer as getMoveThresholdForPointerHelper,
+	getTouchDragScrollOwners as getTouchDragScrollOwnersHelper,
+	isPenPointer as isPenPointerHelper,
+	isTouchLikePointer as isTouchLikePointerHelper,
+	isTouchPointer as isTouchPointerHelper,
+	restoreInlineStyle as restoreInlineStyleHelper,
+} from './event-manager/pointer-gesture-helpers';
+import {
+	flushNodeMountedBatch as flushNodeMountedBatchHelper,
+	markOpenProtectionWindow as markOpenProtectionWindowHelper,
+	markProgrammaticCanvasReload as markProgrammaticCanvasReloadHelper,
+	queueNodeMountedStabilization as queueNodeMountedStabilizationHelper,
+	scheduleNodeMountedBatchFlush as scheduleNodeMountedBatchFlushHelper,
+	scheduleOpenStabilizationWithDedup as scheduleOpenStabilizationWithDedupHelper,
+	shouldSuppressOpenStabilization as shouldSuppressOpenStabilizationHelper,
+	type OpenEntryGuardHost,
+} from './event-manager/open-entry-guard';
+import {
+	clearSuspiciousDeleteModalFocusContext as clearSuspiciousDeleteModalFocusContextHelper,
+	describeDeleteModalFocusContext as describeDeleteModalFocusContextHelper,
+	hasSuspiciousDeleteModalFocusContext as hasSuspiciousDeleteModalFocusContextHelper,
+	markSuppressDeleteButtonClick as markSuppressDeleteButtonClickHelper,
+	markSuppressOpenEntryByFocusNormalization as markSuppressOpenEntryByFocusNormalizationHelper,
+	openDeleteModalSafely as openDeleteModalSafelyHelper,
+	runDeleteModalOnNextFrame as runDeleteModalOnNextFrameHelper,
+	shouldSuppressDeleteButtonClick as shouldSuppressDeleteButtonClickHelper,
+	waitForDeleteModalFocusSettle as waitForDeleteModalFocusSettleHelper,
+	type DeleteModalFocusGuardHost,
+} from './event-manager/delete-modal-focus-guard';
+import {
+	executeDeleteEdgeOperation as executeDeleteEdgeOperationHelper,
+	executeDeleteOperation as executeDeleteOperationHelper,
+	handleDeleteButtonClick as handleDeleteButtonClickHelper,
+	type DeleteOperationsHost,
+} from './event-manager/delete-operations';
+import {
+	handleFromLinkClick as handleFromLinkClickHelper,
+	handleFromLinkNavigationByNodeId as handleFromLinkNavigationByNodeIdHelper,
+	navigateToFromLink as navigateToFromLinkHelper,
+	type FromLinkNavigationHost,
+} from './event-manager/fromlink-navigation';
+import {
+	endNativeInsertSession as endNativeInsertSessionHelper,
+	evaluateNativeInsertSessionStart as evaluateNativeInsertSessionStartHelper,
+	flushPendingNativeInsertCommit as flushPendingNativeInsertCommitHelper,
+	getCanvasGraphSnapshot as getCanvasGraphSnapshotHelper,
+	queueNativeInsertCommitFlush as queueNativeInsertCommitFlushHelper,
+	queueNativeInsertCommitRaf as queueNativeInsertCommitRafHelper,
+	rejectPendingNativeInsertCommit as rejectPendingNativeInsertCommitHelper,
+	scheduleNativeInsertSelectionProbe as scheduleNativeInsertSelectionProbeHelper,
+	stageNativeInsertCommit as stageNativeInsertCommitHelper,
+	startNativeInsertSession as startNativeInsertSessionHelper,
+	touchNativeInsertSession as touchNativeInsertSessionHelper,
+	type CanvasGraphSnapshot as NativeInsertCanvasGraphSnapshot,
+	type NativeInsertPendingCommit as NativeInsertPendingCommitState,
+	type NativeInsertSession as NativeInsertSessionState,
+	type NativeInsertControllerHost,
+} from './event-manager/native-insert-controller';
 
 type PointerGestureSnapshot = {
     pointerId: number;
@@ -110,60 +168,9 @@ type PenLongPressSnapshot = {
     triggered: boolean;
 };
 
-type NativeInsertSession = {
-    pointerId: number;
-    pointerType: string;
-    startReason: string;
-    startedAt: number;
-    lastSeenAt: number;
-    traceId: string;
-    targetKind: string;
-    anchorNodeId: string | null;
-    startTarget: string;
-    startChain: string;
-    startSelection: string;
-    downDefaultPrevented: boolean;
-    initialNodeCount: number;
-    initialPlaceholderCount: number;
-    initialWrapperStyle: string;
-    wrapperDragSeen: boolean;
-    placeholderSeen: boolean;
-    nodeCreateSeen: boolean;
-    placeholderAddedCount: number;
-    placeholderRemovedCount: number;
-    domNodeAddedCount: number;
-    domNodeRemovedCount: number;
-};
-
-type NativeInsertPendingCommit = {
-    traceId: string;
-    pointerType: string;
-    startReason: string;
-    targetKind: string;
-    anchorNodeId: string | null;
-    initialNodeCount: number;
-    initialPlaceholderCount: number;
-    nodeDelta: number;
-    placeholderDelta: number;
-    endReason: string;
-    endedAt: number;
-    engineAttempted: boolean;
-    lastPointerDetail: number;
-    clickDetail?: number;
-    clickClassified?: boolean;
-    commitEligibleAt?: number;
-    awaitingClickClassification?: boolean;
-    evidenceFlags?: string[];
-    blankCandidate?: boolean;
-    queuedSelectionNodeCount?: number;
-    queuedSelectionEdgeCount?: number;
-    queuedSelectionKey?: string;
-};
-
-type CanvasGraphSnapshot = {
-    nodeCount: number;
-    edgeCount: number;
-};
+type NativeInsertSession = NativeInsertSessionState;
+type NativeInsertPendingCommit = NativeInsertPendingCommitState;
+type CanvasGraphSnapshot = NativeInsertCanvasGraphSnapshot;
 
 export class CanvasEventManager {
     private plugin: Plugin;
@@ -293,6 +300,34 @@ export class CanvasEventManager {
         // 从 CanvasManager 获取 FloatingNodeService
         this.floatingNodeService = canvasManager.getFloatingNodeService();
     }
+
+	private asOpenEntryGuardHost(): OpenEntryGuardHost {
+		return this as unknown as OpenEntryGuardHost;
+	}
+
+	private asDeleteModalFocusGuardHost(): DeleteModalFocusGuardHost {
+		return this as unknown as DeleteModalFocusGuardHost;
+	}
+
+	private asDeleteOperationsHost(): DeleteOperationsHost {
+		return this as unknown as DeleteOperationsHost;
+	}
+
+	private asNativeInsertControllerHost(): NativeInsertControllerHost {
+		return this as unknown as NativeInsertControllerHost;
+	}
+
+	private asFromLinkNavigationHost(): FromLinkNavigationHost {
+		return this as unknown as FromLinkNavigationHost;
+	}
+
+	private getCanvasView(): ItemView | null {
+		return getCanvasView(this.app);
+	}
+
+	private setActiveLeafSafe(leaf: unknown, options: { focus: boolean }): boolean {
+		return setActiveLeafSafe(this.app, leaf as never, options);
+	}
 
     /**
      * 初始化事件监听
@@ -976,15 +1011,15 @@ export class CanvasEventManager {
     }
 
     private isTouchPointer(pointerType: string | null | undefined): boolean {
-        return pointerType === CONSTANTS.TOUCH.TOUCH_POINTER_TYPE;
+		return isTouchPointerHelper(pointerType);
     }
 
     private isPenPointer(pointerType: string | null | undefined): boolean {
-        return pointerType === CONSTANTS.TOUCH.PEN_POINTER_TYPE;
+		return isPenPointerHelper(pointerType);
     }
 
     private isTouchLikePointer(pointerType: string | null | undefined): boolean {
-        return this.isTouchPointer(pointerType) || this.isPenPointer(pointerType);
+		return isTouchLikePointerHelper(pointerType);
     }
 
     private isContentBlockerTarget(target: EventTarget | null): boolean {
@@ -992,35 +1027,15 @@ export class CanvasEventManager {
     }
 
     private describeEventTarget(target: EventTarget | null): string {
-        if (!(target instanceof Element)) return 'non-element';
-        const className = (target.getAttribute('class') || '').trim().replace(/\s+/g, '.');
-        return `${target.tagName.toLowerCase()}${className ? '.' + className : ''}`;
+		return describeEventTargetHelper(target);
     }
 
     private describeEventTargetChain(target: EventTarget | null, maxDepth = 5): string {
-        if (!(target instanceof Element)) return 'non-element';
-
-        const parts: string[] = [];
-        let current: Element | null = target;
-        let depth = 0;
-
-        while (current && depth < maxDepth) {
-            parts.push(this.describeEventTarget(current));
-            current = current.parentElement;
-            depth++;
-        }
-
-        return parts.join(' <- ');
+		return describeEventTargetChainHelper(target, maxDepth);
     }
 
     private getMoveThresholdForPointer(pointerType: string | null | undefined): number {
-        if (this.isPenPointer(pointerType)) {
-            return CONSTANTS.TOUCH.MOVE_THRESHOLD_PEN;
-        }
-        if (this.isTouchPointer(pointerType)) {
-            return CONSTANTS.TOUCH.MOVE_THRESHOLD_TOUCH;
-        }
-        return CONSTANTS.TOUCH.MOVE_THRESHOLD;
+		return getMoveThresholdForPointerHelper(pointerType);
     }
 
     private markSuppressFromLinkClick(nodeId: string | null, holdMs: number, reason: string): void {
@@ -1534,11 +1549,7 @@ export class CanvasEventManager {
     }
 
     private restoreInlineStyle(el: HTMLElement, property: string, value: string, priority: string): void {
-        if (value) {
-            el.style.setProperty(property, value, priority || '');
-            return;
-        }
-        el.style.removeProperty(property);
+		restoreInlineStyleHelper(el, property, value, priority);
     }
 
     private createNativeInsertTraceId(pointerId: number): string {
@@ -1564,17 +1575,7 @@ export class CanvasEventManager {
     }
 
     private describePointerEventState(event: MouseEvent | PointerEvent): string {
-        const detail = typeof event.detail === 'number' ? event.detail : 'n/a';
-        const button = typeof event.button === 'number' ? event.button : 'n/a';
-        const buttons = typeof event.buttons === 'number' ? event.buttons : 'n/a';
-        return [
-            `defaultPrevented=${event.defaultPrevented}`,
-            `cancelable=${event.cancelable}`,
-            `button=${button}`,
-            `buttons=${buttons}`,
-            `detail=${detail}`,
-            `trusted=${event.isTrusted}`
-        ].join(',');
+		return describePointerEventStateHelper(event);
     }
 
     private getCanvasWrapperElement(target: EventTarget | null): HTMLElement | null {
@@ -1773,49 +1774,7 @@ export class CanvasEventManager {
         detail?: number,
         extraFields?: Record<string, unknown>
     ): boolean {
-        const candidate = this.pendingNativeInsertCommit;
-        if (!candidate) return false;
-
-        this.rememberNativeInsertTraceContext({
-            traceId: candidate.traceId,
-            pointerType: candidate.pointerType,
-            startReason: candidate.startReason,
-            targetKind: candidate.targetKind,
-            anchorNodeId: candidate.anchorNodeId,
-            endReason: candidate.endReason,
-            nodeDelta: candidate.nodeDelta,
-            placeholderDelta: candidate.placeholderDelta,
-            lastPointerDetail: detail ?? candidate.lastPointerDetail,
-            clickDetail: candidate.clickDetail,
-            clickClassified: candidate.clickClassified,
-            awaitingClickClassification: candidate.awaitingClickClassification,
-            evidenceFlags: candidate.evidenceFlags,
-            blankCandidate: candidate.blankCandidate ?? true,
-            queuedSelectionNodeCount: candidate.queuedSelectionNodeCount,
-            queuedSelectionEdgeCount: candidate.queuedSelectionEdgeCount,
-            accepted: false,
-            nodeCreate: 'none',
-        });
-
-        log(
-            `[Event] NativeInsertCommitRejected: trace=${candidate.traceId}, trigger=${trigger}, ` +
-            `reason=${reason}, detail=${detail ?? candidate.lastPointerDetail}, target=${candidate.targetKind}, ` +
-            `anchor=${candidate.anchorNodeId || 'none'}, queuedNodeDelta=${candidate.nodeDelta}, ` +
-            `queuedPlaceholderDelta=${candidate.placeholderDelta}, endReason=${candidate.endReason}` +
-            this.formatNativeInsertExtraFields(extraFields)
-        );
-        this.pendingNativeInsertCommit = null;
-        const cleanup = this.clearNativeInsertScheduledWork(candidate.traceId, true);
-        this.finalizeNativeInsertTrace({
-            traceId: candidate.traceId,
-            outcome: 'rejected',
-            trigger,
-            reason,
-            detail: detail ?? candidate.lastPointerDetail,
-            cleanup,
-            extraFields,
-        });
-        return true;
+        return rejectPendingNativeInsertCommitHelper(this.asNativeInsertControllerHost(), trigger, reason, detail, extraFields);
     }
 
     private installNativeInsertEngineDiagnostics(canvas: CanvasLike | null): void {
@@ -1866,23 +1825,7 @@ export class CanvasEventManager {
     }
 
     private scheduleNativeInsertSelectionProbe(traceId: string, reason: string): void {
-        if (this.registerNativeInsertProbePhase(traceId, 'raf')) {
-            const rafId = requestAnimationFrame(() => {
-                if (this.isNativeInsertTraceSettled(traceId)) return;
-                logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:raf, selection=${this.describeCanvasSelection()}`);
-            });
-            this.registerNativeInsertRaf(traceId, rafId);
-        }
-
-        if (this.registerNativeInsertProbePhase(traceId, 'timeout-120')) {
-            const timeout120 = window.setTimeout(() => {
-                if (this.isNativeInsertTraceSettled(traceId)) return;
-                if (this.pendingNativeInsertCommit?.traceId !== traceId) return;
-                if (this.nativeInsertCommitInFlight) return;
-                logVerbose(`[Event] NativeInsertSelectionProbe: trace=${traceId}, phase=${reason}:timeout-120, selection=${this.describeCanvasSelection()}`);
-            }, 120);
-            this.registerNativeInsertTimeout(traceId, timeout120);
-        }
+        scheduleNativeInsertSelectionProbeHelper(this.asNativeInsertControllerHost(), traceId, reason);
     }
 
     private collectMutationElementsByClass(node: Node, className: string): HTMLElement[] {
@@ -1913,23 +1856,7 @@ export class CanvasEventManager {
     }
 
     private describeNativeInsertTargetKind(target: EventTarget | null): string {
-        if (!(target instanceof Element)) return 'non-element';
-        if (target.closest('.canvas-node-placeholder')) return 'placeholder';
-
-        const nodeInsertEventEl = target.closest('.node-insert-event');
-        if (nodeInsertEventEl instanceof HTMLElement && nodeInsertEventEl.closest('.canvas-node')) {
-            const selected = !!target.closest('.canvas-node.is-selected, .canvas-node.is-focused');
-            return selected ? 'node-content:selected' : 'node-content';
-        }
-
-        const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
-        if (insertWrapper instanceof HTMLElement) {
-            const states = ['is-dragging', 'mod-animating', 'mod-zoomed-out']
-                .filter((className) => insertWrapper.classList.contains(className));
-            return states.length > 0 ? `wrapper:${states.join('+')}` : 'wrapper';
-        }
-
-        return 'other';
+		return describeNativeInsertTargetKindHelper(target);
     }
 
     private isCanvasSurfaceInteractionTarget(target: EventTarget | null): boolean {
@@ -1938,19 +1865,7 @@ export class CanvasEventManager {
     }
 
     private describeCanvasPointerTargetKind(target: EventTarget | null): string {
-        if (!(target instanceof Element)) return 'non-element';
-        if (isCanvasEdgeConnectGestureTarget(target)) return 'edge-connect';
-        if (isCanvasNativeInsertGestureTarget(target)) return `native-insert:${this.describeNativeInsertTargetKind(target)}`;
-        if (findCanvasNodeElementFromTarget(target)) return 'node';
-        if (target.closest('.cmb-collapse-button')) return 'collapse-button';
-        if (findDeleteButton(target)) return 'delete-button';
-        if (findZoomToFitButton(target)) return 'zoom-to-fit';
-        if (target.closest('.canvas-control-item')) return 'canvas-control';
-        if (target.closest('.canvas-edge-label')) return 'canvas-edge-label';
-        if (target.closest('.canvas-edge-line-group, .canvas-edge')) return 'canvas-edge';
-        if (target instanceof SVGElement && target.closest('svg')) return 'canvas-svg';
-        if (target.closest('.canvas-wrapper, .canvas')) return 'canvas-surface';
-        return 'other';
+		return describeCanvasPointerTargetKindHelper(target);
     }
 
     private ensureNativeInsertDiagnosticsInstalled(): void {
@@ -1986,35 +1901,15 @@ export class CanvasEventManager {
     }
 
     private queueNativeInsertCommitFlush(traceId: string, trigger: string, delayMs: number): void {
-        const timeoutId = window.setTimeout(() => {
-            if (this.isNativeInsertTraceSettled(traceId)) return;
-            if (this.pendingNativeInsertCommit?.traceId !== traceId) return;
-            void this.flushPendingNativeInsertCommit(trigger);
-        }, Math.max(0, delayMs));
-        this.registerNativeInsertTimeout(traceId, timeoutId);
+        queueNativeInsertCommitFlushHelper(this.asNativeInsertControllerHost(), traceId, trigger, delayMs);
     }
 
     private queueNativeInsertCommitRaf(traceId: string, trigger: string): void {
-        const rafId = requestAnimationFrame(() => {
-            if (this.isNativeInsertTraceSettled(traceId)) return;
-            if (this.pendingNativeInsertCommit?.traceId !== traceId) return;
-            void this.flushPendingNativeInsertCommit(trigger);
-        });
-        this.registerNativeInsertRaf(traceId, rafId);
+        queueNativeInsertCommitRafHelper(this.asNativeInsertControllerHost(), traceId, trigger);
     }
 
     private getCanvasGraphSnapshot(canvas: CanvasLike | null | undefined): CanvasGraphSnapshot {
-        if (!canvas) {
-            return {
-                nodeCount: 0,
-                edgeCount: 0,
-            };
-        }
-
-        return {
-            nodeCount: getNodesFromCanvas(canvas).length,
-            edgeCount: getEdgesFromCanvas(canvas).length,
-        };
+        return getCanvasGraphSnapshotHelper(canvas);
     }
 
     private getNativeInsertSelectionKey(summary: {
@@ -2060,353 +1955,19 @@ export class CanvasEventManager {
         endReason: string,
         pointerDetail: number
     ): boolean {
-        const evidenceFlags = this.collectNativeInsertEvidence({
-            session,
-            placeholderDelta,
-        });
-        const queuedSelectionSummary = this.getCurrentNativeInsertSelectionSummary();
-        const blankCandidate = true;
-        this.rememberNativeInsertTraceContext({
-            traceId: session.traceId,
-            pointerType: session.pointerType,
-            startReason: session.startReason,
-            targetKind: session.targetKind,
-            anchorNodeId: session.anchorNodeId,
-            endReason,
-            nodeDelta,
-            placeholderDelta,
-            lastPointerDetail: pointerDetail,
-            clickDetail: 0,
-            clickClassified: false,
-            awaitingClickClassification: session.pointerType === 'mouse',
-            evidenceFlags,
-            blankCandidate,
-            queuedSelectionNodeCount: queuedSelectionSummary.nodeIds.length,
-            queuedSelectionEdgeCount: queuedSelectionSummary.edgeIds.length,
-            fallbackCommitted: false,
-            accepted: false,
-            nodeCreate: 'none',
-        });
-        const decision = this.shouldCommitNativeInsertSession({
-            session,
-            nodeDelta,
-            placeholderDelta,
-            endReason,
-            pointerDetail,
-        });
-
-        if (!decision.allow) {
-            logVerbose(
-                `[Event] NativeInsertCommitSkipped: trace=${session.traceId}, reason=${decision.reason}, ` +
-                `target=${session.targetKind}, anchor=${session.anchorNodeId || 'none'}, ` +
-                `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}, detail=${pointerDetail}`
-            );
-            this.pendingNativeInsertCommit = null;
-            const cleanup = this.clearNativeInsertScheduledWork(session.traceId, true);
-            this.finalizeNativeInsertTrace({
-                traceId: session.traceId,
-                outcome: 'rejected',
-                trigger: `session-end:${endReason}`,
-                reason: decision.reason,
-                detail: pointerDetail,
-                cleanup,
-            });
-            return false;
-        }
-
         this.nativeInsertSettledTraceAt.delete(session.traceId);
-        this.clearNativeInsertScheduledWork(session.traceId, false);
-        const awaitingClickClassification = session.pointerType === 'mouse';
-        const commitEligibleAt = Date.now() + (awaitingClickClassification ? this.nativeInsertMouseClickClassificationWindowMs : 0);
-
-        this.pendingNativeInsertCommit = {
-            traceId: session.traceId,
-            pointerType: session.pointerType,
-            startReason: session.startReason,
-            targetKind: session.targetKind,
-            anchorNodeId: session.anchorNodeId,
-            initialNodeCount: session.initialNodeCount,
-            initialPlaceholderCount: session.initialPlaceholderCount,
+        return stageNativeInsertCommitHelper(
+            this.asNativeInsertControllerHost(),
+            session,
             nodeDelta,
             placeholderDelta,
             endReason,
-            endedAt: Date.now(),
-            engineAttempted: false,
-            lastPointerDetail: pointerDetail,
-            clickDetail: 0,
-            clickClassified: false,
-            commitEligibleAt,
-            awaitingClickClassification,
-            evidenceFlags,
-            blankCandidate,
-            queuedSelectionNodeCount: queuedSelectionSummary.nodeIds.length,
-            queuedSelectionEdgeCount: queuedSelectionSummary.edgeIds.length,
-            queuedSelectionKey: this.getNativeInsertSelectionKey(queuedSelectionSummary),
-        };
-        this.rememberNativeInsertTraceContext({
-            traceId: session.traceId,
-            clickDetail: 0,
-            clickClassified: false,
-            awaitingClickClassification,
-            evidenceFlags,
-            blankCandidate,
-            queuedSelectionNodeCount: queuedSelectionSummary.nodeIds.length,
-            queuedSelectionEdgeCount: queuedSelectionSummary.edgeIds.length,
-            fallbackCommitted: false,
-            accepted: false,
-            nodeCreate: 'none',
-        });
-
-        log(
-            `[Event] NativeInsertCommitQueued: trace=${session.traceId}, reason=${decision.reason}, ` +
-            `target=${session.targetKind}, anchor=${session.anchorNodeId || 'none'}, ` +
-            `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, endReason=${endReason}, detail=${pointerDetail}, ` +
-            `awaitClick=${awaitingClickClassification}, blankCandidate=${blankCandidate}, ` +
-            `queuedSelectionNodes=${queuedSelectionSummary.nodeIds.length}, queuedSelectionEdges=${queuedSelectionSummary.edgeIds.length}, ` +
-            `evidence=${evidenceFlags.join('|') || 'none'}`
+            pointerDetail
         );
-
-        if (awaitingClickClassification) {
-            logVerbose(
-                `[Event] NativeInsertCommitDeferred: trace=${session.traceId}, reason=await-click-classification, ` +
-                `waitMs=${this.nativeInsertMouseClickClassificationWindowMs}, evidence=${evidenceFlags.join('|') || 'none'}`
-            );
-            this.queueNativeInsertCommitFlush(session.traceId, 'session-end:mouse-classify-timeout', this.nativeInsertMouseClickClassificationWindowMs);
-            return true;
-        }
-
-        this.queueNativeInsertCommitFlush(session.traceId, 'session-end:timeout-0', 0);
-        this.queueNativeInsertCommitRaf(session.traceId, 'session-end:raf');
-        this.queueNativeInsertCommitFlush(session.traceId, 'session-end:timeout-120', 120);
-        return true;
     }
 
     private async flushPendingNativeInsertCommit(trigger: string): Promise<void> {
-        const candidate = this.pendingNativeInsertCommit;
-        if (!candidate) return;
-
-        this.rememberNativeInsertTraceContext({
-            traceId: candidate.traceId,
-            pointerType: candidate.pointerType,
-            startReason: candidate.startReason,
-            targetKind: candidate.targetKind,
-            anchorNodeId: candidate.anchorNodeId,
-            endReason: candidate.endReason,
-            nodeDelta: candidate.nodeDelta,
-            placeholderDelta: candidate.placeholderDelta,
-            lastPointerDetail: candidate.lastPointerDetail,
-            clickDetail: candidate.clickDetail,
-            clickClassified: candidate.clickClassified,
-            awaitingClickClassification: candidate.awaitingClickClassification,
-            evidenceFlags: candidate.evidenceFlags,
-            blankCandidate: candidate.blankCandidate ?? true,
-            queuedSelectionNodeCount: candidate.queuedSelectionNodeCount,
-            queuedSelectionEdgeCount: candidate.queuedSelectionEdgeCount,
-            fallbackCommitted: false,
-            accepted: false,
-            nodeCreate: 'none',
-        });
-
-        const combinedClickDetail = Math.max(candidate.lastPointerDetail || 0, candidate.clickDetail || 0);
-
-        if ((trigger === 'click-post-session' || trigger === 'dblclick-post-session') && combinedClickDetail >= 2) {
-            this.rejectPendingNativeInsertCommit(trigger, 'multi-click', combinedClickDetail);
-            return;
-        }
-
-        if (candidate.pointerType === 'mouse') {
-            const commitEligibleAt = candidate.commitEligibleAt ?? candidate.endedAt;
-            if (combinedClickDetail >= 2) {
-                this.rejectPendingNativeInsertCommit(trigger, 'multi-click', combinedClickDetail);
-                return;
-            }
-
-            if (!candidate.clickClassified) {
-                if (Date.now() < commitEligibleAt) {
-                    this.logNativeInsertCommitWait(candidate.traceId, trigger, 'await-click-classification');
-                    return;
-                }
-
-                candidate.clickClassified = true;
-                candidate.clickDetail = Math.max(candidate.clickDetail || 0, combinedClickDetail, 1);
-                this.rememberNativeInsertTraceContext({
-                    traceId: candidate.traceId,
-                    clickDetail: candidate.clickDetail,
-                    clickClassified: true,
-                    awaitingClickClassification: candidate.awaitingClickClassification,
-                    lastPointerDetail: candidate.lastPointerDetail,
-                });
-                logVerbose(
-                    `[Event] NativeInsertClickClassified: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                    `detail=${candidate.clickDetail}, evidence=${candidate.evidenceFlags?.join('|') || 'none'}`
-                );
-            }
-        }
-
-        if (this.nativeInsertCommitInFlight) {
-            this.logNativeInsertCommitWait(candidate.traceId, trigger, 'in-flight');
-            return;
-        }
-
-        if (
-            this.lastNativeInsertCommitTraceId === candidate.traceId
-            && Date.now() - this.lastNativeInsertCommitAt < 1500
-        ) {
-            this.pendingNativeInsertCommit = null;
-            const cleanup = this.clearNativeInsertScheduledWork(candidate.traceId, true);
-            this.finalizeNativeInsertTrace({
-                traceId: candidate.traceId,
-                outcome: 'dedup-skip',
-                trigger,
-                reason: 'recent-commit-dedup',
-                detail: combinedClickDetail || candidate.lastPointerDetail,
-                cleanup,
-            });
-            return;
-        }
-
-        const ageMs = Date.now() - candidate.endedAt;
-        const canvasView = getCanvasView(this.app);
-        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
-
-        if (!canvas) {
-            if (ageMs > 1200) {
-                this.rejectPendingNativeInsertCommit(trigger, 'no-canvas-expired', undefined, {
-                    age: `${ageMs}ms`,
-                });
-            }
-            return;
-        }
-
-        const currentSnapshot = this.getCanvasGraphSnapshot(canvas);
-        if (currentSnapshot.nodeCount > candidate.initialNodeCount) {
-            this.rejectPendingNativeInsertCommit(trigger, 'node-count-increased', undefined, {
-                initialNodeCount: candidate.initialNodeCount,
-                currentNodeCount: currentSnapshot.nodeCount,
-                currentEdgeCount: currentSnapshot.edgeCount,
-            });
-            return;
-        }
-
-        const blankProtection = this.evaluateNativeInsertBlankProtection(candidate, canvas);
-        this.rememberNativeInsertTraceContext({
-            traceId: candidate.traceId,
-            blankCandidate: blankProtection.blankCandidate,
-            queuedSelectionNodeCount: blankProtection.queuedSelectionNodeCount,
-            queuedSelectionEdgeCount: blankProtection.queuedSelectionEdgeCount,
-            selectionNodeCount: blankProtection.selectionNodeCount,
-            selectionEdgeCount: blankProtection.selectionEdgeCount,
-            selectionStable: blankProtection.selectionStable,
-            fallbackCommitted: false,
-            accepted: false,
-            nodeCreate: 'none',
-        });
-        if (!blankProtection.allow) {
-            this.rejectPendingNativeInsertCommit(trigger, blankProtection.reason, undefined, {
-                anchorSelected: blankProtection.anchorSelected,
-                weakEvidenceOnly: blankProtection.weakEvidenceOnly,
-            });
-            return;
-        }
-
-        this.nativeInsertCommitInFlight = true;
-        const preCommitCleanup = this.clearNativeInsertScheduledWork(candidate.traceId, false);
-        try {
-            log(
-                `[Event] NativeInsertCommitStart: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `mode=file-fallback, pointerType=${candidate.pointerType}, startReason=${candidate.startReason}, ` +
-                `target=${candidate.targetKind}, anchor=${candidate.anchorNodeId || 'none'}, ` +
-                `initialNodeCount=${candidate.initialNodeCount}, currentNodeCount=${currentSnapshot.nodeCount}, ` +
-                `currentEdgeCount=${currentSnapshot.edgeCount}, queuedNodeDelta=${candidate.nodeDelta}, ` +
-                `queuedPlaceholderDelta=${candidate.placeholderDelta}, endReason=${candidate.endReason}, age=${ageMs}ms`
-            );
-            log(
-                `[Event] NativeInsertCommitFallback: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `anchor=${candidate.anchorNodeId || 'none'}, engineAttempted=${candidate.engineAttempted}, ` +
-                `runtimeCreate=disabled, beforeNodes=${currentSnapshot.nodeCount}, beforeEdges=${currentSnapshot.edgeCount}, age=${ageMs}ms`
-            );
-            await this.canvasManager.addNodeToCanvas('', null, {
-                source: 'native-insert',
-                parentNodeIdHint: candidate.anchorNodeId,
-                suppressSuccessNotice: true,
-                skipFromLink: true,
-                verifiedNativeInsert: true,
-            });
-
-            const refreshedCanvasView = getCanvasView(this.app);
-            const refreshedCanvas = refreshedCanvasView ? this.getCanvasFromView(refreshedCanvasView) : canvas;
-            const afterSnapshot = this.getCanvasGraphSnapshot(refreshedCanvas ?? canvas);
-            const observedNodeDelta = afterSnapshot.nodeCount - currentSnapshot.nodeCount;
-            const observedEdgeDelta = afterSnapshot.edgeCount - currentSnapshot.edgeCount;
-            const nodeCreate = observedNodeDelta > 0 ? 'observed' : 'deferred-or-unobserved';
-            this.rememberNativeInsertTraceContext({
-                traceId: candidate.traceId,
-                selectionNodeCount: blankProtection.selectionNodeCount,
-                selectionEdgeCount: blankProtection.selectionEdgeCount,
-                selectionStable: blankProtection.selectionStable,
-                fallbackCommitted: true,
-                accepted: true,
-                nodeCreate,
-            });
-
-            this.pendingNativeInsertCommit = null;
-            this.lastNativeInsertCommitTraceId = candidate.traceId;
-            this.lastNativeInsertCommitAt = Date.now();
-            const cleanup = this.mergeNativeInsertScheduledWorkCleanup(
-                preCommitCleanup,
-                this.clearNativeInsertScheduledWork(candidate.traceId, true)
-            );
-            log(
-                `[Event] NativeInsertCommitDone: trace=${candidate.traceId}, trigger=${trigger}, ` +
-                `mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}, accepted=true, ` +
-                `nodeCreate=${nodeCreate}, nodeDelta=${observedNodeDelta}, edgeDelta=${observedEdgeDelta}, ` +
-                `beforeNodes=${currentSnapshot.nodeCount}, afterNodes=${afterSnapshot.nodeCount}, ` +
-                `beforeEdges=${currentSnapshot.edgeCount}, afterEdges=${afterSnapshot.edgeCount}`
-            );
-            this.finalizeNativeInsertTrace({
-                traceId: candidate.traceId,
-                outcome: 'accepted',
-                trigger,
-                reason: 'file-fallback',
-                detail: combinedClickDetail || candidate.lastPointerDetail,
-                cleanup,
-                extraFields: {
-                    anchorSelected: blankProtection.anchorSelected,
-                    weakEvidenceOnly: blankProtection.weakEvidenceOnly,
-                    observedNodeDelta,
-                    observedEdgeDelta,
-                    beforeNodes: currentSnapshot.nodeCount,
-                    afterNodes: afterSnapshot.nodeCount,
-                    beforeEdges: currentSnapshot.edgeCount,
-                    afterEdges: afterSnapshot.edgeCount,
-                },
-            });
-        } catch (error) {
-            log(`[Event] NativeInsertCommitError: trace=${candidate.traceId}, trigger=${trigger}, error=${String(error)}`);
-            if (trigger === 'click-post-session' || ageMs > 1200) {
-                this.pendingNativeInsertCommit = null;
-                const cleanup = this.mergeNativeInsertScheduledWorkCleanup(
-                    preCommitCleanup,
-                    this.clearNativeInsertScheduledWork(candidate.traceId, true)
-                );
-                this.finalizeNativeInsertTrace({
-                    traceId: candidate.traceId,
-                    outcome: 'error',
-                    trigger,
-                    reason: 'commit-error',
-                    detail: combinedClickDetail || candidate.lastPointerDetail,
-                    cleanup,
-                    extraFields: {
-                        error: String(error),
-                        age: `${ageMs}ms`,
-                    },
-                });
-            } else if (this.pendingNativeInsertCommit?.traceId === candidate.traceId) {
-                this.queueNativeInsertCommitFlush(candidate.traceId, `${trigger}:retry-timeout-120`, 120);
-            }
-        } finally {
-            this.nativeInsertCommitInFlight = false;
-        }
+        await flushPendingNativeInsertCommitHelper(this.asNativeInsertControllerHost(), trigger);
     }
 
     private evaluateNativeInsertSessionStart(pointerType: string, target: EventTarget | null): {
@@ -2415,100 +1976,7 @@ export class CanvasEventManager {
         reason: string;
         targetKind: string;
     } {
-        if (!(target instanceof Element)) {
-            return {
-                candidate: false,
-                allow: false,
-                reason: 'non-element',
-                targetKind: 'non-element'
-            };
-        }
-
-        if (isCanvasEdgeConnectGestureTarget(target)) {
-            return {
-                candidate: true,
-                allow: false,
-                reason: 'edge-connect',
-                targetKind: 'edge-connect'
-            };
-        }
-
-        const candidate = isCanvasNativeInsertGestureTarget(target);
-        const targetKind = this.describeNativeInsertTargetKind(target);
-        if (!candidate) {
-            return {
-                candidate: false,
-                allow: false,
-                reason: 'not-native-target',
-                targetKind
-            };
-        }
-
-        if (targetKind === 'placeholder') {
-            return {
-                candidate: true,
-                allow: true,
-                reason: 'placeholder',
-                targetKind
-            };
-        }
-
-        if (targetKind.startsWith('node-content')) {
-            return {
-                candidate: true,
-                allow: true,
-                reason: 'node-content',
-                targetKind
-            };
-        }
-
-        if (targetKind.startsWith('wrapper')) {
-            const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
-            const wrapperActive = insertWrapper instanceof HTMLElement
-                && (insertWrapper.classList.contains('is-dragging') || insertWrapper.classList.contains('mod-animating'));
-
-            if (wrapperActive) {
-                return {
-                    candidate: true,
-                    allow: true,
-                    reason: 'wrapper-active',
-                    targetKind
-                };
-            }
-
-            const hasPlaceholder = !!document.querySelector('.canvas-node-placeholder');
-            if (hasPlaceholder) {
-                return {
-                    candidate: true,
-                    allow: true,
-                    reason: 'wrapper-placeholder-present',
-                    targetKind
-                };
-            }
-
-            if (this.isTouchLikePointer(pointerType)) {
-                return {
-                    candidate: true,
-                    allow: true,
-                    reason: 'wrapper-touch-like',
-                    targetKind
-                };
-            }
-
-            return {
-                candidate: true,
-                allow: false,
-                reason: 'empty-wrapper-idle',
-                targetKind
-            };
-        }
-
-        return {
-            candidate: true,
-            allow: false,
-            reason: `unsupported-kind:${targetKind}`,
-            targetKind
-        };
+		return evaluateNativeInsertSessionStartHelper(this.asNativeInsertControllerHost(), pointerType, target);
     }
 
     private shouldSuppressSideEffectsForNativeInsert(): boolean {
@@ -2522,98 +1990,11 @@ export class CanvasEventManager {
         event: PointerEvent,
         startReason: string = 'direct'
     ): void {
-        const now = Date.now();
-        const placeholderSeen = target instanceof HTMLElement && !!target.closest('.canvas-node-placeholder');
-        const traceId = this.createNativeInsertTraceId(pointerId);
-        const wrapperEl = this.getCanvasWrapperElement(target);
-        const canvasView = getCanvasView(this.app);
-        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
-        const anchorNodeId = this.resolveNativeInsertAnchorNodeId(target);
-        this.installNativeInsertEngineDiagnostics(canvas);
-        const initialNodeCount = canvas ? getNodesFromCanvas(canvas).length : 0;
-        const initialPlaceholderCount = document.querySelectorAll('.canvas-node-placeholder').length;
-        const startSelection = this.describeCanvasSelection();
-        this.activeNativeInsertSession = {
-            pointerId,
-            pointerType,
-            startReason,
-            startedAt: now,
-            lastSeenAt: now,
-            traceId,
-            targetKind: this.describeNativeInsertTargetKind(target),
-            anchorNodeId,
-            startTarget: this.describeEventTarget(target),
-            startChain: this.describeEventTargetChain(target),
-            startSelection,
-            downDefaultPrevented: event.defaultPrevented,
-            initialNodeCount,
-            initialPlaceholderCount,
-            initialWrapperStyle: this.describeComputedStyleSnapshot(wrapperEl),
-            wrapperDragSeen: false,
-            placeholderSeen,
-            nodeCreateSeen: false,
-            placeholderAddedCount: placeholderSeen ? 1 : 0,
-            placeholderRemovedCount: 0,
-            domNodeAddedCount: 0,
-            domNodeRemovedCount: 0
-        };
-        this.rememberNativeInsertTraceContext({
-            traceId,
-            pointerType,
-            startReason,
-            targetKind: this.activeNativeInsertSession.targetKind,
-            anchorNodeId,
-            clickDetail: 0,
-            clickClassified: false,
-            awaitingClickClassification: false,
-        });
-        if (anchorNodeId && canvasView) {
-            this.rememberNodeInteractionContext(anchorNodeId, 'native-insert-start', canvasView);
-        }
-        this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, now + 1200);
-        log(
-            `[Event] NativeInsertSessionStart: trace=${traceId}, pointer=${pointerId}, pointerType=${pointerType}, ` +
-            `startReason=${startReason}, ` +
-            `target=${this.activeNativeInsertSession.targetKind}, anchor=${anchorNodeId || 'none'}, eventTarget=${this.describeEventTarget(target)}, ` +
-            `chain=${this.describeEventTargetChain(target)}, flags=${this.describePointerEventState(event)}, ` +
-            `wrapperStyle=${this.activeNativeInsertSession.initialWrapperStyle}, selection=${startSelection}, ` +
-            `engine=${this.describeNativeInsertEngineState()}`
-        );
-        if (placeholderSeen) {
-            logVerbose(`[Event] NativeInsertPlaceholderSeen: trace=${traceId}, pointer=${pointerId}, via=session-start`);
-        }
+		startNativeInsertSessionHelper(this.asNativeInsertControllerHost(), pointerId, pointerType, target, event, startReason);
     }
 
     private touchNativeInsertSession(target: EventTarget | null): void {
-        const session = this.activeNativeInsertSession;
-        if (!session) return;
-
-        session.lastSeenAt = Date.now();
-        this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, session.lastSeenAt + 900);
-
-        if (!(target instanceof Element)) return;
-
-        if (!session.placeholderSeen && target.closest('.canvas-node-placeholder')) {
-            session.placeholderSeen = true;
-            session.placeholderAddedCount += 1;
-            logVerbose(
-                `[Event] NativeInsertPlaceholderSeen: trace=${session.traceId}, pointer=${session.pointerId}, ` +
-                `target=${this.describeEventTarget(target)}, chain=${this.describeEventTargetChain(target)}, ` +
-                `targetStyle=${this.describeComputedStyleSnapshot(target)}`
-            );
-        }
-
-        const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
-        const wrapperDragging = insertWrapper instanceof HTMLElement
-            && (insertWrapper.classList.contains('is-dragging') || insertWrapper.classList.contains('mod-animating'));
-        if (wrapperDragging && !session.wrapperDragSeen) {
-            session.wrapperDragSeen = true;
-            log(
-                `[Event] NativeInsertWrapperDragSeen: trace=${session.traceId}, pointer=${session.pointerId}, ` +
-                `target=${this.describeEventTarget(target)}, chain=${this.describeEventTargetChain(target)}, ` +
-                `wrapperStyle=${this.describeComputedStyleSnapshot(insertWrapper)}`
-            );
-        }
+		touchNativeInsertSessionHelper(this.asNativeInsertControllerHost(), target);
     }
 
     private noteNativeInsertNodeCreate(nodeId: string | null): void {
@@ -2633,57 +2014,7 @@ export class CanvasEventManager {
     }
 
     private endNativeInsertSession(pointerId: number, reason: string, target: EventTarget | null, event?: PointerEvent): void {
-        const session = this.activeNativeInsertSession;
-        if (!session || session.pointerId !== pointerId) return;
-
-        this.touchNativeInsertSession(target);
-        const duration = Date.now() - session.startedAt;
-        const wrapperEl = this.getCanvasWrapperElement(target);
-        const canvasView = getCanvasView(this.app);
-        const canvas = canvasView ? this.getCanvasFromView(canvasView) : null;
-        const finalNodeCount = canvas ? getNodesFromCanvas(canvas).length : 0;
-        const finalPlaceholderCount = document.querySelectorAll('.canvas-node-placeholder').length;
-        const nodeDelta = finalNodeCount - session.initialNodeCount;
-        const placeholderDelta = finalPlaceholderCount - session.initialPlaceholderCount;
-        const pointerDetail = typeof event?.detail === 'number' ? event.detail : 0;
-        const endSelection = this.describeCanvasSelection();
-        log(
-            `[Event] NativeInsertSessionEnd: trace=${session.traceId}, pointer=${pointerId}, pointerType=${session.pointerType}, ` +
-            `duration=${duration}ms, startReason=${session.startReason}, target=${session.targetKind}, wrapperDrag=${session.wrapperDragSeen}, ` +
-            `anchor=${session.anchorNodeId || 'none'}, ` +
-            `placeholder=${session.placeholderSeen}, nodeCreate=${session.nodeCreateSeen}, ` +
-            `placeholderAdds=${session.placeholderAddedCount}, placeholderRemoves=${session.placeholderRemovedCount}, ` +
-            `domNodeAdds=${session.domNodeAddedCount}, domNodeRemoves=${session.domNodeRemovedCount}, ` +
-            `nodeDelta=${nodeDelta}, placeholderDelta=${placeholderDelta}, reason=${reason}, ` +
-            `flags=${event ? this.describePointerEventState(event) : 'none'}, ` +
-            `selectionStart=${session.startSelection}, selectionEnd=${endSelection}`
-        );
-
-        if (!session.nodeCreateSeen) {
-            logVerbose(
-                `[Event] NativeInsertDiagnostics: trace=${session.traceId}, downDefaultPrevented=${session.downDefaultPrevented}, ` +
-                `startTarget=${session.startTarget}, startChain=${session.startChain}, ` +
-                `startWrapperStyle=${session.initialWrapperStyle}, endTarget=${this.describeEventTarget(target)}, ` +
-                `anchor=${session.anchorNodeId || 'none'}, ` +
-                `endChain=${this.describeEventTargetChain(target)}, endTargetStyle=${this.describeComputedStyleSnapshot(target instanceof Element ? target : null)}, ` +
-                `endWrapperStyle=${this.describeComputedStyleSnapshot(wrapperEl)}, placeholdersNow=${finalPlaceholderCount}, ` +
-                `activeElement=${this.describeEventTarget(document.activeElement)}, selection=${endSelection}, ` +
-                `engine=${this.describeNativeInsertEngineState()}`
-            );
-        }
-
-        const commitQueued = this.stageNativeInsertCommit(session, nodeDelta, placeholderDelta, reason, pointerDetail);
-
-        if (commitQueued) {
-            const pendingCommit = this.pendingNativeInsertCommit;
-            if (!pendingCommit?.awaitingClickClassification) {
-                this.scheduleNativeInsertSelectionProbe(session.traceId, reason);
-            }
-        }
-
-        this.activeNativeInsertSession = null;
-        this.nativeInsertSideEffectsSuppressUntil = Math.max(this.nativeInsertSideEffectsSuppressUntil, Date.now() + 700);
-        this.scheduleDeferredPostInsertMaintenance(`native-insert-end:${reason}`);
+		endNativeInsertSessionHelper(this.asNativeInsertControllerHost(), pointerId, reason, target, event);
     }
 
     private scheduleDeferredPostInsertMaintenance(reason: string): void {
@@ -2740,90 +2071,23 @@ export class CanvasEventManager {
     }
 
     private getTouchDragScrollOwners(nodeEl: HTMLElement): HTMLElement[] {
-        const owners: HTMLElement[] = [];
-        const seen = new Set<HTMLElement>();
-
-        for (const selector of this.touchDragScrollOwnerSelectors) {
-            const elements = nodeEl.querySelectorAll(selector);
-            for (const el of Array.from(elements)) {
-                if (!(el instanceof HTMLElement)) continue;
-                if (seen.has(el)) continue;
-                seen.add(el);
-                owners.push(el);
-            }
-        }
-
-        return owners;
+		return getTouchDragScrollOwnersHelper(nodeEl, this.touchDragScrollOwnerSelectors);
     }
 
     private markOpenProtectionWindow(reason: string): void {
-        this.nodeMountedOpenProtectionUntil = Date.now() + this.nodeMountedOpenProtectionMs;
-        logVerbose(`[Event] OpenStabilizeProtectWindow: reason=${reason}, holdMs=${this.nodeMountedOpenProtectionMs}`);
+		markOpenProtectionWindowHelper(this.asOpenEntryGuardHost(), reason);
     }
 
     private scheduleNodeMountedBatchFlush(delayMs: number, reason: string): void {
-        if (this.nodeMountedBatchTimeoutId !== null) {
-            window.clearTimeout(this.nodeMountedBatchTimeoutId);
-        }
-
-        this.nodeMountedBatchTimeoutId = window.setTimeout(() => {
-            this.nodeMountedBatchTimeoutId = null;
-            this.flushNodeMountedBatch(reason);
-        }, Math.max(0, delayMs));
+		scheduleNodeMountedBatchFlushHelper(this.asOpenEntryGuardHost(), delayMs, reason);
     }
 
     private queueNodeMountedStabilization(filePath: string | null, mountedCount: number): void {
-        this.nodeMountedPendingCount += Math.max(1, mountedCount);
-        if (!this.nodeMountedPendingFilePath && filePath) {
-            this.nodeMountedPendingFilePath = filePath;
-        }
-        this.scheduleNodeMountedBatchFlush(this.nodeMountedBatchDebounceMs, 'debounce');
+		queueNodeMountedStabilizationHelper(this.asOpenEntryGuardHost(), filePath, mountedCount);
     }
 
     private flushNodeMountedBatch(reason: string): void {
-        if (this.nodeMountedPendingCount <= 0) return;
-
-        const now = Date.now();
-        const cooldownRemaining = Math.max(0, this.nodeMountedCooldownMs - (now - this.nodeMountedLastFlushAt));
-        const interactionRemaining = Math.max(0, this.nodeMountedInteractionActiveUntil - now);
-        const protectionRemaining = Math.max(0, this.nodeMountedOpenProtectionUntil - now);
-
-        const deferBy = Math.max(cooldownRemaining, interactionRemaining, protectionRemaining);
-        if (deferBy > 0) {
-            if (interactionRemaining >= cooldownRemaining && interactionRemaining >= protectionRemaining) {
-                this.nodeMountedDelayByInteractionCount++;
-            } else {
-                this.nodeMountedDelayByCooldownCount++;
-            }
-            this.scheduleNodeMountedBatchFlush(deferBy + 30, `defer-${reason}`);
-            return;
-        }
-
-        const batchSize = this.nodeMountedPendingCount;
-        const filePath = this.nodeMountedPendingFilePath || this.currentCanvasFilePath;
-        const delayedByInteraction = this.nodeMountedDelayByInteractionCount;
-        const delayedByCooldown = this.nodeMountedDelayByCooldownCount;
-
-        this.nodeMountedPendingCount = 0;
-        this.nodeMountedPendingFilePath = null;
-        this.nodeMountedDelayByInteractionCount = 0;
-        this.nodeMountedDelayByCooldownCount = 0;
-        this.nodeMountedLastFlushAt = now;
-
-        log(
-            `[Event] OpenStabilizeNodeMountedBatch: source=node-mounted-idle-batch, batchSize=${batchSize}, ` +
-            `delayedByInteraction=${delayedByInteraction}, delayedByCooldown=${delayedByCooldown}, reason=${reason}, file=${filePath || 'unknown'}`
-        );
-
-        if (this.shouldSuppressOpenStabilization('node-mounted-idle-batch', filePath || null)) {
-            log(
-                `[Event] OpenStabilizeNodeMountedBatchSuppressed: source=node-mounted-idle-batch, batchSize=${batchSize}, ` +
-                `reason=${reason}, file=${filePath || 'unknown'}, by=programmatic-reload-window`
-            );
-            return;
-        }
-
-        this.scheduleOpenStabilizationWithDedup('node-mounted-idle-batch', filePath || null);
+		flushNodeMountedBatchHelper(this.asOpenEntryGuardHost(), reason);
     }
 
     private handleZoomToFitVisibleNodes(): boolean {
@@ -2848,90 +2112,23 @@ export class CanvasEventManager {
     }
 
     private scheduleOpenStabilizationWithDedup(source: string, filePath: string | null): void {
-        const dedupScope = (source === 'active-leaf-change' || source === 'file-open')
-            ? 'open-entry'
-            : source;
-        const key = `${dedupScope}:${filePath || 'unknown'}`;
-        const now = Date.now();
-
-        if (dedupScope === 'open-entry' && filePath) {
-            const lastOpenEntryAt = this.lastOpenEntryStabilizeAtByFilePath.get(filePath) || 0;
-            if (now - lastOpenEntryAt < this.openEntryDedupWindowMs) {
-                logVerbose(`[Event] OpenEntryDedup: skip duplicate trigger, source=${source}, file=${filePath}`);
-                return;
-            }
-            this.lastOpenEntryStabilizeAtByFilePath.set(filePath, now);
-        }
-
-        if (this.lastOpenStabilizeKickKey === key && now - this.lastOpenStabilizeKickAt < 600) {
-            logVerbose(`[Event] OpenStabilizeDedup: skip duplicate trigger, source=${source}, file=${filePath || 'unknown'}`);
-            return;
-        }
-
-        this.lastOpenStabilizeKickKey = key;
-        this.lastOpenStabilizeKickAt = now;
-        this.canvasManager.scheduleOpenStabilization(source);
+		scheduleOpenStabilizationWithDedupHelper(this.asOpenEntryGuardHost(), source, filePath);
     }
 
     public markProgrammaticCanvasReload(filePath: string, holdMs: number = this.programmaticReloadDefaultHoldMs): void {
-        if (!filePath) return;
-        const until = Date.now() + Math.max(0, holdMs);
-        this.programmaticReloadSuppressUntilByFilePath.set(filePath, until);
-        log(`[Event] MarkProgrammaticReload: file=${filePath}, holdMs=${holdMs}`);
+		markProgrammaticCanvasReloadHelper(this.asOpenEntryGuardHost(), filePath, holdMs);
     }
 
     private shouldSuppressOpenStabilization(source: string, filePath: string | null): boolean {
-        const now = Date.now();
-
-        const isOpenEntrySource = source === 'active-leaf-change' || source === 'file-open';
-        if (isOpenEntrySource) {
-            if (this.suppressOpenEntryByFocusNormalizationUntil > now) {
-                log(
-                    `[Event] OpenEntrySuppressed: source=${source}, file=${filePath || 'unknown'}, ` +
-                    `reason=delete-modal-focus-normalization, remaining=${this.suppressOpenEntryByFocusNormalizationUntil - now}ms, ` +
-                    `context=${this.suppressOpenEntryByFocusNormalizationContext || 'none'}`
-                );
-                return true;
-            }
-
-            if (this.suppressOpenEntryByFocusNormalizationUntil > 0) {
-                this.suppressOpenEntryByFocusNormalizationUntil = 0;
-                this.suppressOpenEntryByFocusNormalizationContext = null;
-            }
-        }
-
-        if (!filePath) return false;
-
-        const until = this.programmaticReloadSuppressUntilByFilePath.get(filePath) || 0;
-        if (until > now) {
-            log(`[Event] OpenStabilizeSuppressed: source=${source}, file=${filePath}, remaining=${until - now}ms`);
-            return true;
-        }
-
-        if (until > 0) {
-            this.programmaticReloadSuppressUntilByFilePath.delete(filePath);
-        }
-
-        return false;
+		return shouldSuppressOpenStabilizationHelper(this.asOpenEntryGuardHost(), source, filePath);
     }
 
     private describeDeleteModalFocusContext(): string {
-        const activeViewType = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() || 'none';
-        const activeEditorInfo = this.app.workspace.activeEditor;
-        return [
-            `activeView=${activeViewType}`,
-            `activeEditor=${!!activeEditorInfo}`,
-            `editor=${!!activeEditorInfo?.editor}`
-        ].join(',');
+		return describeDeleteModalFocusContextHelper(this.asDeleteModalFocusGuardHost());
     }
 
     private hasSuspiciousDeleteModalFocusContext(expectCanvasActive: boolean = false): boolean {
-        const activeViewType = this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() || 'none';
-        const activeEditorInfo = this.app.workspace.activeEditor;
-        if (expectCanvasActive && activeViewType !== 'canvas') {
-            return true;
-        }
-        return !!activeEditorInfo && !activeEditorInfo.editor;
+		return hasSuspiciousDeleteModalFocusContextHelper(this.asDeleteModalFocusGuardHost(), expectCanvasActive);
     }
 
     private isDeleteOverlayInteractionTarget(target: EventTarget | null): boolean {
@@ -2946,194 +2143,46 @@ export class CanvasEventManager {
         targetId: string,
         holdMs: number = this.deleteModalFocusNormalizationSuppressMs
     ): void {
-        const until = Date.now() + Math.max(0, holdMs);
-        if (until > this.suppressOpenEntryByFocusNormalizationUntil) {
-            this.suppressOpenEntryByFocusNormalizationUntil = until;
-        }
-        this.suppressOpenEntryByFocusNormalizationContext = `phase=${phase},kind=${kind},target=${targetId}`;
-        logVerbose(
-            `[Event] OpenEntrySuppressArmed: reason=delete-modal-focus-normalization, ` +
-            `phase=${phase}, kind=${kind}, target=${targetId}, holdMs=${holdMs}`
-        );
+		markSuppressOpenEntryByFocusNormalizationHelper(this.asDeleteModalFocusGuardHost(), phase, kind, targetId, holdMs);
     }
 
     private clearSuspiciousDeleteModalFocusContext(reason: string, kind: 'node' | 'edge', targetId: string): boolean {
-        const shouldExpectCanvasActive = true;
-        const shouldNormalize = this.hasSuspiciousDeleteModalFocusContext(shouldExpectCanvasActive);
-        if (!shouldNormalize) return false;
-
-        const before = this.describeDeleteModalFocusContext();
-        const activeBefore = this.describeEventTarget(document.activeElement);
-        let focusedCanvasLeaf = false;
-
-        const activeCanvasView = getCanvasView(this.app);
-        const activeCanvasLeaf = (activeCanvasView as { leaf?: unknown } | null)?.leaf;
-        if (activeCanvasLeaf) {
-            focusedCanvasLeaf = setActiveLeafSafe(this.app, activeCanvasLeaf, { focus: true })
-                && this.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() === 'canvas';
-        }
-
-        const focusAfterLeafSync = this.describeDeleteModalFocusContext();
-        let blurred = false;
-        try {
-            const activeElement = document.activeElement;
-            if (activeElement instanceof HTMLElement && activeElement !== document.body) {
-                activeElement.blur();
-                blurred = document.activeElement !== activeElement;
-            }
-        } catch {
-            // ignore blur failures on platform internals
-        }
-
-        const after = this.describeDeleteModalFocusContext();
-        const normalized = focusedCanvasLeaf || blurred;
-        if (normalized) {
-            this.markSuppressOpenEntryByFocusNormalization(reason, kind, targetId);
-        }
-        logVerbose(
-            `[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
-            `focusBefore=${before}, focusAfterLeafSync=${focusAfterLeafSync}, focusAfter=${after}, ` +
-            `activeBefore=${activeBefore}, activeAfter=${this.describeEventTarget(document.activeElement)}, ` +
-            `focusedCanvasLeaf=${focusedCanvasLeaf}, blurred=${blurred}`
-        );
-        return normalized;
+		return clearSuspiciousDeleteModalFocusContextHelper(this.asDeleteModalFocusGuardHost(), reason, kind, targetId);
     }
 
     private async runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {
-        return new Promise<T>((resolve, reject) => {
-            requestAnimationFrame(() => {
-                Promise.resolve()
-                    .then(action)
-                    .then(resolve)
-                    .catch(reject);
-            });
-        });
+		return runDeleteModalOnNextFrameHelper(action);
     }
 
     private async openDeleteModalSafely(modal: { open: () => void }, kind: 'node' | 'edge', targetId: string): Promise<void> {
-        this.clearSuspiciousDeleteModalFocusContext('pre-open', kind, targetId);
-        logVerbose(
-            `[Event] DeleteModalNormalized: kind=${kind}, target=${targetId}, ` +
-            `focusContext=${this.describeDeleteModalFocusContext()}`
-        );
-        await this.runDeleteModalOnNextFrame(() => {
-            modal.open();
-        });
+		await openDeleteModalSafelyHelper(this.asDeleteModalFocusGuardHost(), modal, kind, targetId);
     }
 
     private async waitForDeleteModalFocusSettle(kind: 'node' | 'edge', targetId: string): Promise<void> {
-        this.clearSuspiciousDeleteModalFocusContext('post-close', kind, targetId);
-        logVerbose(
-            `[Event] DeleteModalPostClose: kind=${kind}, target=${targetId}, ` +
-            `focusContext=${this.describeDeleteModalFocusContext()}`
-        );
-        await this.runDeleteModalOnNextFrame(() => undefined);
+		await waitForDeleteModalFocusSettleHelper(this.asDeleteModalFocusGuardHost(), kind, targetId);
     }
 
     private markSuppressDeleteButtonClick(holdMs: number, reason: string): void {
-        this.suppressDeleteButtonClickUntil = Date.now() + Math.max(0, holdMs);
-        this.suppressDeleteButtonClickReason = reason;
+		markSuppressDeleteButtonClickHelper(this.asDeleteModalFocusGuardHost(), holdMs, reason);
     }
 
     private shouldSuppressDeleteButtonClick(reason: string): boolean {
-        const now = Date.now();
-        if (now >= this.suppressDeleteButtonClickUntil) {
-            return false;
-        }
-
-        logVerbose(
-            `[Event] DeleteButtonClickSuppressed: phase=${reason}, ` +
-            `reason=${this.suppressDeleteButtonClickReason || 'unknown'}, ` +
-            `remaining=${Math.max(0, this.suppressDeleteButtonClickUntil - now)}ms`
-        );
-        return true;
+		return shouldSuppressDeleteButtonClickHelper(this.asDeleteModalFocusGuardHost(), reason);
     }
 
     private async executeDeleteEdgeOperation(selectedEdge: CanvasEdgeLike, canvas: CanvasLike): Promise<void> {
-        const edgeKey = this.getEdgeSelectionFallbackKey(selectedEdge);
-        const modal = new DeleteEdgeConfirmationModal(this.app);
-        const resultPromise = modal.waitForResult();
-        log(
-            `[Event] DeleteEdgeModalOpenRaw: edge=${edgeKey}, ` +
-            `focusContext=${this.describeDeleteModalFocusContext()}`
-        );
-        try {
-            await this.openDeleteModalSafely(modal, 'edge', edgeKey);
-        } catch (error) {
-            log(`[Event] DeleteEdgeModalOpenError: ${String(error)}`);
-            new Notice('删除连线确认框打开失败');
-            return;
-        }
-
-        const result = await resultPromise;
-        log(`[Event] DeleteEdgeModalResult: edge=${edgeKey}, action=${result.action}`);
-        if (result.action !== 'confirm') return;
-
-        await this.waitForDeleteModalFocusSettle('edge', edgeKey);
-        this.syncSelectedEdgeState(canvas, selectedEdge);
-        this.ensureEdgeSelectionFallbackClasses(selectedEdge);
-        await this.canvasManager.deleteSelectedEdge();
+        await executeDeleteEdgeOperationHelper(this.asDeleteOperationsHost(), selectedEdge, canvas);
     }
 
     private handleDeleteButtonClick(canvasView: ItemView): void {
-        const canvas = this.getCanvasFromView(canvasView);
-        if (!canvas) return;
-
-        const selectedNode = getSelectedNodeFromCanvas(canvas);
-        if (selectedNode) {
-            const clearedState = clearCanvasEdgeSelection(canvas);
-            if (clearedState.cleared) {
-                log(
-                    `[Event] DeleteButtonPreferNode: node=${selectedNode.id || 'unknown'}, ` +
-                    `clearedEdges=${clearedState.clearedEdgeIds.join('|') || 'none'}, domCleared=${clearedState.domClearedCount}`
-                );
-            }
-            void this.executeDeleteOperation(selectedNode, canvas);
-            return;
-        }
-        
-        const selectedEdge = getSelectedEdge(canvas);
-        if (selectedEdge) {
-            void this.executeDeleteEdgeOperation(selectedEdge, canvas);
-            return;
-        }
+        handleDeleteButtonClickHelper(this.asDeleteOperationsHost(), canvasView);
     }
 
     // =========================================================================
     // 删除按钮相关
     // =========================================================================
-    private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike) {
-        const edges = getEdgesFromCanvasOrFileData(canvas);
-        
-        const nodeId = selectedNode.id!;
-        const hasChildren = this.collapseStateManager.getChildNodes(nodeId, edges).length > 0;
-        
-        const modal = new DeleteConfirmationModal(this.app, hasChildren);
-        const resultPromise = modal.waitForResult();
-        log(
-            `[Event] DeleteNodeModalOpenRaw: node=${nodeId}, hasChildren=${hasChildren}, ` +
-            `focusContext=${this.describeDeleteModalFocusContext()}`
-        );
-        try {
-            await this.openDeleteModalSafely(modal, 'node', nodeId);
-        } catch (error) {
-            log(`[Event] DeleteNodeModalOpenError: node=${nodeId}, error=${String(error)}`);
-            new Notice('删除节点确认框打开失败');
-            return;
-        }
-        const result = await resultPromise;
-        log(`[Event] DeleteNodeModalResult: node=${nodeId}, action=${result.action}`);
-        
-        if (result.action === 'cancel') return;
-
-        await this.waitForDeleteModalFocusSettle('node', nodeId);
-        this.collapseStateManager.clearCache();
-        log(`[Event] UI: 删除 ${nodeId} (${result.action})`);
-        if (result.action === 'confirm' || result.action === 'single') {
-            await this.canvasManager.handleSingleDelete(selectedNode, canvas);
-        } else if (result.action === 'cascade') {
-            await this.canvasManager.handleCascadeDelete(selectedNode, canvas);
-        }
+    private async executeDeleteOperation(selectedNode: CanvasNodeLike, canvas: CanvasLike): Promise<void> {
+        await executeDeleteOperationHelper(this.asDeleteOperationsHost(), selectedNode, canvas);
     }
 
     // =========================================================================
@@ -3166,126 +2215,15 @@ export class CanvasEventManager {
     // fromLink 点击处理
     // =========================================================================
     private async handleFromLinkClick(targetEl: HTMLElement, canvasView: ItemView) {
-        if (this.isNativeInsertSessionActive()) return;
-        if (shouldBypassCanvasNodeGestureTarget(targetEl)) return;
-
-        const nodeEl = findCanvasNodeElementFromTarget(targetEl);
-        if (!nodeEl) return;
-
-        const canvas = this.getCanvasFromView(canvasView);
-        if (!canvas?.nodes) return;
-
-        const clickedNode = getCanvasNodeByElement(canvas, nodeEl);
-        if (!clickedNode) return;
-
-        await this.navigateToFromLink(clickedNode);
+        await handleFromLinkClickHelper(this.asFromLinkNavigationHost(), targetEl, canvasView);
     }
 
     private async handleFromLinkNavigationByNodeId(nodeId: string | null): Promise<void> {
-        if (!nodeId) return;
-
-        const canvasView = getCanvasView(this.app);
-        if (!canvasView) return;
-
-        const canvas = this.getCanvasFromView(canvasView);
-        if (!canvas?.nodes) return;
-
-        const clickedNode = getNodesFromCanvas(canvas).find(node => node.id === nodeId) || null;
-        if (!clickedNode) {
-            log(`[Event] fromLink 跳转失败: 找不到节点 ${nodeId}`);
-            return;
-        }
-
-        await this.navigateToFromLink(clickedNode);
+        await handleFromLinkNavigationByNodeIdHelper(this.asFromLinkNavigationHost(), nodeId);
     }
 
     private async navigateToFromLink(clickedNode: CanvasNodeLike): Promise<void> {
-        const canvasView = getCanvasView(this.app);
-        if (!canvasView) return;
-
-        this.rememberNodeInteractionContext(clickedNode.id || null, 'fromlink-navigate', canvasView);
-
-        const fromLink = parseFromLink(clickedNode.text, clickedNode.color) as FromLinkInfo | null;
-        if (!fromLink) {
-            if (clickedNode.text?.includes('fromLink:')) {
-                log(`[Event] fromLink 解析失败: text`);
-            } else if (clickedNode.color?.startsWith('fromLink:')) {
-                log(`[Event] fromLink (color) 解析失败`);
-            }
-            return;
-        }
-
-        const now = Date.now();
-        const navKey = `${clickedNode.id || 'unknown'}|${fromLink.file}|${fromLink.from.line}:${fromLink.from.ch}-${fromLink.to.line}:${fromLink.to.ch}`;
-        if (
-            this.lastFromLinkNavKey === navKey
-            && now - this.lastFromLinkNavAt < CONSTANTS.TIMING.FROM_LINK_NAV_DEBOUNCE
-        ) {
-            log(`[Event] fromLink 跳转防抖: skip duplicate within ${CONSTANTS.TIMING.FROM_LINK_NAV_DEBOUNCE}ms -> ${fromLink.file}`);
-            return;
-        }
-
-        this.lastFromLinkNavKey = navKey;
-        this.lastFromLinkNavAt = now;
-        
-        log(`[Event] UI: 跳转 fromLink -> ${fromLink.file}`);
-        try {
-            let sourceFile = this.app.vault.getAbstractFileByPath(fromLink.file);
-
-            // 精确路径失败时，尝试按末级文件名回退查找（兼容文件被移动/重命名目录）
-            if (!(sourceFile instanceof TFile)) {
-                const fileName = fromLink.file.split('/').pop();
-                if (fileName) {
-                    const allFiles = this.app.vault.getFiles();
-                    sourceFile = allFiles.find(file => file.path.endsWith(`/${fromLink.file}`))
-                        ?? allFiles.find(file => file.name === fileName)
-                        ?? sourceFile;
-                }
-            }
-
-            if (!(sourceFile instanceof TFile)) {
-                log(`[Event] fromLink 找不到源文件: ${fromLink.file}`);
-                new Notice(`找不到源文件: ${fromLink.file}`);
-                return;
-            }
-
-            let mdLeaf = this.app.workspace.getLeavesOfType('markdown').find(
-                leaf => (leaf.view as MarkdownViewLike).file?.path === sourceFile.path
-            );
-            if (!mdLeaf) {
-                mdLeaf = this.app.workspace.getLeaf('split', 'vertical');
-                await mdLeaf.openFile(sourceFile);
-            } else {
-                setActiveLeafSafe(this.app, mdLeaf, { focus: true });
-            }
-
-            const view = mdLeaf.view as MarkdownViewLike;
-
-            // 移动端（尤其是墨水屏）渲染较慢，需要更长的初始延迟才能让编辑器就绪
-            const initialDelay = Platform.isMobile
-                ? CONSTANTS.TIMING.MOBILE_SELECTION_DELAY
-                : CONSTANTS.TIMING.SCROLL_DELAY;
-
-            const applySelection = () => {
-                const editor = view.editor;
-                if (!editor) return;
-                // 强制聚焦编辑器，确保选区能被接受
-                editor.focus?.();
-                editor.setSelection(fromLink.from, fromLink.to);
-                editor.scrollIntoView({ from: fromLink.from, to: fromLink.to }, true);
-                log(`[Event] fromLink 选区已应用: L${fromLink.from.line}:${fromLink.from.ch}-${fromLink.to.ch}`);
-            };
-
-            setTimeout(() => {
-                applySelection();
-                // 移动端额外重试一次，防止视图切换动画完成后选区被重置
-                if (Platform.isMobile) {
-                    setTimeout(applySelection, CONSTANTS.TIMING.MOBILE_SELECTION_RETRY_DELAY);
-                }
-            }, initialDelay);
-        } catch (err) {
-            log(`[Event] UI: 跳转失败: ${String(err)}`);
-        }
+        await navigateToFromLinkHelper(this.asFromLinkNavigationHost(), clickedNode);
     }
 
     // =========================================================================
