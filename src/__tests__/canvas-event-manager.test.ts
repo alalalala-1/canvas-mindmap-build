@@ -666,6 +666,185 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-resolved-upstream') && message.includes('reason=node-count-increased'))).toBe(true);
 	});
 
+	it('should reject blank native insert fallback when only weak wrapper evidence exists without anchor', async () => {
+		const addNodeToCanvas = vi.fn(async () => undefined);
+		const canvas = {
+			nodes: [] as Array<{ id: string; type?: string; text?: string }>,
+			edges: [] as unknown[],
+			file: { path: 'test.canvas' },
+		};
+		const canvasView = {
+			getViewType: () => 'canvas',
+			canvas,
+			file: { path: 'test.canvas' },
+			contentEl: {},
+		};
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => canvasView,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+				lastPointerDetail: number;
+				clickDetail?: number;
+				clickClassified?: boolean;
+				commitEligibleAt?: number;
+				awaitingClickClassification?: boolean;
+				evidenceFlags?: string[];
+				blankCandidate?: boolean;
+				queuedSelectionNodeCount?: number;
+				queuedSelectionEdgeCount?: number;
+				queuedSelectionKey?: string;
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-weak-evidence',
+			pointerType: 'touch',
+			startReason: 'wrapper-touch-like',
+			targetKind: 'wrapper',
+			anchorNodeId: null,
+			initialNodeCount: 0,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 0,
+			endReason: 'pointerup',
+			endedAt: Date.now(),
+			engineAttempted: false,
+			lastPointerDetail: 1,
+			clickDetail: 0,
+			clickClassified: false,
+			commitEligibleAt: Date.now(),
+			awaitingClickClassification: false,
+			evidenceFlags: ['touch-like-wrapper'],
+			blankCandidate: true,
+			queuedSelectionNodeCount: 0,
+			queuedSelectionEdgeCount: 0,
+			queuedSelectionKey: 'nodes=none;edges=none;active=none',
+		};
+
+		await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
+
+		expect(addNodeToCanvas).not.toHaveBeenCalled();
+		expect(manager.pendingNativeInsertCommit).toBeNull();
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-weak-evidence') && message.includes('reason=blank-protection-weak-evidence-only'))).toBe(true);
+		expect(messages.some(message => message.includes('NativeInsertTraceSummary: trace=ni-weak-evidence') && message.includes('blankCandidate=true') && message.includes('selectionStable=true') && message.includes('fallbackCommitted=false'))).toBe(true);
+	});
+
+	it('should reject blank native insert fallback when queued anchor selection drifts to another node', async () => {
+		const addNodeToCanvas = vi.fn(async () => undefined);
+		const parentNode = { id: 'parent-1', type: 'text', text: '' };
+		const otherNode = { id: 'other-1', type: 'text', text: '' };
+		const canvas = {
+			nodes: [parentNode, otherNode],
+			edges: [] as unknown[],
+			selectedNodes: [otherNode],
+			file: { path: 'test.canvas' },
+		};
+		const canvasView = {
+			getViewType: () => 'canvas',
+			canvas,
+			file: { path: 'test.canvas' },
+			contentEl: {},
+		};
+		const plugin = {} as never;
+		const app = {
+			workspace: {
+				getActiveViewOfType: () => canvasView,
+				getLeavesOfType: () => [],
+			},
+		} as never;
+		const settings = {} as never;
+		const collapseStateManager = {} as never;
+		const canvasManager = {
+			getFloatingNodeService: () => ({}) as never,
+			addNodeToCanvas,
+		} as never;
+		const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+			pendingNativeInsertCommit: {
+				traceId: string;
+				pointerType: string;
+				startReason: string;
+				targetKind: string;
+				anchorNodeId: string | null;
+				initialNodeCount: number;
+				initialPlaceholderCount: number;
+				nodeDelta: number;
+				placeholderDelta: number;
+				endReason: string;
+				endedAt: number;
+				engineAttempted: boolean;
+				lastPointerDetail: number;
+				clickDetail?: number;
+				clickClassified?: boolean;
+				commitEligibleAt?: number;
+				awaitingClickClassification?: boolean;
+				evidenceFlags?: string[];
+				blankCandidate?: boolean;
+				queuedSelectionNodeCount?: number;
+				queuedSelectionEdgeCount?: number;
+				queuedSelectionKey?: string;
+			} | null;
+			flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+		};
+
+		manager.pendingNativeInsertCommit = {
+			traceId: 'ni-selection-drift',
+			pointerType: 'touch',
+			startReason: 'wrapper-active',
+			targetKind: 'wrapper:is-dragging',
+			anchorNodeId: 'parent-1',
+			initialNodeCount: 2,
+			initialPlaceholderCount: 0,
+			nodeDelta: 0,
+			placeholderDelta: 1,
+			endReason: 'pointerup',
+			endedAt: Date.now(),
+			engineAttempted: false,
+			lastPointerDetail: 1,
+			clickDetail: 0,
+			clickClassified: false,
+			commitEligibleAt: Date.now(),
+			awaitingClickClassification: false,
+			evidenceFlags: ['placeholder-delta', 'wrapper-active'],
+			blankCandidate: true,
+			queuedSelectionNodeCount: 1,
+			queuedSelectionEdgeCount: 0,
+			queuedSelectionKey: 'nodes=parent-1;edges=none;active=none',
+		};
+
+		await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
+
+		expect(addNodeToCanvas).not.toHaveBeenCalled();
+		expect(manager.pendingNativeInsertCommit).toBeNull();
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-selection-drift') && message.includes('reason=blank-protection-selection-mismatch'))).toBe(true);
+		expect(messages.some(message => message.includes('NativeInsertTraceSummary: trace=ni-selection-drift') && message.includes('selectionNodes=1') && message.includes('selectionStable=false') && message.includes('fallbackCommitted=false'))).toBe(true);
+	});
+
 	it('should reject click-post-session commit when pending trace comes from multi-click', async () => {
 		const addNodeToCanvas = vi.fn(async () => undefined);
 		const plugin = {} as never;
@@ -722,6 +901,7 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(manager.pendingNativeInsertCommit).toBeNull();
 		const messages = getRecentLogs().map(entry => entry.message);
 		expect(messages.some(message => message.includes('NativeInsertCommitRejected: trace=ni-double-click') && message.includes('reason=multi-click'))).toBe(true);
+		expect(messages.filter(message => message.includes('NativeInsertTraceSummary: trace=ni-double-click'))).toHaveLength(1);
 	});
 
 	it('should wait for mouse click classification before fallback commit becomes eligible', async () => {
@@ -862,6 +1042,227 @@ describe('CanvasEventManager native insert gating', () => {
 			expect(probeMessages.some(message => message.includes('timeout-0'))).toBe(false);
 			const clickPostMessages = probeMessages.filter(message => message.includes('click-post-session'));
 			expect(clickPostMessages).toHaveLength(0);
+		} finally {
+			(globalThis as Record<string, unknown>).requestAnimationFrame = originalRaf;
+			(globalThis as Record<string, unknown>).cancelAnimationFrame = originalCancelRaf;
+			vi.useRealTimers();
+		}
+	});
+
+	it('should settle native insert reject once and clear scheduled work for the trace', async () => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: true });
+		clearRecentLogs();
+		vi.useFakeTimers();
+		const originalRaf = globalThis.requestAnimationFrame;
+		const originalCancelRaf = globalThis.cancelAnimationFrame;
+		let rafIdSeq = 0;
+		const rafCallbacks = new Map<number, FrameRequestCallback>();
+		(globalThis as Record<string, unknown>).requestAnimationFrame = ((cb: FrameRequestCallback) => {
+			const id = ++rafIdSeq;
+			rafCallbacks.set(id, cb);
+			return id;
+		}) as unknown as typeof requestAnimationFrame;
+		(globalThis as Record<string, unknown>).cancelAnimationFrame = ((id: number) => {
+			rafCallbacks.delete(id);
+		}) as unknown as typeof cancelAnimationFrame;
+
+		try {
+			const manager = createManager() as unknown as {
+				pendingNativeInsertCommit: {
+					traceId: string;
+					pointerType: string;
+					startReason: string;
+					targetKind: string;
+					anchorNodeId: string | null;
+					initialNodeCount: number;
+					initialPlaceholderCount: number;
+					nodeDelta: number;
+					placeholderDelta: number;
+					endReason: string;
+					endedAt: number;
+					engineAttempted: boolean;
+					lastPointerDetail: number;
+					clickDetail?: number;
+					clickClassified?: boolean;
+					commitEligibleAt?: number;
+					awaitingClickClassification?: boolean;
+					evidenceFlags?: string[];
+				} | null;
+				scheduleNativeInsertSelectionProbe: (traceId: string, reason: string) => void;
+				rejectPendingNativeInsertCommit: (trigger: string, reason: string, detail?: number) => boolean;
+				nativeInsertTraceTimeouts: Map<string, Set<number>>;
+				nativeInsertTraceRafs: Map<string, Set<number>>;
+				nativeInsertProbePhasesByTrace: Map<string, Set<string>>;
+				nativeInsertSettledTraceAt: Map<string, number>;
+			};
+
+			manager.pendingNativeInsertCommit = {
+				traceId: 'ni-reject-once',
+				pointerType: 'mouse',
+				startReason: 'node-content',
+				targetKind: 'node-content',
+				anchorNodeId: 'parent-1',
+				initialNodeCount: 1,
+				initialPlaceholderCount: 0,
+				nodeDelta: 0,
+				placeholderDelta: 1,
+				endReason: 'pointerup',
+				endedAt: Date.now(),
+				engineAttempted: false,
+				lastPointerDetail: 2,
+				clickDetail: 2,
+				clickClassified: false,
+				commitEligibleAt: Date.now() + 120,
+				awaitingClickClassification: true,
+				evidenceFlags: ['placeholder-delta'],
+			};
+
+			manager.scheduleNativeInsertSelectionProbe('ni-reject-once', 'session-end');
+			expect(manager.nativeInsertTraceTimeouts.get('ni-reject-once')?.size ?? 0).toBeGreaterThan(0);
+			expect(manager.nativeInsertTraceRafs.get('ni-reject-once')?.size ?? 0).toBeGreaterThan(0);
+
+			expect(manager.rejectPendingNativeInsertCommit('click-post-session', 'multi-click', 2)).toBe(true);
+			expect(manager.rejectPendingNativeInsertCommit('click-post-session', 'multi-click', 2)).toBe(false);
+
+			for (const [id, cb] of Array.from(rafCallbacks.entries())) {
+				rafCallbacks.delete(id);
+				cb(0);
+			}
+			await vi.runOnlyPendingTimersAsync();
+
+			expect(manager.pendingNativeInsertCommit).toBeNull();
+			expect(manager.nativeInsertTraceTimeouts.has('ni-reject-once')).toBe(false);
+			expect(manager.nativeInsertTraceRafs.has('ni-reject-once')).toBe(false);
+			expect(manager.nativeInsertProbePhasesByTrace.has('ni-reject-once')).toBe(false);
+			expect(manager.nativeInsertSettledTraceAt.has('ni-reject-once')).toBe(true);
+
+			const messages = getRecentLogs().map(entry => entry.message);
+			expect(messages.filter(message => message.includes('NativeInsertCommitRejected: trace=ni-reject-once'))).toHaveLength(1);
+			expect(messages.filter(message => message.includes('NativeInsertTraceSummary: trace=ni-reject-once'))).toHaveLength(1);
+		} finally {
+			(globalThis as Record<string, unknown>).requestAnimationFrame = originalRaf;
+			(globalThis as Record<string, unknown>).cancelAnimationFrame = originalCancelRaf;
+			vi.useRealTimers();
+		}
+	});
+
+	it('should emit one native insert trace summary and clear scheduler after successful fallback commit', async () => {
+		updateLoggerConfig({ enableDebugLogging: true, enableVerboseCanvasDiagnostics: true });
+		clearRecentLogs();
+		vi.useFakeTimers();
+		const originalRaf = globalThis.requestAnimationFrame;
+		const originalCancelRaf = globalThis.cancelAnimationFrame;
+		let rafIdSeq = 0;
+		const rafCallbacks = new Map<number, FrameRequestCallback>();
+		(globalThis as Record<string, unknown>).requestAnimationFrame = ((cb: FrameRequestCallback) => {
+			const id = ++rafIdSeq;
+			rafCallbacks.set(id, cb);
+			return id;
+		}) as unknown as typeof requestAnimationFrame;
+		(globalThis as Record<string, unknown>).cancelAnimationFrame = ((id: number) => {
+			rafCallbacks.delete(id);
+		}) as unknown as typeof cancelAnimationFrame;
+
+		try {
+			const canvas = {
+				nodes: [] as Array<{ id: string; type: 'text'; text: string; x: number; y: number; width: number; height: number }>,
+				edges: [] as unknown[],
+				file: { path: 'test.canvas' },
+			};
+			const addNodeToCanvas = vi.fn(async () => {
+				canvas.nodes.push({ id: 'created-summary-1', type: 'text', text: '', x: 0, y: 0, width: 200, height: 80 });
+			});
+			const canvasView = {
+				getViewType: () => 'canvas',
+				canvas,
+				file: { path: 'test.canvas' },
+				contentEl: {},
+			};
+			const plugin = {} as never;
+			const app = {
+				workspace: {
+					getActiveViewOfType: () => canvasView,
+					getLeavesOfType: () => [],
+				},
+			} as never;
+			const settings = {} as never;
+			const collapseStateManager = {} as never;
+			const canvasManager = {
+				getFloatingNodeService: () => ({}) as never,
+				addNodeToCanvas,
+			} as never;
+			const manager = new CanvasEventManager(plugin, app, settings, collapseStateManager, canvasManager) as unknown as {
+				pendingNativeInsertCommit: {
+					traceId: string;
+					pointerType: string;
+					startReason: string;
+					targetKind: string;
+					anchorNodeId: string | null;
+					initialNodeCount: number;
+					initialPlaceholderCount: number;
+					nodeDelta: number;
+					placeholderDelta: number;
+					endReason: string;
+					endedAt: number;
+					engineAttempted: boolean;
+					lastPointerDetail: number;
+					clickDetail?: number;
+					clickClassified?: boolean;
+					commitEligibleAt?: number;
+					awaitingClickClassification?: boolean;
+					evidenceFlags?: string[];
+				} | null;
+				scheduleNativeInsertSelectionProbe: (traceId: string, reason: string) => void;
+				flushPendingNativeInsertCommit: (trigger: string) => Promise<void>;
+				nativeInsertTraceTimeouts: Map<string, Set<number>>;
+				nativeInsertTraceRafs: Map<string, Set<number>>;
+				nativeInsertProbePhasesByTrace: Map<string, Set<string>>;
+				nativeInsertSettledTraceAt: Map<string, number>;
+			};
+
+			manager.pendingNativeInsertCommit = {
+				traceId: 'ni-summary-done',
+				pointerType: 'touch',
+				startReason: 'wrapper-touch-like',
+				targetKind: 'wrapper',
+				anchorNodeId: 'parent-1',
+				initialNodeCount: 0,
+				initialPlaceholderCount: 0,
+				nodeDelta: 0,
+				placeholderDelta: 1,
+				endReason: 'pointerup',
+				endedAt: Date.now(),
+				engineAttempted: false,
+				lastPointerDetail: 1,
+				clickDetail: 0,
+				clickClassified: false,
+				commitEligibleAt: Date.now(),
+				awaitingClickClassification: false,
+				evidenceFlags: ['placeholder-delta', 'touch-like-wrapper'],
+			};
+
+			manager.scheduleNativeInsertSelectionProbe('ni-summary-done', 'session-end');
+			await manager.flushPendingNativeInsertCommit('session-end:timeout-0');
+
+			expect(addNodeToCanvas).toHaveBeenCalledTimes(1);
+			expect(manager.pendingNativeInsertCommit).toBeNull();
+			expect(manager.nativeInsertTraceTimeouts.has('ni-summary-done')).toBe(false);
+			expect(manager.nativeInsertTraceRafs.has('ni-summary-done')).toBe(false);
+			expect(manager.nativeInsertProbePhasesByTrace.has('ni-summary-done')).toBe(false);
+			expect(manager.nativeInsertSettledTraceAt.has('ni-summary-done')).toBe(true);
+
+			const messages = getRecentLogs().map(entry => entry.message);
+			expect(messages.filter(message => message.includes('NativeInsertTraceSummary: trace=ni-summary-done'))).toHaveLength(1);
+			expect(messages.some(message => (
+				message.includes('NativeInsertTraceSummary: trace=ni-summary-done')
+				&& message.includes('outcome=accepted')
+				&& message.includes('blankCandidate=true')
+				&& message.includes('selectionStable=true')
+				&& message.includes('fallbackCommitted=true')
+				&& message.includes('observedNodeDelta=1')
+				&& message.includes('clearedTimeouts=1')
+				&& message.includes('clearedRafs=1')
+			))).toBe(true);
 		} finally {
 			(globalThis as Record<string, unknown>).requestAnimationFrame = originalRaf;
 			(globalThis as Record<string, unknown>).cancelAnimationFrame = originalCancelRaf;
