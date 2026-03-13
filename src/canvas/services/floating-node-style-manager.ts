@@ -108,13 +108,20 @@ export class FloatingNodeStyleManager {
         }
     }
 
-    clearFloatingStyle(nodeId: string): boolean {
+    clearFloatingStyle(nodeId: string, options?: { retryOnMissing?: boolean }): boolean {
         try {
+            const retryOnMissing = options?.retryOnMissing !== false;
             this.clearPendingRetries(nodeId);
             const cleared = this.removeFloatingClass(nodeId);
             if (!cleared) {
-                this.pendingClearNodeIds.add(nodeId);
                 this.pendingApplyNodeIds.delete(nodeId);
+                if (!retryOnMissing) {
+                    this.pendingClearNodeIds.delete(nodeId);
+                    this.elementCache.delete(nodeId);
+                    log(`[Style] 清除红框时找不到节点元素: ${nodeId}，跳过等待挂载队列`);
+                    return false;
+                }
+                this.pendingClearNodeIds.add(nodeId);
                 log(`[Style] 清除红框时找不到节点元素: ${nodeId}，进入等待挂载队列`);
                 this.scheduleRetry(nodeId, () => this.clearFloatingStyleRetry(nodeId, 1), CONSTANTS.TIMING.RETRY_DELAY_SHORT);
                 return false;

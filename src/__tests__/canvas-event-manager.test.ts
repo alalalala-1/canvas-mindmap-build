@@ -889,4 +889,27 @@ describe('CanvasEventManager native insert gating', () => {
 		expect(scheduleOpenStabilization).toHaveBeenCalledTimes(1);
 		expect(scheduleOpenStabilization).toHaveBeenCalledWith('active-leaf-change');
 	});
+
+	it('should suppress open-entry stabilization during delete modal focus normalization window', () => {
+		const manager = createManager() as unknown as {
+			markSuppressOpenEntryByFocusNormalization: (
+				phase: string,
+				kind: 'node' | 'edge',
+				targetId: string,
+				holdMs?: number,
+			) => void;
+			shouldSuppressOpenStabilization: (source: string, filePath: string | null) => boolean;
+		};
+
+		manager.markSuppressOpenEntryByFocusNormalization('post-close', 'node', 'node-1', 1200);
+
+		expect(manager.shouldSuppressOpenStabilization('active-leaf-change', 'test.canvas')).toBe(true);
+		expect(manager.shouldSuppressOpenStabilization('node-mounted-idle-batch', 'test.canvas')).toBe(false);
+
+		const messages = getRecentLogs().map(entry => entry.message);
+		expect(messages.some(message => (
+			message.includes('OpenEntrySuppressed: source=active-leaf-change')
+			&& message.includes('reason=delete-modal-focus-normalization')
+		))).toBe(true);
+	});
 });

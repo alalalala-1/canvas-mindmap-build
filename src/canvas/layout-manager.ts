@@ -35,6 +35,24 @@ export type ArrangeNoOpFastPathDecision = {
     reason: 'predicted-changed' | 'file-changed' | 'stable-no-op' | 'severe-visual-gap-risk';
 };
 
+export type ArrangeStateSnapshot = {
+    filePath: string;
+    signature: string;
+    source: string;
+    recordedAt: number;
+};
+
+export type ArrangeRepeatManualSkipDecision = {
+    skip: boolean;
+    reason:
+        | 'non-manual-source'
+        | 'no-history'
+        | 'file-changed'
+        | 'state-changed'
+        | 'severe-visual-gap-risk'
+        | 'repeat-manual-state';
+};
+
 export type HealthyOpenStabilizeSnapshot = {
     finishedAt: number;
     nodeCount: number;
@@ -53,6 +71,73 @@ export type HealthyOpenStabilizeSkipDecision = {
         | 'healthy-cache-hit';
     ageMs: number;
 };
+
+function toArrangeSigNumber(value: unknown): string {
+    return typeof value === 'number' && Number.isFinite(value)
+        ? value.toFixed(1)
+        : 'na';
+}
+
+function computeArrangeSigHash(input: string): string {
+    let hash = 0;
+    for (let i = 0; i < input.length; i++) {
+        hash = ((hash << 5) - hash) + input.charCodeAt(i);
+        hash |= 0;
+    }
+    return `${hash}`;
+}
+
+export function buildArrangeStateSignature(
+    canvasData: CanvasDataLike | null | undefined,
+    edges?: CanvasEdgeLike[]
+): string {
+    const nodes = Array.isArray(canvasData?.nodes) ? canvasData.nodes : [];
+    const edgeList = edges ?? (Array.isArray(canvasData?.edges) ? canvasData.edges : []);
+
+    const nodeEntries = nodes.map((node, index) => (
+        `${index}:${node.id || 'unknown'}:${toArrangeSigNumber(node.x)}:${toArrangeSigNumber(node.y)}:` +
+        `${toArrangeSigNumber(node.width)}:${toArrangeSigNumber(node.height)}`
+    ));
+
+    const edgeEntries = edgeList.map((edge, index) => {
+        const fromId = getNodeIdFromEdgeEndpoint(edge.from) || edge.fromNode || 'unknown';
+        const toId = getNodeIdFromEdgeEndpoint(edge.to) || edge.toNode || 'unknown';
+        return `${index}:${edge.id || 'edge'}:${fromId}->${toId}`;
+    });
+
+    const raw = `nodes=${nodeEntries.join('|')}::edges=${edgeEntries.join('|')}`;
+    return `n${nodeEntries.length}:e${edgeEntries.length}:h${computeArrangeSigHash(raw)}`;
+}
+
+export function getArrangeRepeatManualSkipDecision(input: {
+    source: string;
+    filePath: string | null;
+    currentSignature: string;
+    previousSnapshot?: ArrangeStateSnapshot | null;
+    severeVisualRisk: boolean;
+}): ArrangeRepeatManualSkipDecision {
+    if (input.source !== 'manual') {
+        return { skip: false, reason: 'non-manual-source' };
+    }
+
+    if (input.severeVisualRisk) {
+        return { skip: false, reason: 'severe-visual-gap-risk' };
+    }
+
+    if (!input.previousSnapshot) {
+        return { skip: false, reason: 'no-history' };
+    }
+
+    if (!input.filePath || input.previousSnapshot.filePath !== input.filePath) {
+        return { skip: false, reason: 'file-changed' };
+    }
+
+    if (input.previousSnapshot.signature !== input.currentSignature) {
+        return { skip: false, reason: 'state-changed' };
+    }
+
+    return { skip: true, reason: 'repeat-manual-state' };
+}
 
 export function getArrangeNoOpFollowUpDecision(severeVisualRisk: boolean): ArrangeNoOpFollowUpDecision {
     if (severeVisualRisk) {
@@ -170,6 +255,7 @@ export class LayoutManager {
     private openStabilizeResumeCountByBaseSource: Map<string, number> = new Map();
     private readonly healthyOpenStabilizeWindowMs: number = 4000;
     private recentHealthyOpenStabilizeByFilePath: Map<string, HealthyOpenStabilizeSnapshot> = new Map();
+    private recentArrangeStateByFilePath: Map<string, ArrangeStateSnapshot> = new Map();
 
     constructor(
         plugin: Plugin,
@@ -953,6 +1039,42 @@ export class LayoutManager {
         return !!this.settings.enableDebugLogging && !!this.settings.enableVerboseCanvasDiagnostics;
     }
 
+    private rememberArrangeStateSignature(filePath: string | null, signature: string, source: string): void {
+        if (!filePath) return;
+        this.recentArrangeStateByFilePath.set(filePath, {
+            filePath,
+            signature,
+            source,
+            recordedAt: Date.now(),
+        });
+        logVerbose(`[Layout] ArrangeStateRemembered: file=${filePath}, source=${source}, signature=${signature}`);
+    }
+
+    private buildProjectedArrangeStateSignature(
+        canvasData: CanvasDataLike | undefined,
+        edges: CanvasEdgeLike[],
+        result: Map<string, { x: number; y: number; width?: number; height?: number }>
+    ): string {
+        const projectedNodes = (canvasData?.nodes ?? []).map((node) => {
+            if (typeof node.id !== 'string') return node;
+            const next = result.get(node.id);
+            if (!next) return node;
+            return {
+                ...node,
+                x: next.x,
+                y: next.y,
+                width: typeof next.width === 'number' && next.width > 0 ? next.width : node.width,
+                height: typeof next.height === 'number' && next.height > 0 ? next.height : node.height,
+            };
+        });
+
+        return buildArrangeStateSignature({
+            ...(canvasData ?? {}),
+            nodes: projectedNodes,
+            edges,
+        }, edges);
+    }
+
     private reorderEdgesToMatchStableSnapshot(
         canvasData: CanvasDataLike,
         stableOriginalEdges: CanvasEdgeLike[],
@@ -1003,14 +1125,14 @@ export class LayoutManager {
         allNodes: Map<string, CanvasNodeLike>
     ): string {
         if (!canvasData?.nodes) return 'no-data';
-        
-        // 采样前 5 个节点的位置和高度
+
+        const signature = buildArrangeStateSignature(canvasData, canvasData.edges);
         const samples = canvasData.nodes.slice(0, 5).map(n => {
             const node = allNodes.get(n.id ?? '');
             const domH = (node)?.nodeEl?.offsetHeight ?? 0;
             return `${n.id?.slice(0, 6)}:${n.x?.toFixed(0)},${n.y?.toFixed(0)},${n.height?.toFixed(0)},domH=${domH}`;
         });
-        return `in:${samples.join('|')}`;
+        return `in:${signature}:${samples.join('|')}`;
     }
 
     /**
@@ -1020,15 +1142,13 @@ export class LayoutManager {
     private computeOutputSignature(
         result: Map<string, { x: number; y: number; width?: number; height?: number }>
     ): string {
-        // 采样前 5 个节点的输出位置
-        const samples: string[] = [];
-        let i = 0;
-        for (const [nodeId, pos] of result) {
-            if (i >= 5) break;
-            samples.push(`${nodeId.slice(0, 6)}:${pos.x.toFixed(0)},${pos.y.toFixed(0)},${(pos.height ?? 0).toFixed(0)}`);
-            i++;
-        }
-        return `out:${samples.join('|')}`;
+        const allEntries = Array.from(result.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([nodeId, pos]) => (
+                `${nodeId}:${pos.x.toFixed(1)}:${pos.y.toFixed(1)}:${(pos.width ?? 0).toFixed(1)}:${(pos.height ?? 0).toFixed(1)}`
+            ));
+        const samples = allEntries.slice(0, 5).map(entry => entry.slice(0, 48));
+        return `out:n${allEntries.length}:h${computeArrangeSigHash(allEntries.join('|'))}:${samples.join('|')}`;
     }
 
     /**
@@ -1066,7 +1186,7 @@ export class LayoutManager {
             const outputs = this.arrangeOutputSignatures;
             
             // 检查输入是否相同（或非常相似）
-            const inputStable = inputs.every(s => s === inputs[0] || s.startsWith('in:'));
+            const inputStable = inputs.every(s => s === inputs[0]);
             
             // 检查输出是否呈现 A→B→A→B 模式
             // outputs[0] === outputs[2] && outputs[1] === outputs[3]
@@ -1459,6 +1579,27 @@ export class LayoutManager {
             const { visibleNodes, edges, originalEdges, canvasData, allNodes, canvasFilePath } = layoutData;
             const canonicalOrderCanvasData = stableOrderSnapshot || canvasData || undefined;
             const canonicalOriginalEdges = stableOriginalEdges.length > 0 ? stableOriginalEdges : originalEdges;
+            const preflightStateSignature = buildArrangeStateSignature(canonicalOrderCanvasData, canonicalOriginalEdges);
+            const preflightGapSummary = this.edgeGeometryService.summarizeVisibleEdgeScreenGaps(canvas, allNodes);
+            const preflightSevereVisualRisk = this.edgeGeometryService.hasSevereVisualGapRisk(preflightGapSummary);
+            const repeatManualSkipDecision = getArrangeRepeatManualSkipDecision({
+                source,
+                filePath: canvasFilePath,
+                currentSignature: preflightStateSignature,
+                previousSnapshot: canvasFilePath ? (this.recentArrangeStateByFilePath.get(canvasFilePath) ?? null) : null,
+                severeVisualRisk: preflightSevereVisualRisk,
+            });
+
+            if (repeatManualSkipDecision.skip) {
+                log(
+                    `[Layout] ArrangeNoOpPreflight: source=${source}, file=${canvasFilePath || 'unknown'}, ` +
+                    `reason=${repeatManualSkipDecision.reason}, signature=${preflightStateSignature}, ` +
+                    `gapSummary=${this.formatGapSummary(preflightGapSummary)}, ctx=${arrangeId}`
+                );
+                new Notice('布局完成！无结构变化');
+                this.rememberArrangeStateSignature(canvasFilePath, preflightStateSignature, source);
+                return;
+            }
 
             // [方案3] 低 DOM 可见率时，auto arrange 降级，不做整树重排
             // 原因：在 domVisibleRate 很低时（如 16.3%），大量节点高度不可信，
@@ -1642,6 +1783,7 @@ export class LayoutManager {
                 if (noOpFastPathDecision.followUp.scheduleOpenStabilization) {
                     this.scheduleOpenStabilization('arrange-no-op');
                 }
+                this.rememberArrangeStateSignature(canvasFilePath, preflightStateSignature, source);
                 new Notice('布局完成！无节点变化');
                 log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=no-op-fast-path, ctx=${arrangeId}`);
                 return;
@@ -1871,6 +2013,15 @@ export class LayoutManager {
                     this.edgeGeometryService.logNodeStyleTruth(finalNodes, 'final-style-truth', arrangeId);
                 }
             }, 350);
+
+            if (success) {
+                const projectedStateSignature = this.buildProjectedArrangeStateSignature(
+                    canonicalOrderCanvasData,
+                    canonicalOriginalEdges,
+                    result
+                );
+                this.rememberArrangeStateSignature(canvasFilePath, projectedStateSignature, source);
+            }
 
             new Notice(`布局完成！已写入 ${predictedChangedCount} 个节点位置`);
             log(`[Layout] 完成: predictedChanged=${predictedChangedCount}, success=${success}, mode=engine-driven, ctx=${arrangeId}`);

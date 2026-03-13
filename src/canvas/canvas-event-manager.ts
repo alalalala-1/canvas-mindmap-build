@@ -206,11 +206,14 @@ export class CanvasEventManager {
     private lastEdgeSelectionFallbackKey: string = '';
     private lastEdgeSelectionFallbackAt: number = 0;
     private lastOpenEntryStabilizeAtByFilePath: Map<string, number> = new Map();
+    private suppressOpenEntryByFocusNormalizationUntil: number = 0;
+    private suppressOpenEntryByFocusNormalizationContext: string | null = null;
     private readonly touchDragArmedClass = 'cmb-touch-drag-armed';
     private readonly edgeSelectionFallbackSlowLogThresholdMs: number = 12;
     private readonly edgeSelectionFallbackDedupWindowMs: number = 120;
     private readonly openEntryDedupWindowMs: number = 1500;
     private readonly nativeInsertMouseClickClassificationWindowMs: number = 520;
+    private readonly deleteModalFocusNormalizationSuppressMs: number = 1200;
     private readonly touchDragScrollOwnerSelectors: string[] = [
         '.canvas-node-content',
         '.canvas-node-content .markdown-preview-view',
@@ -2609,9 +2612,27 @@ export class CanvasEventManager {
     }
 
     private shouldSuppressOpenStabilization(source: string, filePath: string | null): boolean {
+        const now = Date.now();
+
+        const isOpenEntrySource = source === 'active-leaf-change' || source === 'file-open';
+        if (isOpenEntrySource) {
+            if (this.suppressOpenEntryByFocusNormalizationUntil > now) {
+                log(
+                    `[Event] OpenEntrySuppressed: source=${source}, file=${filePath || 'unknown'}, ` +
+                    `reason=delete-modal-focus-normalization, remaining=${this.suppressOpenEntryByFocusNormalizationUntil - now}ms, ` +
+                    `context=${this.suppressOpenEntryByFocusNormalizationContext || 'none'}`
+                );
+                return true;
+            }
+
+            if (this.suppressOpenEntryByFocusNormalizationUntil > 0) {
+                this.suppressOpenEntryByFocusNormalizationUntil = 0;
+                this.suppressOpenEntryByFocusNormalizationContext = null;
+            }
+        }
+
         if (!filePath) return false;
 
-        const now = Date.now();
         const until = this.programmaticReloadSuppressUntilByFilePath.get(filePath) || 0;
         if (until > now) {
             log(`[Event] OpenStabilizeSuppressed: source=${source}, file=${filePath}, remaining=${until - now}ms`);
@@ -2650,6 +2671,23 @@ export class CanvasEventManager {
         );
     }
 
+    private markSuppressOpenEntryByFocusNormalization(
+        phase: string,
+        kind: 'node' | 'edge',
+        targetId: string,
+        holdMs: number = this.deleteModalFocusNormalizationSuppressMs
+    ): void {
+        const until = Date.now() + Math.max(0, holdMs);
+        if (until > this.suppressOpenEntryByFocusNormalizationUntil) {
+            this.suppressOpenEntryByFocusNormalizationUntil = until;
+        }
+        this.suppressOpenEntryByFocusNormalizationContext = `phase=${phase},kind=${kind},target=${targetId}`;
+        logVerbose(
+            `[Event] OpenEntrySuppressArmed: reason=delete-modal-focus-normalization, ` +
+            `phase=${phase}, kind=${kind}, target=${targetId}, holdMs=${holdMs}`
+        );
+    }
+
     private clearSuspiciousDeleteModalFocusContext(reason: string, kind: 'node' | 'edge', targetId: string): boolean {
         const shouldExpectCanvasActive = true;
         const shouldNormalize = this.hasSuspiciousDeleteModalFocusContext(shouldExpectCanvasActive);
@@ -2679,13 +2717,17 @@ export class CanvasEventManager {
         }
 
         const after = this.describeDeleteModalFocusContext();
+        const normalized = focusedCanvasLeaf || blurred;
+        if (normalized) {
+            this.markSuppressOpenEntryByFocusNormalization(reason, kind, targetId);
+        }
         logVerbose(
             `[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
             `focusBefore=${before}, focusAfterLeafSync=${focusAfterLeafSync}, focusAfter=${after}, ` +
             `activeBefore=${activeBefore}, activeAfter=${this.describeEventTarget(document.activeElement)}, ` +
             `focusedCanvasLeaf=${focusedCanvasLeaf}, blurred=${blurred}`
         );
-        return focusedCanvasLeaf || blurred;
+        return normalized;
     }
 
     private async runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {

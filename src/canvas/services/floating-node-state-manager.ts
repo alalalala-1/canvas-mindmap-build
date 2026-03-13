@@ -123,26 +123,41 @@ export class FloatingNodeStateManager {
                 }
             }
 
-            // 1. 更新内存缓存
-            for (const id of nodesToClear) {
+            return await this.clearNodesFloatingState(nodesToClear, canvasFilePath);
+        } catch (err) {
+            log('[FloatingState] 清除失败', err);
+            return false;
+        }
+    }
+
+    async clearNodesFloatingState(nodeIds: string[], canvasFilePath: string): Promise<boolean> {
+        try {
+            const uniqueNodeIds = Array.from(new Set(nodeIds.filter(Boolean)));
+            if (uniqueNodeIds.length === 0) {
+                return true;
+            }
+
+            for (const id of uniqueNodeIds) {
                 this.updateMemoryCache(canvasFilePath, id, null);
             }
 
-            // 2. 原子化修改文件
             return await this.canvasFileService.modifyCanvasDataAtomic(canvasFilePath, (canvasData) => {
                 let modified = false;
 
-                for (const id of nodesToClear) {
-                    // 1. 清除 metadata 中的标记
+                for (const id of uniqueNodeIds) {
                     if (canvasData.metadata?.floatingNodes?.[id]) {
                         delete canvasData.metadata.floatingNodes[id];
                         modified = true;
                     }
 
-                    // 2. 清除节点 data 属性中的标记
                     if (canvasData.nodes) {
                         const nodeData = canvasData.nodes.find(n => n.id === id);
-                        if (nodeData?.data?.isFloating) {
+                        if (nodeData?.data && (
+                            nodeData.data.isFloating
+                            || nodeData.data.originalParent
+                            || nodeData.data.floatingTimestamp
+                            || nodeData.data.isSubtreeNode
+                        )) {
                             delete nodeData.data.isFloating;
                             delete nodeData.data.originalParent;
                             delete nodeData.data.floatingTimestamp;
@@ -159,7 +174,7 @@ export class FloatingNodeStateManager {
                 return modified;
             });
         } catch (err) {
-            log('[FloatingState] 清除失败', err);
+            log('[FloatingState] 批量清除失败', err);
             return false;
         }
     }

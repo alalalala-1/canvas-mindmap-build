@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { arrangeLayout } from '../canvas/layout';
 import {
+	buildArrangeStateSignature,
 	getArrangeNoOpFastPathDecision,
 	getArrangeNoOpFollowUpDecision,
+	getArrangeRepeatManualSkipDecision,
 	getOpenStabilizeHealthySkipDecision,
 } from '../canvas/layout-manager';
 import { CanvasArrangerSettings, CanvasDataLike, CanvasEdgeLike, CanvasNodeLike } from '../canvas/types';
@@ -194,6 +196,144 @@ describe('LayoutManager no-op follow-up decision', () => {
 			skip: false,
 			reason: 'graph-changed',
 			ageMs: 3000,
+		});
+	});
+});
+
+describe('LayoutManager arrange state signature', () => {
+	it('should keep identical signatures for identical canvas state', () => {
+		const canvasData: CanvasDataLike = {
+			nodes: [
+				{ id: 'p', x: 0, y: 0, width: 200, height: 80 },
+				{ id: 'c1', x: 200, y: -60, width: 200, height: 80 },
+			],
+			edges: [
+				{ id: 'e1', fromNode: 'p', toNode: 'c1', fromSide: 'right', toSide: 'left' },
+			],
+		};
+
+		expect(buildArrangeStateSignature(canvasData)).toBe(buildArrangeStateSignature(canvasData));
+	});
+
+	it('should change signature when node geometry or edge order changes', () => {
+		const baseNodes: [CanvasNodeLike, CanvasNodeLike, CanvasNodeLike] = [
+			{ id: 'p', x: 0, y: 0, width: 200, height: 80 },
+			{ id: 'c1', x: 200, y: -60, width: 200, height: 80 },
+			{ id: 'c2', x: 200, y: 60, width: 200, height: 80 },
+		];
+		const baseEdges: [CanvasEdgeLike, CanvasEdgeLike] = [
+			{ id: 'e1', fromNode: 'p', toNode: 'c1', fromSide: 'right', toSide: 'left' },
+			{ id: 'e2', fromNode: 'p', toNode: 'c2', fromSide: 'right', toSide: 'left' },
+		];
+
+		const baseSignature = buildArrangeStateSignature({
+			nodes: baseNodes,
+			edges: baseEdges,
+		});
+
+		const movedNodeSignature = buildArrangeStateSignature({
+			nodes: [
+				baseNodes[0],
+				{ ...baseNodes[1], y: -20 },
+				baseNodes[2],
+			],
+			edges: baseEdges,
+		});
+
+		const reorderedEdgeSignature = buildArrangeStateSignature({
+			nodes: baseNodes,
+			edges: [baseEdges[1], baseEdges[0]],
+		});
+
+		expect(movedNodeSignature).not.toBe(baseSignature);
+		expect(reorderedEdgeSignature).not.toBe(baseSignature);
+	});
+});
+
+describe('LayoutManager repeat manual arrange skip decision', () => {
+	it('should skip repeated manual arrange when file and signature are unchanged', () => {
+		expect(getArrangeRepeatManualSkipDecision({
+			source: 'manual',
+			filePath: 'test.canvas',
+			currentSignature: 'n2:e1:h123',
+			previousSnapshot: {
+				filePath: 'test.canvas',
+				signature: 'n2:e1:h123',
+				source: 'manual',
+				recordedAt: 123,
+			},
+			severeVisualRisk: false,
+		})).toEqual({
+			skip: true,
+			reason: 'repeat-manual-state',
+		});
+	});
+
+	it('should not skip non-manual or risky arrange requests', () => {
+		expect(getArrangeRepeatManualSkipDecision({
+			source: 'debounce',
+			filePath: 'test.canvas',
+			currentSignature: 'n2:e1:h123',
+			previousSnapshot: {
+				filePath: 'test.canvas',
+				signature: 'n2:e1:h123',
+				source: 'manual',
+				recordedAt: 123,
+			},
+			severeVisualRisk: false,
+		})).toEqual({
+			skip: false,
+			reason: 'non-manual-source',
+		});
+
+		expect(getArrangeRepeatManualSkipDecision({
+			source: 'manual',
+			filePath: 'test.canvas',
+			currentSignature: 'n2:e1:h123',
+			previousSnapshot: {
+				filePath: 'test.canvas',
+				signature: 'n2:e1:h123',
+				source: 'manual',
+				recordedAt: 123,
+			},
+			severeVisualRisk: true,
+		})).toEqual({
+			skip: false,
+			reason: 'severe-visual-gap-risk',
+		});
+	});
+
+	it('should not skip when file or signature changed', () => {
+		expect(getArrangeRepeatManualSkipDecision({
+			source: 'manual',
+			filePath: 'next.canvas',
+			currentSignature: 'n2:e1:h123',
+			previousSnapshot: {
+				filePath: 'prev.canvas',
+				signature: 'n2:e1:h123',
+				source: 'manual',
+				recordedAt: 123,
+			},
+			severeVisualRisk: false,
+		})).toEqual({
+			skip: false,
+			reason: 'file-changed',
+		});
+
+		expect(getArrangeRepeatManualSkipDecision({
+			source: 'manual',
+			filePath: 'test.canvas',
+			currentSignature: 'n2:e1:h456',
+			previousSnapshot: {
+				filePath: 'test.canvas',
+				signature: 'n2:e1:h123',
+				source: 'manual',
+				recordedAt: 123,
+			},
+			severeVisualRisk: false,
+		})).toEqual({
+			skip: false,
+			reason: 'state-changed',
 		});
 	});
 });

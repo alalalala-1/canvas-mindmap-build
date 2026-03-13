@@ -271,9 +271,9 @@ export class FloatingNodeService {
     /**
      * 清除多个节点的浮动样式
      */
-    private clearFloatingStyles(nodeIds: string[]): void {
+    private clearFloatingStyles(nodeIds: string[], options?: { retryOnMissing?: boolean }): void {
         for (const id of nodeIds) {
-            this.styleManager.clearFloatingStyle(id);
+            this.styleManager.clearFloatingStyle(id, options);
         }
     }
 
@@ -317,15 +317,11 @@ export class FloatingNodeService {
     /**
      * 持久化清除浮动状态到文件
      */
-    private async persistClearFloatingState(nodeId: string, clearSubtree: boolean): Promise<boolean> {
+    private async persistClearFloatingStates(nodeIds: string[]): Promise<boolean> {
         if (!this.currentCanvasFilePath) {
             return false;
         }
-        return await this.stateManager.clearNodeFloatingState(
-            nodeId,
-            this.currentCanvasFilePath,
-            clearSubtree
-        );
+        return await this.stateManager.clearNodesFloatingState(nodeIds, this.currentCanvasFilePath);
     }
 
     /**
@@ -394,11 +390,7 @@ export class FloatingNodeService {
         shouldRequestCanvasSave: boolean
     ): Promise<void> {
         try {
-            let persistSuccess = false;
-            for (const nodeId of nodesToClear) {
-                const nodePersisted = await this.persistClearFloatingState(nodeId, false);
-                persistSuccess = nodePersisted || persistSuccess;
-            }
+            const persistSuccess = await this.persistClearFloatingStates(nodesToClear);
             log(`[FloatingNode] 后台文件持久化完成: ${primaryNodeId}, cleared=${nodesToClear.length}, success=${persistSuccess}`);
 
             if (shouldRequestCanvasSave) {
@@ -447,9 +439,9 @@ export class FloatingNodeService {
         const nodeId = node.id;
         
         this.removeFloatingNodeIds([nodeId]);
-        this.clearFloatingStyles([nodeId]);
+        this.clearFloatingStyles([nodeId], { retryOnMissing: false });
         this.clearFloatingMemory(this.currentCanvasFilePath, [nodeId]);
-        await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath);
+        await this.stateManager.clearNodesFloatingState([nodeId], this.currentCanvasFilePath);
     }
 
     /**
@@ -505,7 +497,7 @@ export class FloatingNodeService {
         this.recentConnectedNodes.set(toNodeId, Date.now());
 
         // 1. 立即清除目标节点的视觉样式（入边消除红框）
-        this.styleManager.clearFloatingStyle(toNodeId);
+        this.styleManager.clearFloatingStyle(toNodeId, { retryOnMissing: false });
 
         // 2. 检查内存缓存中的浮动状态（不刷新缓存，避免读取旧文件数据）
         const isToNodeFloating = this.stateManager.isNodeFloatingFromCache(toNodeId, this.currentCanvasFilePath);
@@ -682,6 +674,11 @@ export class FloatingNodeService {
             }
         }
 
+        log(
+            `[FloatingStatePrefilter] valid=${validFloatingNodes.length}, connected=${connectedFloatingNodes.length}, ` +
+            `missing=${invalidFloatingNodes.length}, recentConnectedSkip=${recentConnectedSkipped.length}`
+        );
+
         this.primeFloatingStateCleanup(connectedFloatingNodes, 'connected');
         this.primeFloatingStateCleanup(invalidFloatingNodes, 'missing-node');
         if (recentConnectedSkipped.length > 0) {
@@ -717,7 +714,7 @@ export class FloatingNodeService {
         if (!this.currentCanvasFilePath || nodeIds.length === 0) return;
 
         this.removeFloatingNodeIds(nodeIds);
-        this.clearFloatingStyles(nodeIds);
+        this.clearFloatingStyles(nodeIds, { retryOnMissing: false });
         this.clearFloatingMemory(this.currentCanvasFilePath, nodeIds);
         this.clearFloatingCanvasData(nodeIds, false);
         for (const nodeId of nodeIds) {
@@ -734,13 +731,11 @@ export class FloatingNodeService {
     private async cleanupConnectedFloatingNodes(nodeIds: string[]): Promise<void> {
         if (!this.currentCanvasFilePath) return;
 
-        for (const nodeId of nodeIds) {
-            if (this.shouldSkipStyleApply(nodeId)) {
-                log(`[FloatingNode] 跳过清理刚连接的节点: ${nodeId}`);
-                continue;
-            }
-            await this.clearNodeFloatingState(nodeId);
-        }
+        const filteredNodeIds = Array.from(new Set(nodeIds.filter(nodeId => !this.shouldSkipStyleApply(nodeId))));
+        if (filteredNodeIds.length === 0) return;
+
+        const cleared = await this.stateManager.clearNodesFloatingState(filteredNodeIds, this.currentCanvasFilePath);
+        log(`[FloatingStateCleanupPersisted] reason=connected, count=${filteredNodeIds.length}, success=${cleared}`);
     }
 
     /**
@@ -749,15 +744,11 @@ export class FloatingNodeService {
     private async cleanupInvalidFloatingNodes(nodeIds: string[]): Promise<void> {
         if (!this.currentCanvasFilePath) return;
 
-        for (const nodeId of nodeIds) {
-            this.recentConnectedNodes.delete(nodeId);
-            this.clearEdgeWatch(nodeId);
-            this.removeFloatingNodeIds([nodeId]);
-            this.clearFloatingStyle(nodeId);
-            this.clearFloatingMemory(this.currentCanvasFilePath, [nodeId]);
-            this.clearFloatingCanvasData([nodeId], false);
-            await this.stateManager.clearNodeFloatingState(nodeId, this.currentCanvasFilePath);
-        }
+        const uniqueNodeIds = Array.from(new Set(nodeIds));
+        if (uniqueNodeIds.length === 0) return;
+
+        const cleared = await this.stateManager.clearNodesFloatingState(uniqueNodeIds, this.currentCanvasFilePath);
+        log(`[FloatingStateCleanupPersisted] reason=missing-node, count=${uniqueNodeIds.length}, success=${cleared}`);
     }
 
     /**
@@ -774,8 +765,8 @@ export class FloatingNodeService {
     /**
      * 清除单个节点的浮动样式
      */
-    clearFloatingStyle(nodeId: string): void {
-        this.styleManager.clearFloatingStyle(nodeId);
+    clearFloatingStyle(nodeId: string, options?: { retryOnMissing?: boolean }): void {
+        this.styleManager.clearFloatingStyle(nodeId, options);
     }
 
     // =========================================================================
