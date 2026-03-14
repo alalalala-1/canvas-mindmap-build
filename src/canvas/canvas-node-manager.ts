@@ -309,7 +309,7 @@ export class CanvasNodeManager {
         this.nodeDeletionService.setCanvasManager(canvasManager);
     }
 
-    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<void> {
+    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<boolean> {
         return this.nodeCreationService.addNodeToCanvas(content, sourceFile, options);
     }
 
@@ -410,6 +410,12 @@ export class CanvasNodeManager {
         this.nodeHeightAdjustInFlight.add(nodeId);
         log(`[Node] adjustNodeHeightAfterRender 被调用, nodeId=${nodeId}`);
         try {
+            const immediateWaitState = this.resolveImmediateHeightAdjustWaitState(nodeId);
+            if (immediateWaitState) {
+                this.scheduleHeightAdjustRetryOrPark(nodeId, immediateWaitState, 'precheck');
+                return;
+            }
+
             const newHeightValue = await this.nodeHeightService.adjustNodeHeight(nodeId);
 
             if (newHeightValue !== null) {
@@ -418,34 +424,7 @@ export class CanvasNodeManager {
                 const nodeData = this.nodeHeightService.getCanvasNodeElement(nodeId);
                 const retryState = this.resolveHeightAdjustRetryState(nodeId, nodeData, newHeightValue);
                 if (retryState) {
-                    const nextRetryCount = (this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0) + 1;
-                    if (nextRetryCount <= this.maxNodeHeightAdjustRetries) {
-                        this.nodeHeightAdjustRetryCountByNodeId.set(nodeId, nextRetryCount);
-                        this.scheduleNodeHeightAdjustment(
-                            nodeId,
-                            retryState.awaiting === 'mounted'
-                                ? CONSTANTS.TIMING.RETRY_DELAY_SHORT
-                                : CONSTANTS.TIMING.RETRY_DELAY,
-                            `${retryState.awaiting === 'mounted' ? 'dom-not-mounted' : 'dom-not-visible'}#${nextRetryCount}`
-                        );
-                        logVerbose(
-                            `[Node] HeightAdjustRetryScheduled: node=${nodeId}, ` +
-                            `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
-                            `awaiting=${retryState.awaiting}, source=${retryState.lastSource || 'unknown'}`
-                        );
-                    } else {
-                        this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
-                        this.parkedNodeHeightAdjustByNodeId.set(nodeId, {
-                            awaiting: retryState.awaiting,
-                            parkedAt: Date.now(),
-                            lastReason: retryState.lastReason,
-                        });
-                        logVerbose(
-                            `[Node] HeightAdjustRetryExhausted: node=${nodeId}, ` +
-                            `retries=${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
-                            `awaiting=${retryState.awaiting}, next=wait-for-node-mounted-visible`
-                        );
-                    }
+                    this.scheduleHeightAdjustRetryOrPark(nodeId, retryState, 'post-adjust');
                 } else {
                     this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
                     this.parkedNodeHeightAdjustByNodeId.delete(nodeId);
@@ -462,6 +441,69 @@ export class CanvasNodeManager {
                 this.scheduleNodeHeightAdjustment(nodeId, this.queuedNodeHeightAdjustDelayMs, 'queued-after-in-flight');
             }
         }
+    }
+
+    private resolveImmediateHeightAdjustWaitState(nodeId: string): HeightAdjustState | null {
+        const nodeData = this.nodeHeightService.getCanvasNodeElement(nodeId);
+        if (!nodeData) return null;
+
+        if (!nodeData.nodeEl) {
+            return {
+                nodeId,
+                retryCount: this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0,
+                awaiting: 'mounted',
+                lastReason: 'node-el-missing',
+                lastSource: 'missing-dom',
+            };
+        }
+
+        if (this.isNodeVirtualized(nodeData.nodeEl)) {
+            return {
+                nodeId,
+                retryCount: this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0,
+                awaiting: 'visible',
+                lastReason: 'node-virtualized-zero-sized',
+                lastSource: 'zero-sized',
+            };
+        }
+
+        return null;
+    }
+
+    private scheduleHeightAdjustRetryOrPark(
+        nodeId: string,
+        retryState: HeightAdjustState,
+        phase: 'precheck' | 'post-adjust'
+    ): void {
+        const nextRetryCount = (this.nodeHeightAdjustRetryCountByNodeId.get(nodeId) ?? 0) + 1;
+        if (nextRetryCount <= this.maxNodeHeightAdjustRetries) {
+            this.nodeHeightAdjustRetryCountByNodeId.set(nodeId, nextRetryCount);
+            this.scheduleNodeHeightAdjustment(
+                nodeId,
+                retryState.awaiting === 'mounted'
+                    ? CONSTANTS.TIMING.RETRY_DELAY_SHORT
+                    : CONSTANTS.TIMING.RETRY_DELAY,
+                `${retryState.awaiting === 'mounted' ? 'dom-not-mounted' : 'dom-not-visible'}#${nextRetryCount}`
+            );
+            logVerbose(
+                `[Node] HeightAdjustRetryScheduled: node=${nodeId}, ` +
+                `retry=${nextRetryCount}/${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
+                `awaiting=${retryState.awaiting}, source=${retryState.lastSource || 'unknown'}, phase=${phase}`
+            );
+            return;
+        }
+
+        this.nodeHeightAdjustRetryCountByNodeId.delete(nodeId);
+        this.parkedNodeHeightAdjustByNodeId.set(nodeId, {
+            awaiting: retryState.awaiting,
+            parkedAt: Date.now(),
+            lastReason: retryState.lastReason,
+        });
+        logVerbose(
+            `[Node] HeightAdjustRetryExhausted: node=${nodeId}, ` +
+            `retries=${this.maxNodeHeightAdjustRetries}, reason=${retryState.lastReason}, ` +
+            `awaiting=${retryState.awaiting}, next=wait-for-node-mounted-visible, phase=${phase}`
+        );
     }
 
     cleanup(): void {
@@ -552,6 +594,16 @@ export class CanvasNodeManager {
             const trustedTransitionSamples: string[] = [];
 
             for (const [nodeId, domNode] of canvas.nodes) {
+                // [P0′-B] 节点有效性守卫：防止访问已删除/detached节点
+                if (!domNode || !nodeId) {
+                    continue;
+                }
+                
+                // [P0′-B] 验证节点仍在 canvas.nodes 中（防止异步删除）
+                if (!canvas.nodes.has(nodeId)) {
+                    continue;
+                }
+
                 const nodeMeta = this.getNodeTextAndType(domNode);
                 if (!nodeMeta.isTextLike || !nodeMeta.text) continue;
 
@@ -596,8 +648,12 @@ export class CanvasNodeManager {
                 else if (result.source === 'trusted-history') stats.sourceFileTrustedCount++;
                 else stats.sourceEstimateCount++;
 
-                // 使用 moveAndResize 更新节点
+                // [P0′-B] 使用 moveAndResize 更新节点（再次验证节点有效性）
                 if ((result.heightChanged || result.widthChanged) && typeof domNode.moveAndResize === 'function') {
+                    // 再次验证节点仍在 canvas.nodes 中（防止 adjustSingleNodeHeightMemory 执行期间被删除）
+                    if (!canvas.nodes.has(nodeId)) {
+                        continue;
+                    }
                     domNode.moveAndResize({
                         x: domNode.x ?? 0,
                         y: domNode.y ?? 0,

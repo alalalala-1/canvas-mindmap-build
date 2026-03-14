@@ -49,26 +49,39 @@ export class NodeCreationService {
         this.canvasManager = canvasManager;
     }
 
-    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<void> {
+    async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<boolean> {
         const requestSource = options?.source || 'command';
         const trimmedContent = content.trim();
+        const hasVerifiedBlankNativeInsertEvidence = options?.verifiedNativeInsert === true
+            && (options?.blankNativeInsertEvidenceKind === 'placeholder'
+                || options?.blankNativeInsertEvidenceKind === 'node-content');
 
         if (
             requestSource === 'native-insert'
             && trimmedContent.length === 0
             && !options?.allowBlankNode
-            && !options?.verifiedNativeInsert
         ) {
-            log(
-                `[Create] AddNodeRejected: requestSource=${requestSource}, reason=unverified-empty-native-insert, ` +
-                `parentHint=${options?.parentNodeIdHint || 'none'}`
-            );
-            return;
+            if (!options?.verifiedNativeInsert) {
+                log(
+                    `[Create] AddNodeRejected: requestSource=${requestSource}, reason=unverified-empty-native-insert, ` +
+                    `parentHint=${options?.parentNodeIdHint || 'none'}`
+                );
+                return false;
+            }
+
+            if (!hasVerifiedBlankNativeInsertEvidence) {
+                log(
+                    `[Create] AddNodeRejected: requestSource=${requestSource}, reason=unsafe-verified-empty-native-insert, ` +
+                    `parentHint=${options?.parentNodeIdHint || 'none'}, ` +
+                    `evidenceKind=${options?.blankNativeInsertEvidenceKind || 'none'}`
+                );
+                return false;
+            }
         }
 
         if (!sourceFile && requestSource !== 'native-insert') {
             new Notice('未选择文件');
-            return;
+            return false;
         }
 
         const pluginContext = this.plugin as PluginWithLastClicked;
@@ -96,7 +109,7 @@ export class NodeCreationService {
 
         if (!canvasFilePath) {
             new Notice('未找到有效的 canvas 文件路径，请打开目标 canvas 或修正设置中的路径');
-            return;
+            return false;
         }
 
         const createRequestId = `create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -209,16 +222,18 @@ export class NodeCreationService {
 
         if (!success) {
             new Notice('保存 canvas 文件失败');
-            return;
+            return false;
         }
 
-        await this.postNodeCreation(newNodeId, canvasFilePath);
+		await this.postNodeCreation(newNodeId, canvasFilePath, requestSource);
 
         log(`[Create] AddNodeDone: request=${createRequestId}, node=${newNodeId}, edge=${newEdgeId}, targetCanvas=${canvasFilePath}`);
 
         if (!options?.suppressSuccessNotice) {
             new Notice('节点已成功添加到 canvas');
         }
+
+        return true;
     }
 
     private createNodeData(content: string, sourceFile: TFile | null, nodeId: string, options?: AddNodeToCanvasOptions): CanvasNodeLike {
@@ -479,7 +494,7 @@ export class NodeCreationService {
         };
     }
 
-    private async postNodeCreation(newNodeId: string, canvasFilePath: string): Promise<void> {
+	private async postNodeCreation(newNodeId: string, canvasFilePath: string, requestSource: string): Promise<void> {
         if (this.canvasManager) {
             const refreshed = await this.canvasManager.refreshCanvasViewsForFile?.(canvasFilePath, `add-node:${newNodeId}`);
             if (typeof refreshed === 'number') {
@@ -491,6 +506,10 @@ export class NodeCreationService {
             }
 
             this.canvasManager.checkAndAddCollapseButtons();
+			if (requestSource === 'native-insert') {
+				log(`[Create] PostCreateHeightAdjustmentDeferred: node=${newNodeId}, canvas=${canvasFilePath}, reason=native-insert`);
+				return;
+			}
             this.canvasManager.scheduleNodeHeightAdjustment(
                 newNodeId,
                 CONSTANTS.TIMING.HEIGHT_ADJUST_DELAY,

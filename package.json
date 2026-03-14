@@ -10,7 +10,11 @@
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint .",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"large-edit:generate": "node scripts/large-file/generate-fixture.mjs",
+		"large-edit:list": "node scripts/large-file/list-blocks.mjs",
+		"large-edit:replace": "node scripts/large-file/replace-block.mjs",
+		"large-edit:test": "vitest run src/__tests__/large-file-edit-strategy.test.ts"
 	},
 	"keywords": [],
 	"license": "0-BSD",

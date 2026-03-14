@@ -131,8 +131,8 @@ export class CanvasManager implements ICanvasManager {
         this.layoutManager.scheduleOpenStabilization(source);
     }
 
-    public async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions) {
-        await this.nodeManager.addNodeToCanvas(content, sourceFile, options);
+    public async addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<boolean> {
+        return this.nodeManager.addNodeToCanvas(content, sourceFile, options);
     }
 
     public scheduleNodeHeightAdjustment(nodeId: string, delayMs: number = 0, reason: string = 'runtime'): void {

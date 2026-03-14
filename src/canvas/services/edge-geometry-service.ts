@@ -35,6 +35,8 @@ export interface EdgeScreenGapSummary {
     maxGap: number;
     avgResidualGap: number;
     maxResidualGap: number;
+    actionableResidualBadEdges: number;
+    actionableMaxResidualGap: number;
     badGapThresholdPx: number;
     stubCompensationPx: number;
     canvasScale: number;
@@ -378,16 +380,20 @@ export class EdgeGeometryService {
         const hasAnomaly = options.anomalyStats.anomalous > 0;
         const rawHasBadEdges = options.gapSummary.residualBadEdges > 0
             || options.gapSummary.maxResidualGap > options.gapSummary.badGapThresholdPx;
+        // [P0′-A] 新增 actionable 判定：只统计 both-visible 的坏边
+        const actionableHasBadEdges = options.gapSummary.actionableResidualBadEdges > 0
+            || options.gapSummary.actionableMaxResidualGap > options.gapSummary.badGapThresholdPx;
         const hasPartialObservation = options.gapSummary.oneSideVisibleEdges > 0
             || options.gapSummary.bothVirtualizedEdges > 0;
         const gapConfidence = this.assessGapObservationConfidence(options.gapSummary);
-        const hasBadEdges = classifyDiagnosticPhase(options.phase).isFinal
-            ? (rawHasBadEdges && gapConfidence.trustedForFinal)
+        // [P0′-A] 在 final 阶段使用 actionable 指标做决策
+        const classification = classifyDiagnosticPhase(options.phase);
+        const hasBadEdges = classification.isFinal
+            ? (actionableHasBadEdges && gapConfidence.trustedForFinal)
             : rawHasBadEdges;
         const visibilityCoverageRatio = gapConfidence.coverageRatio;
         const coverageNote = this.buildCoverageNote(options.gapSummary);
         const pendingHint = this.getDiagnosticPendingHint(options.phase, options.tag);
-        const classification = classifyDiagnosticPhase(options.phase);
         const finalBad = classification.isFinal && (hasAnomaly || hasBadEdges);
         const level = resolveDiagnosticLogLevel({
             phase: options.phase,
@@ -418,9 +424,12 @@ export class EdgeGeometryService {
                 hasAnomaly,
                 hasBadEdges,
                 rawHasBadEdges,
+                actionableHasBadEdges,
                 anomalyCount: options.anomalyStats.anomalous,
                 residualBadEdges: options.gapSummary.residualBadEdges,
                 maxResidualGap: Number(options.gapSummary.maxResidualGap.toFixed(2)),
+                actionableResidualBadEdges: options.gapSummary.actionableResidualBadEdges,
+                actionableMaxResidualGap: Number(options.gapSummary.actionableMaxResidualGap.toFixed(2)),
                 badGapThresholdPx: Number(options.gapSummary.badGapThresholdPx.toFixed(2)),
                 allEdges: options.gapSummary.allEdges,
                 bothVisibleEdges: options.gapSummary.bothVisibleEdges,
@@ -851,6 +860,8 @@ export class EdgeGeometryService {
                 maxGap: 0,
                 avgResidualGap: 0,
                 maxResidualGap: 0,
+                actionableResidualBadEdges: 0,
+                actionableMaxResidualGap: 0,
                 badGapThresholdPx,
                 stubCompensationPx,
                 canvasScale,
@@ -886,6 +897,8 @@ export class EdgeGeometryService {
                 maxGap: 0,
                 avgResidualGap: 0,
                 maxResidualGap: 0,
+                actionableResidualBadEdges: 0,
+                actionableMaxResidualGap: 0,
                 badGapThresholdPx,
                 stubCompensationPx,
                 canvasScale,
@@ -901,10 +914,12 @@ export class EdgeGeometryService {
         let sampledEdges = 0;
         let badEdges = 0;
         let residualBadEdges = 0;
+        let actionableResidualBadEdges = 0;
         let sumGap = 0;
         let maxGap = 0;
         let sumResidualGap = 0;
         let maxResidualGap = 0;
+        let actionableMaxResidualGap = 0;
         const sampleLines: string[] = [];
         const edgeGapRows: Array<{
             edgeId: string;
@@ -996,6 +1011,15 @@ export class EdgeGeometryService {
             if (edgeGap > badGapThresholdPx) badEdges++;
             if (residualEdgeGap > badGapThresholdPx) residualBadEdges++;
 
+            // [P0′-A] 统计 actionable residual 指标：只计入 both-visible 的边（用户真正能看到的错连）
+            // candidateEdges 已经过滤为 both-visible（两端都在 visibleRectMap 中），所以这里全部计入
+            if (residualEdgeGap > actionableMaxResidualGap) {
+                actionableMaxResidualGap = residualEdgeGap;
+            }
+            if (residualEdgeGap > badGapThresholdPx) {
+                actionableResidualBadEdges++;
+            }
+
             edgeGapRows.push({
                 edgeId: (edge.id || 'edge').slice(0, 8),
                 fromId: fromId.slice(0, 6),
@@ -1069,6 +1093,8 @@ export class EdgeGeometryService {
             maxGap,
             avgResidualGap,
             maxResidualGap,
+            actionableResidualBadEdges,
+            actionableMaxResidualGap,
             badGapThresholdPx,
             stubCompensationPx,
             canvasScale,
@@ -1092,7 +1118,8 @@ export class EdgeGeometryService {
         }
 
         const severeGap = Math.max(12, summary.badGapThresholdPx * 3);
-        return summary.residualBadEdges > 0 || summary.maxResidualGap >= severeGap;
+        // [P0′-A] 改用 actionable 指标：只关注 both-visible 的坏边，忽略 one-side-visible 的伪残差
+        return summary.actionableResidualBadEdges > 0 || summary.actionableMaxResidualGap >= severeGap;
     }
 
     async traceStyleMutationsForVisibleNodes(

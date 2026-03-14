@@ -1,6 +1,13 @@
 import { App, ItemView } from 'obsidian';
 import { logVerbose } from '../../utils/logger';
 
+const DELETE_MODAL_CLOSE_GUARD_KEY = '__cmbDeleteModalCloseGuardInstalled';
+
+type DeleteModalLike = {
+	open: () => void;
+	close?: (...args: unknown[]) => void;
+};
+
 export interface DeleteModalFocusGuardHost {
 	app: App;
 	suppressOpenEntryByFocusNormalizationUntil: number;
@@ -66,11 +73,12 @@ export function clearSuspiciousDeleteModalFocusContext(
 	const before = describeDeleteModalFocusContext(host);
 	const activeBefore = host.describeEventTarget(document.activeElement);
 	let focusedCanvasLeaf = false;
+	const hasMalformedActiveEditor = !!host.app.workspace.activeEditor && !host.app.workspace.activeEditor.editor;
 
 	const activeCanvasView = host.getCanvasView();
 	const activeCanvasLeaf = (activeCanvasView as { leaf?: unknown } | null)?.leaf;
-	if (activeCanvasLeaf) {
-		focusedCanvasLeaf = host.setActiveLeafSafe(activeCanvasLeaf, { focus: true })
+	if (activeCanvasLeaf && !hasMalformedActiveEditor) {
+		focusedCanvasLeaf = host.setActiveLeafSafe(activeCanvasLeaf, { focus: false })
 			&& host.app.workspace.getActiveViewOfType(ItemView)?.getViewType?.() === 'canvas';
 	}
 
@@ -78,8 +86,9 @@ export function clearSuspiciousDeleteModalFocusContext(
 	let blurred = false;
 	try {
 		const activeElement = document.activeElement;
-		if (activeElement instanceof HTMLElement && activeElement !== document.body) {
-			activeElement.blur();
+		if (activeElement && activeElement !== document.body && typeof (activeElement as { blur?: () => void }).blur === 'function') {
+			const blurTarget = activeElement as unknown as { blur: () => void };
+			blurTarget.blur();
 			blurred = document.activeElement !== activeElement;
 		}
 	} catch {
@@ -95,9 +104,27 @@ export function clearSuspiciousDeleteModalFocusContext(
 		`[Event] DeleteModalFocusGuard: phase=${reason}, kind=${kind}, target=${targetId}, ` +
 			`focusBefore=${before}, focusAfterLeafSync=${focusAfterLeafSync}, focusAfter=${after}, ` +
 			`activeBefore=${activeBefore}, activeAfter=${host.describeEventTarget(document.activeElement)}, ` +
-			`focusedCanvasLeaf=${focusedCanvasLeaf}, blurred=${blurred}`,
+			`focusedCanvasLeaf=${focusedCanvasLeaf}, avoidedLeafFocusSync=${hasMalformedActiveEditor}, blurred=${blurred}`,
 	);
 	return normalized;
+}
+
+function installDeleteModalCloseGuard(
+	host: DeleteModalFocusGuardHost,
+	modal: DeleteModalLike,
+	kind: 'node' | 'edge',
+	targetId: string,
+): void {
+	const modalRecord = modal as DeleteModalLike & { [DELETE_MODAL_CLOSE_GUARD_KEY]?: boolean };
+	if (modalRecord[DELETE_MODAL_CLOSE_GUARD_KEY]) return;
+	if (typeof modalRecord.close !== 'function') return;
+
+	const originalClose = modalRecord.close.bind(modal) as (...args: unknown[]) => void;
+	modalRecord.close = (...args: unknown[]) => {
+		clearSuspiciousDeleteModalFocusContext(host, 'pre-close', kind, targetId);
+		originalClose(...args);
+	};
+	modalRecord[DELETE_MODAL_CLOSE_GUARD_KEY] = true;
 }
 
 export async function runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>): Promise<T> {
@@ -113,10 +140,11 @@ export async function runDeleteModalOnNextFrame<T>(action: () => T | Promise<T>)
 
 export async function openDeleteModalSafely(
 	host: DeleteModalFocusGuardHost,
-	modal: { open: () => void },
+	modal: DeleteModalLike,
 	kind: 'node' | 'edge',
 	targetId: string,
 ): Promise<void> {
+	installDeleteModalCloseGuard(host, modal, kind, targetId);
 	clearSuspiciousDeleteModalFocusContext(host, 'pre-open', kind, targetId);
 	logVerbose(
 		`[Event] DeleteModalNormalized: kind=${kind}, target=${targetId}, ` +

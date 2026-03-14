@@ -175,10 +175,12 @@ export type AddNodeToCanvasOptions = {
     skipFromLink?: boolean;
     allowBlankNode?: boolean;
     verifiedNativeInsert?: boolean;
+    blankNativeInsertEvidenceKind?: 'placeholder' | 'node-content';
 };
 
 
 export interface ICanvasManager {
+    addNodeToCanvas(content: string, sourceFile: TFile | null, options?: AddNodeToCanvasOptions): Promise<boolean>;
     checkAndAddCollapseButtons(): void;
     scheduleNodeHeightAdjustment(nodeId: string, delayMs?: number, reason?: string): void;
     notifyNodeMountedVisible?(nodeId: string, reason?: string): void;

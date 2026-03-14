@@ -3,27 +3,29 @@ import { EdgeGeometryService, type EdgeScreenGapSummary } from '../canvas/servic
 import { clearRecentLogs, getRecentLogs, updateLoggerConfig } from '../utils/logger';
 
 const baseGapSummary = (overrides: Partial<EdgeScreenGapSummary> = {}): EdgeScreenGapSummary => ({
-	allEdges: 6,
-	bothVisibleEdges: 4,
-	oneSideVisibleEdges: 1,
-	bothVirtualizedEdges: 1,
-	sampledEdges: 4,
-	badEdges: 0,
-	residualBadEdges: 0,
-	avgGap: 3,
-	maxGap: 3,
-	avgResidualGap: 0,
-	maxResidualGap: 0,
-	badGapThresholdPx: 8,
-	stubCompensationPx: 3.5,
-	canvasScale: 1,
-	topBadSample: 'none',
-	topResidualBadSample: 'none',
-	topBadDecompose: 'none',
-	topDriftNodes: 'none',
-	positionBuckets: 'abs=2,rel=0,other=0',
-	sample: 'none',
-	...overrides,
+ allEdges: 6,
+ bothVisibleEdges: 5,
+ oneSideVisibleEdges: 1,
+ bothVirtualizedEdges: 0,
+ sampledEdges: 5,
+ badEdges: 0,
+ residualBadEdges: 0,
+ avgGap: 3.5,
+ maxGap: 7.0,
+ avgResidualGap: 0,
+ maxResidualGap: 0,
+ actionableResidualBadEdges: 0,
+ actionableMaxResidualGap: 0,
+ badGapThresholdPx: 8,
+ stubCompensationPx: 7,
+ canvasScale: 1.0,
+ topBadSample: 'none',
+ topResidualBadSample: 'none',
+ topBadDecompose: 'none',
+ topDriftNodes: 'none',
+ positionBuckets: 'none',
+ sample: 'edge1:3.5/0.0px',
+ ...overrides,
 });
 
 const baseAnomalyStats = {
@@ -307,6 +309,8 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 				maxGap: 3.5,
 				avgResidualGap: 0,
 				maxResidualGap: 0,
+				actionableResidualBadEdges: 0,
+				actionableMaxResidualGap: 0,
 				badGapThresholdPx: 4,
 				stubCompensationPx: 3.5,
 				canvasScale: 0.5,
@@ -356,6 +360,8 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 				maxGap: 9,
 				avgResidualGap: 9,
 				maxResidualGap: 9,
+				actionableResidualBadEdges: 1,
+				actionableMaxResidualGap: 9,
 				badGapThresholdPx: 8,
 				stubCompensationPx: 3.5,
 				canvasScale: 1,
@@ -419,18 +425,24 @@ describe('EdgeGeometryService diagnostics semantics', () => {
 	it('should only treat severe visual gap risk as actionable when observation confidence is trusted', () => {
 		const service = new EdgeGeometryService();
 
+		// 低置信度场景：sparse samples，即使有 actionable bad edges 也不触发 severe risk
 		expect(service.hasSevereVisualGapRisk(baseGapSummary({
 			bothVisibleEdges: 4,
 			sampledEdges: 1,
 			residualBadEdges: 1,
 			maxResidualGap: 30,
+			actionableResidualBadEdges: 1,
+			actionableMaxResidualGap: 30,
 		}))).toBe(false);
 
+		// 高置信度场景：full coverage，actionable bad edges 触发 severe risk
 		expect(service.hasSevereVisualGapRisk(baseGapSummary({
 			bothVisibleEdges: 4,
 			sampledEdges: 4,
 			residualBadEdges: 1,
 			maxResidualGap: 30,
+			actionableResidualBadEdges: 1,
+			actionableMaxResidualGap: 30,
 		}))).toBe(true);
 	});
 

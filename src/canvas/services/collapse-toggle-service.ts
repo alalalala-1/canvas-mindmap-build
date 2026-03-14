@@ -86,6 +86,65 @@ export class CollapseToggleService {
         };
     }
 
+    normalizeAnchorOffset(
+        offsetX: number,
+        offsetY: number,
+        maxAbsOffset: number = 240,
+    ): { offsetX: number; offsetY: number } {
+        const normalizedX = Number.isFinite(offsetX) && Math.abs(offsetX) <= maxAbsOffset ? offsetX : 0;
+        const normalizedY = Number.isFinite(offsetY) && Math.abs(offsetY) <= maxAbsOffset ? offsetY : 0;
+
+        if (normalizedX !== offsetX || normalizedY !== offsetY) {
+            log(
+                `[Layout] ToggleAnchorOffsetSuppressed: requested=(${offsetX.toFixed(1)},${offsetY.toFixed(1)}), ` +
+                `applied=(${normalizedX.toFixed(1)},${normalizedY.toFixed(1)}), limit=${maxAbsOffset}`
+            );
+        }
+
+        return {
+            offsetX: normalizedX,
+            offsetY: normalizedY,
+        };
+    }
+
+    private getRuntimeNodeDimension(node: CanvasNodeLike, key: 'width' | 'height'): number {
+        const runtimeValue = node[key];
+        if (typeof runtimeValue === 'number' && Number.isFinite(runtimeValue) && runtimeValue > 0) {
+            return runtimeValue;
+        }
+
+        const currentData = typeof node.getData === 'function' ? node.getData() : null;
+        const dataValue = currentData?.[key];
+        if (typeof dataValue === 'number' && Number.isFinite(dataValue) && dataValue > 0) {
+            return dataValue;
+        }
+
+        return 1;
+    }
+
+    private syncRuntimeNodePosition(node: CanvasNodeLike, targetX: number, targetY: number): void {
+        node.x = targetX;
+        node.y = targetY;
+
+        const width = this.getRuntimeNodeDimension(node, 'width');
+        const height = this.getRuntimeNodeDimension(node, 'height');
+        node.bbox = {
+            minX: targetX,
+            minY: targetY,
+            maxX: targetX + width,
+            maxY: targetY + height,
+        };
+
+        if (typeof node.update === 'function') {
+            node.update();
+            return;
+        }
+
+        if (typeof node.requestUpdate === 'function') {
+            node.requestUpdate();
+        }
+    }
+
     updateNodePositionsWithOffset(
         newLayout: Map<string, { x: number; y: number }>,
         nodes: Map<string, CanvasNodeLike>,
@@ -95,8 +154,12 @@ export class CollapseToggleService {
         let updatedCount = 0;
         let movedCount = 0;
         let missingCount = 0;
+        let skippedCount = 0;
         let maxDelta = 0;
         let totalDelta = 0;
+        
+        log(`[Layout] TogglePos(pre): newLayout.size=${newLayout.size}, nodes.size=${nodes.size}, offset=(${offsetX.toFixed(1)},${offsetY.toFixed(1)})`);
+        
         for (const [targetNodeId, newPosition] of newLayout.entries()) {
             const node = nodes.get(targetNodeId);
             if (node) {
@@ -112,27 +175,17 @@ export class CollapseToggleService {
                 if (delta > maxDelta) maxDelta = delta;
                 totalDelta += delta;
                 if (Math.abs(nodeX - targetX) > 0.5 || Math.abs(nodeY - targetY) > 0.5) {
-                    if (typeof node.setData === 'function') {
-                        const currentData = node.getData ? node.getData() : {};
-                        node.setData({
-                            ...currentData,
-                            x: targetX,
-                            y: targetY,
-                        });
-                        updatedCount++;
-                    } else {
-                        node.x = targetX;
-                        node.y = targetY;
-                        if (typeof node.update === 'function') node.update();
-                        updatedCount++;
-                    }
+                    this.syncRuntimeNodePosition(node, targetX, targetY);
+                    updatedCount++;
+                } else {
+                    skippedCount++;
                 }
             } else {
                 missingCount++;
             }
         }
         const avgDelta = updatedCount > 0 ? totalDelta / updatedCount : 0;
-        log(`[Layout] TogglePos: updated=${updatedCount}, moved=${movedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, offset=(${offsetX.toFixed(1)},${offsetY.toFixed(1)})`);
+        log(`[Layout] TogglePos: updated=${updatedCount}, moved=${movedCount}, skipped=${skippedCount}, missing=${missingCount}, maxDelta=${maxDelta.toFixed(1)}, avgDelta=${avgDelta.toFixed(1)}, offset=(${offsetX.toFixed(1)},${offsetY.toFixed(1)})`);
         return updatedCount;
     }
 
@@ -235,14 +288,28 @@ export class CollapseToggleService {
                 this.getLayoutSettings(),
                 layoutData.originalEdges,
                 layoutData.allNodes,
-                finalCanvasData || canvasData
+                finalCanvasData || canvasData,
+                {
+                    forceResetCoordinates: true,
+                    forceReason: isCollapsing ? 'collapse-toggle' : 'expand-toggle'
+                }
             );
 
             if (!newLayout || newLayout.size === 0) return;
 
-            const { offsetX, offsetY } = this.calculateAnchorOffset(nodeId, nodes, newLayout);
+            const anchorOffset = this.calculateAnchorOffset(nodeId, nodes, newLayout);
+            const { offsetX, offsetY } = this.normalizeAnchorOffset(anchorOffset.offsetX, anchorOffset.offsetY);
 
-            const updatedCount = this.updateNodePositionsWithOffset(newLayout, nodes, offsetX, offsetY);
+            const visibleRuntimeNodes = new Map<string, CanvasNodeLike>();
+            for (const [nodeId] of visibleNodes) {
+                const runtimeNode = nodes.get(nodeId);
+                if (runtimeNode) {
+                    visibleRuntimeNodes.set(nodeId, runtimeNode);
+                }
+            }
+            log(`[Layout] ToggleRuntimeSync: visibleNodes=${visibleNodes.size}, visibleRuntimeNodes=${visibleRuntimeNodes.size}, allRuntimeNodes=${nodes.size}`);
+
+            const updatedCount = this.updateNodePositionsWithOffset(newLayout, visibleRuntimeNodes, offsetX, offsetY);
             const runtimeSafety = getCanvasRuntimeSafety(canvas);
             let updateApplied = false;
             let saveApplied = false;

@@ -1,5 +1,5 @@
 import { ItemView } from 'obsidian';
-import { getCanvasView, getEdgesFromCanvas, getNodesFromCanvas } from '../../utils/canvas-utils';
+import { getCanvasView, getEdgesFromCanvas, getNodesFromCanvas, isCanvasNativeInsertGestureTarget } from '../../utils/canvas-utils';
 import { log, logVerbose } from '../../utils/logger';
 import type { CanvasLike } from '../types';
 import type { NativeInsertScheduledWorkCleanup } from './native-insert-trace';
@@ -59,10 +59,25 @@ export type CanvasGraphSnapshot = {
 	edgeCount: number;
 };
 
+function resolveBlankNativeInsertEvidenceKind(candidate: Pick<NativeInsertPendingCommit, 'targetKind' | 'evidenceFlags'>):
+	'placeholder' | 'node-content' | undefined {
+	if (candidate.targetKind === 'placeholder') return 'placeholder';
+	if (candidate.targetKind.startsWith('node-content')) return 'node-content';
+	if ((candidate.evidenceFlags ?? []).some(flag => (
+		flag === 'placeholder-target'
+		|| flag === 'placeholder-seen'
+		|| flag === 'placeholder-mutation'
+		|| flag === 'placeholder-delta'
+	))) {
+		return 'placeholder';
+	}
+	return undefined;
+}
+
 export interface NativeInsertControllerHost {
 	app: unknown;
 	canvasManager: {
-		addNodeToCanvas: (content: string, sourceFile: null, options?: Record<string, unknown>) => Promise<void>;
+		addNodeToCanvas: (content: string, sourceFile: null, options?: Record<string, unknown>) => Promise<boolean | void>;
 	};
 	activeNativeInsertSession: NativeInsertSession | null;
 	pendingNativeInsertCommit: NativeInsertPendingCommit | null;
@@ -394,6 +409,7 @@ export function stageNativeInsertCommit(
 export async function flushPendingNativeInsertCommit(host: NativeInsertControllerHost, trigger: string): Promise<void> {
 	const candidate = host.pendingNativeInsertCommit;
 	if (!candidate) return;
+	const blankNativeInsertEvidenceKind = resolveBlankNativeInsertEvidenceKind(candidate);
 
 	host.rememberNativeInsertTraceContext({
 		traceId: candidate.traceId,
@@ -532,12 +548,13 @@ export async function flushPendingNativeInsertCommit(host: NativeInsertControlle
 				`runtimeCreate=disabled, beforeNodes=${currentSnapshot.nodeCount}, beforeEdges=${currentSnapshot.edgeCount}, age=${ageMs}ms`,
 		);
 
-		await host.canvasManager.addNodeToCanvas('', null, {
+		const creationAccepted = await host.canvasManager.addNodeToCanvas('', null, {
 			source: 'native-insert',
 			parentNodeIdHint: candidate.anchorNodeId,
 			suppressSuccessNotice: true,
 			skipFromLink: true,
 			verifiedNativeInsert: true,
+			blankNativeInsertEvidenceKind,
 		});
 
 		const refreshedCanvasView = getCanvasView(host.app as never);
@@ -545,7 +562,12 @@ export async function flushPendingNativeInsertCommit(host: NativeInsertControlle
 		const afterSnapshot = getCanvasGraphSnapshot(refreshedCanvas ?? canvas);
 		const observedNodeDelta = afterSnapshot.nodeCount - currentSnapshot.nodeCount;
 		const observedEdgeDelta = afterSnapshot.edgeCount - currentSnapshot.edgeCount;
-		const nodeCreate = observedNodeDelta > 0 ? 'observed' : 'deferred-or-unobserved';
+		const accepted = creationAccepted !== false || observedNodeDelta > 0;
+		const nodeCreate = creationAccepted === false
+			? 'rejected'
+			: observedNodeDelta > 0
+				? 'observed'
+				: 'deferred-or-unobserved';
 
 		host.rememberNativeInsertTraceContext({
 			traceId: candidate.traceId,
@@ -553,29 +575,31 @@ export async function flushPendingNativeInsertCommit(host: NativeInsertControlle
 			selectionEdgeCount: blankProtection.selectionEdgeCount,
 			selectionStable: blankProtection.selectionStable,
 			fallbackCommitted: true,
-			accepted: true,
+			accepted,
 			nodeCreate,
 		});
 
 		host.pendingNativeInsertCommit = null;
-		host.lastNativeInsertCommitTraceId = candidate.traceId;
-		host.lastNativeInsertCommitAt = Date.now();
+		if (accepted) {
+			host.lastNativeInsertCommitTraceId = candidate.traceId;
+			host.lastNativeInsertCommitAt = Date.now();
+		}
 		const cleanup = host.mergeNativeInsertScheduledWorkCleanup(
 			preCommitCleanup,
 			host.clearNativeInsertScheduledWork(candidate.traceId, true),
 		);
 		log(
 			`[Event] NativeInsertCommitDone: trace=${candidate.traceId}, trigger=${trigger}, ` +
-				`mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}, accepted=true, ` +
+				`mode=file-fallback, anchor=${candidate.anchorNodeId || 'none'}, accepted=${accepted}, ` +
 				`nodeCreate=${nodeCreate}, nodeDelta=${observedNodeDelta}, edgeDelta=${observedEdgeDelta}, ` +
 				`beforeNodes=${currentSnapshot.nodeCount}, afterNodes=${afterSnapshot.nodeCount}, ` +
 				`beforeEdges=${currentSnapshot.edgeCount}, afterEdges=${afterSnapshot.edgeCount}`,
 		);
 		host.finalizeNativeInsertTrace({
 			traceId: candidate.traceId,
-			outcome: 'accepted',
+			outcome: accepted ? 'accepted' : 'rejected',
 			trigger,
-			reason: 'file-fallback',
+			reason: accepted ? 'file-fallback' : 'file-fallback-rejected',
 			detail: combinedClickDetail || candidate.lastPointerDetail,
 			cleanup,
 			extraFields: {
@@ -645,8 +669,17 @@ export function evaluateNativeInsertSessionStart(
 		};
 	}
 
-	const candidate = !!target.closest('.node-insert-event, .canvas-wrapper.node-insert-event, .canvas-node-placeholder');
+	if (target.closest('.cmb-collapse-button')) {
+		return {
+			candidate: true,
+			allow: false,
+			reason: 'collapse-button',
+			targetKind: 'collapse-button',
+		};
+	}
+
 	const targetKind = host.describeNativeInsertTargetKind(target);
+	const candidate = isCanvasNativeInsertGestureTarget(target);
 	if (!candidate) {
 		return {
 			candidate: false,
@@ -675,20 +708,6 @@ export function evaluateNativeInsertSessionStart(
 	}
 
 	if (targetKind.startsWith('wrapper')) {
-		const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
-		const wrapperActive =
-			insertWrapper instanceof HTMLElement
-			&& (insertWrapper.classList.contains('is-dragging') || insertWrapper.classList.contains('mod-animating'));
-
-		if (wrapperActive) {
-			return {
-				candidate: true,
-				allow: true,
-				reason: 'wrapper-active',
-				targetKind,
-			};
-		}
-
 		const hasPlaceholder = !!document.querySelector('.canvas-node-placeholder');
 		if (hasPlaceholder) {
 			return {
@@ -702,8 +721,22 @@ export function evaluateNativeInsertSessionStart(
 		if (pointerType === 'touch' || pointerType === 'pen') {
 			return {
 				candidate: true,
-				allow: true,
-				reason: 'wrapper-touch-like',
+				allow: false,
+				reason: 'wrapper-touch-like-without-placeholder',
+				targetKind,
+			};
+		}
+
+		const insertWrapper = target.closest('.canvas-wrapper.node-insert-event');
+		const wrapperActive =
+			insertWrapper instanceof HTMLElement
+			&& (insertWrapper.classList.contains('is-dragging') || insertWrapper.classList.contains('mod-animating'));
+
+		if (wrapperActive) {
+			return {
+				candidate: true,
+				allow: false,
+				reason: 'wrapper-active-without-placeholder',
 				targetKind,
 			};
 		}

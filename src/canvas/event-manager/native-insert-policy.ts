@@ -18,6 +18,7 @@ export type NativeInsertCommitSession = NativeInsertEvidenceSession & {
 
 export type NativeInsertPendingCommitLike = {
 	anchorNodeId: string | null;
+	targetKind?: string;
 	evidenceFlags?: string[];
 	blankCandidate?: boolean;
 	queuedSelectionNodeCount?: number;
@@ -30,6 +31,32 @@ export type NativeInsertSelectionSummary = {
 	edgeIds: string[];
 	activeEdgeId: string | null;
 };
+
+function hasPlaceholderEvidence(evidenceFlags?: string[]): boolean {
+	return (evidenceFlags ?? []).some(flag => (
+		flag === 'placeholder-target'
+		|| flag === 'placeholder-seen'
+		|| flag === 'placeholder-mutation'
+		|| flag === 'placeholder-delta'
+	));
+}
+
+function hasStrongBlankIntent(targetKind: string | undefined, evidenceFlags?: string[]): boolean {
+	return targetKind === 'placeholder'
+		|| hasPlaceholderEvidence(evidenceFlags);
+}
+
+function hasOnlyWeakWrapperEvidence(evidenceFlags?: string[]): boolean {
+	const flags = evidenceFlags ?? [];
+	if (flags.length === 0) return false;
+
+	return flags.every(flag => (
+		flag === 'touch-like-wrapper'
+		|| flag === 'wrapper-drag'
+		|| flag === 'wrapper-active'
+		|| flag === 'wrapper-placeholder-present'
+	));
+}
 
 export function collectNativeInsertEvidence(input: {
 	session: NativeInsertEvidenceSession;
@@ -109,10 +136,38 @@ export function shouldCommitNativeInsertSession(input: {
 		isTouchLikePointer: input.isTouchLikePointer,
 	});
 
+	// [修复 P0-2] 优化证据链判定：
+	// 1. 有 anchor + wrapper-drag 证据时，允许提交（用户明确的拖动意图）
+	// 2. 完全无证据时才拒绝
 	if (evidenceFlags.length === 0) {
 		return {
 			allow: false,
 			reason: 'insufficient-evidence'
+		};
+	}
+
+	// [P0-2] 如果有明确的 anchor 节点，且有 wrapper-drag 证据，降低其他证据要求
+	const hasAnchor = !!input.session.anchorNodeId;
+	const hasWrapperDrag = evidenceFlags.includes('wrapper-drag');
+	if (hasAnchor && hasWrapperDrag && input.session.targetKind.startsWith('wrapper')) {
+		// wrapper drag with anchor 是明确的插入意图，允许提交
+		return {
+			allow: true,
+			reason: 'wrapper-drag-with-anchor'
+		};
+	}
+
+	if (input.session.targetKind.startsWith('wrapper') && !hasPlaceholderEvidence(evidenceFlags)) {
+		return {
+			allow: false,
+			reason: 'wrapper-without-placeholder-evidence'
+		};
+	}
+
+	if (input.session.targetKind.startsWith('node-content') && !hasPlaceholderEvidence(evidenceFlags)) {
+		return {
+			allow: false,
+			reason: 'node-content-without-placeholder-evidence'
 		};
 	}
 
@@ -166,13 +221,28 @@ export function evaluateNativeInsertBlankProtection(
 	const selectionEdgeCount = currentSelection.edgeIds.length;
 	const selectionStable = queuedSelectionKey === currentSelectionKey;
 	const anchorSelected = !!candidate.anchorNodeId && currentSelection.nodeIds.includes(candidate.anchorNodeId);
-	const weakEvidenceOnly = (candidate.evidenceFlags?.length ?? 0) > 0
-		&& candidate.evidenceFlags!.every(flag => flag === 'touch-like-wrapper');
+	const strongBlankIntent = hasStrongBlankIntent(candidate.targetKind, candidate.evidenceFlags);
+	const weakEvidenceOnly = hasOnlyWeakWrapperEvidence(candidate.evidenceFlags);
 
 	if (!blankCandidate) {
 		return {
 			allow: true,
 			reason: 'not-blank-candidate',
+			blankCandidate,
+			queuedSelectionNodeCount,
+			queuedSelectionEdgeCount,
+			selectionNodeCount,
+			selectionEdgeCount,
+			selectionStable,
+			anchorSelected,
+			weakEvidenceOnly,
+		};
+	}
+
+	if (!strongBlankIntent) {
+		return {
+			allow: false,
+			reason: 'blank-protection-wrapper-only-evidence',
 			blankCandidate,
 			queuedSelectionNodeCount,
 			queuedSelectionEdgeCount,
